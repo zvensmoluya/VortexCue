@@ -13,6 +13,8 @@
 
 ## M0A：OLED 物理原型
 
+状态：首轮 OLED 真机可行性验证通过；详细记录见 [`M0A_VALIDATION.md`](M0A_VALIDATION.md)。
+
 要回答：真实 OLED 上能否做到背景视觉消失，同时字幕仍可舒适阅读？
 
 范围：

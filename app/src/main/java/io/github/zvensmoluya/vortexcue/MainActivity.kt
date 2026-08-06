@@ -48,13 +48,15 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.statusBarColor = AndroidColor.BLACK
         window.navigationBarColor = AndroidColor.BLACK
-        hideSystemBars()
 
         setContent {
             VortexCueTheme {
                 GlowPrototype(onWindowBrightnessChanged = ::setWindowBrightness)
             }
         }
+
+        // The decor view is created by setContent; access its insets controller afterwards.
+        hideSystemBars()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -72,7 +74,7 @@ class MainActivity : ComponentActivity() {
     private fun hideSystemBars() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false)
-            window.insetsController?.run {
+            window.decorView.windowInsetsController?.run {
                 hide(WindowInsets.Type.systemBars())
                 systemBarsBehavior =
                     WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE

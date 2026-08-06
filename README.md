@@ -15,6 +15,8 @@
 
 路线与阶段门槛见 [`docs/ROADMAP.md`](docs/ROADMAP.md)，完整项目背景见 [`docs/PROJECT_SEED.md`](docs/PROJECT_SEED.md)。
 
+M0A 首轮 OLED 真机验证记录见 [`docs/M0A_VALIDATION.md`](docs/M0A_VALIDATION.md)。
+
 ## 构建
 
 需要 JDK 17+ 与 Android SDK 37：
