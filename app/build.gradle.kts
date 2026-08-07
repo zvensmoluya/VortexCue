@@ -27,6 +27,8 @@ android {
 
 dependencies {
     implementation(libs.activity.compose)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.media3.exoplayer)
 
     val composeBom = platform(libs.compose.bom)
     implementation(composeBom)
@@ -36,5 +38,7 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
+
+    testImplementation(libs.junit)
 }
 
