@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Yellow-outline curtain ghost</title>
+  <desc id="desc">A classic sheet ghost drawn with a flat yellow outline on true black, with simple warm-white facial features and no glow.</desc>
+
+  <rect width="512" height="512" rx="112" fill="#000000"/>
+
+  <!-- A single flat outline keeps the OLED identity: no gradient, blur, or halo. -->
+  <path d="M164 374 C150 327 143 276 149 220 C157 151 196 112 256 112 C316 112 355 151 363 220 C369 276 362 327 348 374 C331 352 315 350 299 377 C284 351 270 349 256 379 C242 349 228 351 213 377 C197 350 181 352 164 374 Z"
+        fill="#000000" stroke="#FFD84D" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Two understated curtain folds make the familiar sheet silhouette ownable. -->
+  <path d="M193 190 C185 235 188 286 202 336" fill="none" stroke="#FFD84D" stroke-width="6" stroke-linecap="round" opacity="0.42"/>
+  <path d="M319 190 C327 235 324 286 310 336" fill="none" stroke="#FFD84D" stroke-width="6" stroke-linecap="round" opacity="0.42"/>
+
+  <!-- Default expression: attentive and quietly pleased. -->
+  <rect x="210" y="218" width="19" height="29" rx="9.5" fill="#FFF8DF"/>
+  <rect x="283" y="218" width="19" height="29" rx="9.5" fill="#FFF8DF"/>
+  <path d="M237 275 Q256 291 275 275" fill="none" stroke="#FFF8DF" stroke-width="8" stroke-linecap="round"/>
+</svg>

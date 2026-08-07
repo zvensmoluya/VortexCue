@@ -9,3 +9,5 @@ captures/
 .externalNativeBuild/
 .cxx/
 
+# Local skill output and design experiments
+/output/
