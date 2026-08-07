@@ -2,7 +2,7 @@
 
 > 状态：当前权威产品与工程指导
 >
-> 当前阶段：M0B 内置样片体验
+> 当前阶段：M0B 本地音频播放基础
 >
 > 更新时间：2026-08-07
 
@@ -14,20 +14,20 @@
 
 VortexCue / 荧荧是一个会逐渐退场的 OLED 微光字幕阅读器：媒体提供声音和时间，屏幕只保留正在发生的文字。
 
-当前首先服务这样的场景：用户已经拥有本地音频或视频与外挂 SRT，希望在睡前、暗室或宿舍继续听，并依靠字幕理解内容。外语视频是最清晰的首发内容方向；这是一项当前聚焦，不是已经完成的市场验证。
+当前首先服务这样的场景：用户已经拥有本地音频与 LRC 或 SRT，希望在睡前、暗室或宿舍继续听，并依靠同步文字理解内容。音频与歌词/字幕是当前实现入口；是否重新加入本地视频，留待真实使用反馈后判断。
 
 产品解决的不是“如何管理媒体”，而是：
 
-> 当我不想继续看明亮画面、又需要文字理解内容时，让声音继续播放，只留下当前需要阅读的一小段字幕。
+> 当我不想继续看明亮画面、又需要文字理解内容时，让声音继续播放，只留下当前需要阅读的一小段文字。
 
 ### 1.1 产品边界
 
 - 字幕是主要内容，媒体是声音与时间源；
 - 工作层负责选择、排错和校准，微光层负责持续阅读；
 - 首页围绕继续上次和打开新内容，不建立媒体库；
-- 普通播放器仍以字幕语境为中心，不复制完整视频播放器；
-- 微光模式不显示视频画面、封面、Logo、常驻时间或进度条；
-- 本地媒体和 SRT 无需账号、网络或 TransVortex；
+- 普通播放器仍以字幕语境为中心，不复制完整音乐播放器；
+- 微光模式不显示封面、Logo、常驻时间或进度条；
+- 本地音频、LRC 和 SRT 无需账号、网络或 TransVortex；
 - M1 之外的能力必须由真实使用需求重新进入范围。
 
 ## 2. 产品表面与交互
@@ -36,21 +36,21 @@ VortexCue / 荧荧是一个会逐渐退场的 OLED 微光字幕阅读器：媒�
 
 ```text
 启动
-→ 样片介绍
-→ 普通播放
-→ 进入微光
+→ 选择本地音频
+→ 选择 LRC / SRT
+→ 播放与字幕同步
+→ 隐藏控制进入微光
 → 暂停 / 恢复 / ±10 秒
-→ 退出微光
 ```
 
-M0B 使用内置媒体和内置 cue，不让用户选择文件、理解字幕格式或配置服务。
+M0B 直接使用用户自己的音频与字幕文件做真机验证，不准备内置样片。当前只完成播放器、格式解析、字幕时间轴和微光表面，不提前固定最终导航与交互体验。
 
 ### 2.2 M1 路径
 
 ```text
 首页
 ├─ 继续播放 → 恢复上次位置与显示状态
-└─ 打开本地媒体 → 选择 SRT
+└─ 打开本地音频 → 选择 LRC / SRT
                     ↓
               Ready Resolver
                     ↓
@@ -61,25 +61,23 @@ M0B 使用内置媒体和内置 cue，不让用户选择文件、理解字幕格
 
 各表面的职责固定如下：
 
-- **Home**：只提供“继续播放”和“打开本地媒体”；M1 只保存一个最后会话，不做最近列表；
+- **Home**：只提供“继续播放”和“打开本地音频”；M1 只保存一个最后会话，不做最近列表；
 - **Ready Resolver**：只在首次导入、缺少字幕、解析失败、文件权限失效或播放失败时出现，不是每次播放的固定页面；
 - **Normal Player**：显示当前 cue、相邻语境、时间、seek、速度、字幕偏移和显示设置；
 - **Glow**：控制隐藏时只有纯黑背景和当前 cue；控制按需短暂出现。
 
 ### 2.3 当前交互默认值
 
-- 单击微光表面：显示或隐藏控制；
-- 双击左侧或右侧安全区域：后退或前进 10 秒；
-- 系统 Back：微光返回普通播放器；
-- 音量键、耳机键和蓝牙键：遵循 Android 媒体语义；
+- 单击微光表面：显示或隐藏当前原型控制；
+- 可见控件提供播放、暂停、前后 10 秒和字幕偏移；
+- 系统 Back：控制隐藏时先恢复控制；
+- 音量键保持系统默认行为；耳机键、蓝牙键和锁屏控制留到 M1 `MediaSessionService`；
 - 所有手势都有至少 `48dp × 48dp` 的可见控件替代；
-- 控制操作结束约 3 秒后隐藏；
-- 单语默认，双语由用户明确开启；
 - 字幕默认略低于屏幕中心并保持稳定，不做周期性位置漂移；
 - 字幕 gap、播放结束和播放失败时立即清空当前 cue；
 - 暂停时可以保留当前 cue，但应用不为暂停状态无限保持屏幕唤醒。
 
-这些是直接用于实现的简单默认值。只有出现明确的可用性问题时才调整，不为每项默认值预先组织 A/B 测试。
+这些只是为了完成播放器实测的低成本默认值，不冻结最终信息架构、手势或控制布局。后续交互可以根据真机感受直接重做。
 
 ## 3. 工程约束
 
@@ -87,7 +85,7 @@ M0B 使用内置媒体和内置 cue，不让用户选择文件、理解字幕格
 
 - 使用单一 `app` 模块；
 - 使用 Kotlin、Compose 和 Media3；
-- M0B 不引入服务、文件导入、数据库或依赖注入；
+- M0B 只引入两次 SAF 文件选择，不引入服务、数据库或依赖注入；
 - M1 不引入多模块、DI framework、Room 或自建媒体库；
 - 先完成端到端路径，再按实际复杂度抽取边界。
 
@@ -97,8 +95,7 @@ M0B 使用内置媒体和内置 cue，不让用户选择文件、理解字幕格
 data class SubtitleCue(
     val startMs: Long,
     val endMs: Long,
-    val primary: String,
-    val secondary: String? = null,
+    val text: String,
 )
 
 data class DisplayCalibration(
@@ -126,18 +123,20 @@ Player.currentPosition + subtitleOffsetMs
 
 ```text
 MainActivity
-├─ SampleIntro
-├─ NormalSamplePlayer
-└─ GlowPlayer
-   ├─ ControlsHidden
-   └─ ControlsVisible
+├─ ExoPlayer
+└─ VortexCuePlayer
+   ├─ ControlsVisible
+   └─ ControlsHidden
 
-ExoPlayer
+SubtitleParser
+├─ LrcParser
+└─ SrtParser
+
 SubtitleTimeline
 DisplayCalibration
 ```
 
-ExoPlayer 暂时由 Activity 持有。内置 cue 可以直接作为 Kotlin fixture，不提前实现 SRT parser。
+ExoPlayer 暂时由 Activity 持有并在 Activity 停止时暂停、销毁时释放。LRC 与 SRT 解析为同一种 `SubtitleCue`，再由统一时间轴按播放器位置求值。
 
 ### 3.4 M1 结构
 
@@ -150,6 +149,7 @@ MainActivity
 └─ MediaController
 
 SubtitleRepository
+├─ LrcParser
 ├─ SrtParser
 ├─ SubtitleTimeline
 └─ CurrentCueResolver
@@ -164,25 +164,25 @@ LastSessionStore
 
 - Player 和 MediaSession 由 `MediaSessionService` 持有；
 - Activity 通过 `MediaController` 展示状态和发出命令；
-- 视频文件只提供音轨和时间，使用 Media3 轨道选择显式禁用视频轨；
+- 当前只选择本地音频；视频输入与视频 Surface 均不进入 M1 默认范围；
 - LastSession 使用 DataStore 级别的轻量持久化即可；
 - URI、解析和播放失败是可恢复业务状态，不以崩溃或短暂 toast 处理。
 
 ### 3.5 文件访问
 
-M1 使用两次明确的 Storage Access Framework 选择：
+M0B 起使用两次明确的 Storage Access Framework 选择：
 
 ```text
-ACTION_OPEN_DOCUMENT(media)
+ACTION_OPEN_DOCUMENT(audio)
 → takePersistableUriPermission
-→ ACTION_OPEN_DOCUMENT(SRT)
+→ ACTION_OPEN_DOCUMENT(LRC / SRT)
 → takePersistableUriPermission
 → parse
 ```
 
 - 不请求广泛存储权限；
 - 不把 `content://` 转换成真实路径；
-- 不承诺扫描媒体所在目录或自动寻找相邻 SRT；
+- 不承诺扫描音频所在目录或自动寻找相邻字幕；
 - 可以用 `DocumentsContract.EXTRA_INITIAL_URI` 尽量让第二次 picker 靠近上次位置，但不能依赖它一定成功；
 - 文件被移动、删除或授权失效时，让用户重新定位原媒体或字幕。
 
@@ -206,20 +206,20 @@ ACTION_OPEN_DOCUMENT(media)
 
 ### 4.2 M0B：当前工作
 
-目标：用真实媒体完成一次微光字幕播放闭环，确认体验没有明显的产品阻断。
+目标：用本地音频与真实 LRC/SRT 完成一次微光文字播放闭环，先验证播放器和同步效果。
 
 实施顺序：
 
-1. 准备一段可合法分发的 3–5 分钟音频与同步 cue；
-2. 在 Activity 内加入 ExoPlayer；
-3. 实现 `SubtitleTimeline.resolve()` 及边界测试；
-4. 实现介绍、普通播放和微光三个表面；
-5. 接入播放、暂停、±10 秒、控制显隐和亮度校准；
-6. 在现有 OLED 真机完整播放一次并记录明显问题。
+1. 在 Activity 内加入 ExoPlayer 与本地音频选择；
+2. 实现 LRC/SRT parser、`SubtitleTimeline.resolve()` 及边界测试；
+3. 实现极简播放器与微光控制显隐；
+4. 接入播放、暂停、±10 秒、字幕偏移和亮度校准；
+5. 在现有 OLED 真机使用用户文件完整播放一次并记录明显问题。
 
 完成条件：
 
-- Debug APK 可安装并完整播放样片；
+- Debug APK 可安装并完整播放所选本地音频；
+- LRC 与 SRT 可以解析为统一时间轴；
 - 暂停、恢复和 seek 后字幕仍与播放器位置一致；
 - 微光隐藏状态没有非字幕常驻 UI；
 - 在一台 OLED 上完成一次暗室体验，没有发现必须先解决的阻断问题。
@@ -228,22 +228,22 @@ ACTION_OPEN_DOCUMENT(media)
 
 ### 4.3 M1：本地播放 MVP
 
-目标：完成“打开自己的媒体和 SRT，并能在后台播放、再次继续”的最小可用产品。
+目标：完成“打开自己的音频和 LRC/SRT，并能在后台播放、再次继续”的最小可用产品。
 
 范围：
 
 - `MediaSessionService`、ExoPlayer 和 MediaController；
-- SAF 选择媒体与 SRT；
-- SRT parser、字幕时间轴和字幕偏移；
+- SAF 选择音频与 LRC/SRT；
+- LRC/SRT parser、字幕时间轴和字幕偏移；
 - 普通播放器与微光播放器；
 - 后台、锁屏和外部媒体按键；
 - 一个 LastSession 及文件权限恢复；
-- UTF-8、UTF-8 BOM、多行 cue、LF/CRLF、gap 和错误输入的 parser fixtures。
+- UTF-8、GB18030、UTF-8 BOM、UTF-16 BOM、多行 cue、LRC offset、LF/CRLF、gap 和错误输入的 parser fixtures。
 
 建议顺序：
 
 1. 把 Player 迁入 `MediaSessionService`；
-2. 实现并测试 SRT parser；
+2. 固化并测试 LRC/SRT parser；
 3. 接入两次 SAF 文件选择和持久 URI 权限；
 4. 建立 Ready Resolver 错误状态；
 5. 保存并恢复一个 LastSession；
@@ -251,7 +251,7 @@ ACTION_OPEN_DOCUMENT(media)
 
 完成条件：
 
-- 用户可以打开本地音频或视频与 SRT；
+- 用户可以打开本地音频与 LRC/SRT；
 - 正常播放、seek、倍速和 offset 后 cue 正确；
 - 屏幕关闭后音频继续，系统媒体状态准确；
 - 再次打开可以通过一次“继续播放”恢复位置；
@@ -259,7 +259,7 @@ ACTION_OPEN_DOCUMENT(media)
 
 M1 明确不做：
 
-- LRC、WebVTT、ASS、内嵌字幕；
+- WebVTT、ASS、内嵌字幕；
 - 视频 Surface 和视频观看模式；
 - 媒体扫描、最近列表和完整媒体库；
 - ASR、翻译、字幕编辑和在线字幕搜索；
