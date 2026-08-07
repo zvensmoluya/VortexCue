@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Surprised curtain ghost</title>
+  <desc id="desc">A flat yellow-outline curtain ghost on true black with open eyes and a small round mouth.</desc>
+
+  <rect width="512" height="512" fill="#000000"/>
+  <path d="M84 399 C99 345 88 278 96 213 C107 123 158 72 240 70 C318 68 357 120 368 203 C377 262 386 294 409 313 C421 323 440 325 445 336 C448 349 429 367 407 369 C396 370 389 370 382 377 C357 391 349 443 319 443 C292 443 278 389 255 389 C232 389 219 443 194 443 C160 443 133 382 84 399 Z" fill="#000000" stroke="#FFD84D" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M154 174 C137 235 145 316 160 393" fill="none" stroke="#FFD84D" stroke-width="6" stroke-linecap="round" opacity="0.44"/>
+  <path d="M330 174 C344 226 346 292 373 352" fill="none" stroke="#FFD84D" stroke-width="6" stroke-linecap="round" opacity="0.44"/>
+  <rect x="189" y="208" width="21" height="33" rx="10.5" fill="#FFF8DF"/>
+  <rect x="274" y="208" width="21" height="33" rx="10.5" fill="#FFF8DF"/>
+  <circle cx="243" cy="278" r="10" fill="#FFF8DF"/>
+</svg>

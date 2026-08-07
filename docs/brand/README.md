@@ -7,3 +7,4 @@
 ## 探索记录
 
 - [`001-curtain-ghost/`](explorations/001-curtain-ghost/)：黄色窗帘幽灵；首个形成明确角色语言的未优化探索版。
+- [`002-lifted-curtain-ghost/`](explorations/002-lifted-curtain-ghost/)：掀角窗帘幽灵；依据参考图手工重绘，并校正底边流线、褶皱方向与表情视觉轴的首组统一 SVG。

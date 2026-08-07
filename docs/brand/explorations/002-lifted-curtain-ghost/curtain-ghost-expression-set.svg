@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 1700 720" role="img" aria-labelledby="title desc">
+  <title id="title">Vectorized curtain ghost expression set</title>
+  <desc id="desc">Five expressions share one flat, asymmetric curtain ghost silhouette, with large and 56-pixel previews.</desc>
+
+  <defs>
+    <g id="ghost-body">
+      <rect width="512" height="512" fill="#000000"/>
+      <path d="M84 399 C99 345 88 278 96 213 C107 123 158 72 240 70 C318 68 357 120 368 203 C377 262 386 294 409 313 C421 323 440 325 445 336 C448 349 429 367 407 369 C396 370 389 370 382 377 C357 391 349 443 319 443 C292 443 278 389 255 389 C232 389 219 443 194 443 C160 443 133 382 84 399 Z" fill="#000000" stroke="#FFD84D" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M154 174 C137 235 145 316 160 393" fill="none" stroke="#FFD84D" stroke-width="6" stroke-linecap="round" opacity="0.44"/>
+      <path d="M330 174 C344 226 346 292 373 352" fill="none" stroke="#FFD84D" stroke-width="6" stroke-linecap="round" opacity="0.44"/>
+    </g>
+
+    <symbol id="face-default" viewBox="0 0 512 512">
+      <use href="#ghost-body"/>
+      <rect x="189" y="208" width="21" height="33" rx="10.5" fill="#FFF8DF"/>
+      <rect x="274" y="208" width="21" height="33" rx="10.5" fill="#FFF8DF"/>
+      <path d="M219 269 Q243 288 267 269" fill="none" stroke="#FFF8DF" stroke-width="9" stroke-linecap="round"/>
+    </symbol>
+
+    <symbol id="face-closed" viewBox="0 0 512 512">
+      <use href="#ghost-body"/>
+      <path d="M180 231 Q196 212 212 231" fill="none" stroke="#FFF8DF" stroke-width="10" stroke-linecap="round"/>
+      <path d="M272 231 Q288 212 304 231" fill="none" stroke="#FFF8DF" stroke-width="10" stroke-linecap="round"/>
+      <path d="M225 269 Q243 285 261 269" fill="none" stroke="#FFF8DF" stroke-width="9" stroke-linecap="round"/>
+    </symbol>
+
+    <symbol id="face-surprised" viewBox="0 0 512 512">
+      <use href="#ghost-body"/>
+      <rect x="189" y="208" width="21" height="33" rx="10.5" fill="#FFF8DF"/>
+      <rect x="274" y="208" width="21" height="33" rx="10.5" fill="#FFF8DF"/>
+      <circle cx="243" cy="278" r="10" fill="#FFF8DF"/>
+    </symbol>
+
+    <symbol id="face-wink" viewBox="0 0 512 512">
+      <use href="#ghost-body"/>
+      <rect x="189" y="208" width="21" height="33" rx="10.5" fill="#FFF8DF"/>
+      <path d="M269 231 Q285 216 301 229" fill="none" stroke="#FFF8DF" stroke-width="10" stroke-linecap="round"/>
+      <path d="M286 228 L303 239" fill="none" stroke="#FFF8DF" stroke-width="9" stroke-linecap="round"/>
+      <path d="M219 269 Q243 288 267 269" fill="none" stroke="#FFF8DF" stroke-width="9" stroke-linecap="round"/>
+    </symbol>
+
+    <symbol id="face-wave" viewBox="0 0 512 512">
+      <use href="#ghost-body"/>
+      <rect x="189" y="208" width="21" height="33" rx="10.5" fill="#FFF8DF"/>
+      <rect x="274" y="208" width="21" height="33" rx="10.5" fill="#FFF8DF"/>
+      <path d="M216 269 Q227 287 238 269 Q250 287 264 269" fill="none" stroke="#FFF8DF" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+  </defs>
+
+  <rect width="1700" height="720" fill="#101010"/>
+  <text x="40" y="64" fill="#F2EDE2" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="32" font-weight="600">荧荧 · 窗帘幽灵平面 SVG 表情组 v1</text>
+  <text x="1660" y="64" fill="#8A8269" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="17" text-anchor="end">one silhouette · flat colors · zero glow</text>
+
+  <g transform="translate(40 104)">
+    <rect width="304" height="552" rx="28" fill="#181818" stroke="#2A2A2A" stroke-width="2"/>
+    <use href="#face-default" x="32" y="24" width="240" height="240"/>
+    <text x="28" y="318" fill="#F2EDE2" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="23" font-weight="600">01 · 默认微笑</text>
+    <text x="28" y="352" fill="#77736B" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="14">Primary logo face</text>
+    <use href="#face-default" x="28" y="416" width="56" height="56"/>
+    <text x="100" y="450" fill="#77736B" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="14">56 px preview</text>
+  </g>
+
+  <g transform="translate(364 104)">
+    <rect width="304" height="552" rx="28" fill="#181818" stroke="#2A2A2A" stroke-width="2"/>
+    <use href="#face-closed" x="32" y="24" width="240" height="240"/>
+    <text x="28" y="318" fill="#F2EDE2" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="23" font-weight="600">02 · 闭眼笑</text>
+    <text x="28" y="352" fill="#77736B" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="14">Delighted / complete</text>
+    <use href="#face-closed" x="28" y="416" width="56" height="56"/>
+    <text x="100" y="450" fill="#77736B" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="14">56 px preview</text>
+  </g>
+
+  <g transform="translate(688 104)">
+    <rect width="304" height="552" rx="28" fill="#181818" stroke="#2A2A2A" stroke-width="2"/>
+    <use href="#face-surprised" x="32" y="24" width="240" height="240"/>
+    <text x="28" y="318" fill="#F2EDE2" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="23" font-weight="600">03 · 惊讶</text>
+    <text x="28" y="352" fill="#77736B" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="14">Notice / unexpected</text>
+    <use href="#face-surprised" x="28" y="416" width="56" height="56"/>
+    <text x="100" y="450" fill="#77736B" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="14">56 px preview</text>
+  </g>
+
+  <g transform="translate(1012 104)">
+    <rect width="304" height="552" rx="28" fill="#181818" stroke="#2A2A2A" stroke-width="2"/>
+    <use href="#face-wink" x="32" y="24" width="240" height="240"/>
+    <text x="28" y="318" fill="#F2EDE2" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="23" font-weight="600">04 · 眨眼</text>
+    <text x="28" y="352" fill="#77736B" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="14">Welcome / mascot</text>
+    <use href="#face-wink" x="28" y="416" width="56" height="56"/>
+    <text x="100" y="450" fill="#77736B" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="14">56 px preview</text>
+  </g>
+
+  <g transform="translate(1336 104)">
+    <rect width="304" height="552" rx="28" fill="#181818" stroke="#2A2A2A" stroke-width="2"/>
+    <use href="#face-wave" x="32" y="24" width="240" height="240"/>
+    <text x="28" y="318" fill="#F2EDE2" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="23" font-weight="600">05 · 波浪嘴</text>
+    <text x="28" y="352" fill="#77736B" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="14">Extra / sticker only</text>
+    <use href="#face-wave" x="28" y="416" width="56" height="56"/>
+    <text x="100" y="450" fill="#77736B" font-family="Inter, Segoe UI, Microsoft YaHei, sans-serif" font-size="14">56 px preview</text>
+  </g>
+</svg>
