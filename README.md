@@ -1,8 +1,8 @@
 # VortexCue / 荧荧
 
-荧荧是一款 Android-first 的 OLED 微光字幕播放器。它的核心约束很简单：纯黑背景不发光，只让当前字幕以最低可读亮度出现。
+荧荧是一款 Android-first 的 OLED 微光字幕阅读器。它的核心约束很简单：媒体继续提供声音和时间，纯黑屏幕只保留当前字幕。
 
-仓库目前处于 M0A 物理体验原型阶段，只验证纯黑界面、沉浸模式和设备级亮度校准。播放器、文件导入、云端服务和专属项目格式都尚未加入。
+M0A 首轮 OLED 物理可行性验证已经完成，当前进入 M0B 内置样片体验。代码仍以纯黑界面、沉浸模式和亮度校准原型为起点；播放器、文件导入、云端服务和专属项目格式尚未加入。
 
 ## 当前原型
 
@@ -13,9 +13,9 @@
 - 点按屏幕隐藏或显示校准控制；
 - 不包含 Media3、网络、数据库或依赖注入框架。
 
-路线与阶段门槛见 [`docs/ROADMAP.md`](docs/ROADMAP.md)，完整项目背景见 [`docs/PROJECT_SEED.md`](docs/PROJECT_SEED.md)。
+当前产品、工程边界和实施顺序统一见 [`docs/GUIDE.md`](docs/GUIDE.md)，文档层级见 [`docs/README.md`](docs/README.md)。
 
-M0A 首轮 OLED 真机验证记录见 [`docs/M0A_VALIDATION.md`](docs/M0A_VALIDATION.md)。
+M0A 首轮 OLED 真机验证记录见 [`docs/records/M0A_VALIDATION.md`](docs/records/M0A_VALIDATION.md)。
 
 ## 构建
 

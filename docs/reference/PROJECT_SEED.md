@@ -1,5 +1,7 @@
 # VortexCue / 荧荧项目种子
 
+> 归档说明：本文是项目建立时的完整设计种子，不再作为当前实施规格。当前要求见 [`../GUIDE.md`](../GUIDE.md)，正文中的阶段、路径和长期范围保留其形成时的原貌。
+
 > 状态：新仓库创立种子  
 > 更新时间：2026-08-06  
 > 项目仓库：[zvensmoluya/VortexCue](https://github.com/zvensmoluya/VortexCue)  
@@ -22,7 +24,7 @@
 - 云端 ASR / LLM 如何在不破坏隐私边界的前提下加入；
 - 新仓库如何初始化、验证和分阶段交付。
 
-本文现位于新仓库的 `docs/PROJECT_SEED.md`。当产品边界稳定后，应把其中仍有效的内容拆分到 `PRODUCT.md`、`ARCHITECTURE.md`、`PROJECT_FORMAT.md`、`PRIVACY.md` 和里程碑文档；种子本身随后冻结或归档。
+本文已归档到 `docs/reference/PROJECT_SEED.md`。其中仍有效的当前结论已收敛到统一指南，种子本身不再继续扩展。
 
 ---
 
@@ -1401,7 +1403,7 @@ VortexCue/
 - [ ] 选择许可证；
 - [ ] 用当前稳定 Android Studio 创建 Kotlin Compose 项目；
 - [ ] 加入 `AGENTS.md`；
-- [x] 将本文复制为 `docs/PROJECT_SEED.md`；
+- [x] 将本文归档到 `docs/reference/PROJECT_SEED.md`；
 - [ ] 从本文拆出最小 `README.md`；
 - [ ] 在 README 的项目关系部分链接 [TransVortex](https://github.com/zvensmoluya/TransVortex)，并说明二者独立运行；
 - [ ] 建立 `PRODUCT.md`、`ARCHITECTURE.md`、`VALIDATION.md` 空骨架；
