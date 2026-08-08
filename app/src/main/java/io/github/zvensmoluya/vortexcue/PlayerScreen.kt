@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Button
@@ -32,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -277,14 +277,21 @@ private fun GlowPlayer(
             text = currentCue?.text.orEmpty(),
             modifier =
                 Modifier
-                    .align(Alignment.Center)
-                    .offset(y = 48.dp)
+                    .align(
+                        BiasAlignment(
+                            horizontalBias = 0f,
+                            verticalBias =
+                                displayProfile.glowSubtitleVerticalBias
+                                    .coerceIn(-0.60f, 0.60f),
+                        ),
+                    )
                     .fillMaxWidth()
                     .padding(horizontal = 28.dp),
             color = subtitleColor,
-            fontSize = 24.sp,
+            fontSize = displayProfile.glowSubtitleSizeSp.coerceIn(18f, 36f).sp,
             fontWeight = FontWeight.Medium,
-            lineHeight = 34.sp,
+            lineHeight =
+                (displayProfile.glowSubtitleSizeSp.coerceIn(18f, 36f) * 1.4f).sp,
             textAlign = TextAlign.Center,
         )
 

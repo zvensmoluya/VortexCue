@@ -289,14 +289,14 @@ data class DisplayProfile(
     val glowWindowBrightness: Float,
     val glowSubtitleLevel: Int,
     val glowControlLevel: Int,
-    val fontScale: Float,
-    val verticalPosition: VerticalPosition,
+    val glowSubtitleSizeSp: Float,
+    val glowSubtitleVerticalBias: Float,
 )
 ```
 
-普通用户界面优先展示“柔和”“平衡”“高可读”等预设；精确数值可以放入高级设置，不再把 `RGB 12` 作为主要产品语言。
+普通用户界面优先展示“柔和”“平衡”“高可读”等预设；展开显示设置后，可以分别校准窗口亮度、字幕亮度、临时控制亮度、字号和垂直位置。预设负责快速填值，不重新绑定这些职责，也不把 `RGB 12` 作为主要产品语言。
 
-显示预设作为用户默认值保存，播放会话可以保存自己的覆盖值。
+显示设置作为用户默认值保存。M1 暂不保存会话级覆盖，出现明确的逐会话需求后再扩展。
 
 ### 5.3 OLED 与系统行为
 

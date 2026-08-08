@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -61,7 +62,15 @@ class SessionStore(context: Context) {
                     subtitle = preferences.readSubtitleSource(Keys.DraftSubtitle),
                 ),
             lastSession = lastSession,
-            displayProfile = DisplayProfile.fromName(preferences[Keys.DisplayProfile]),
+            displayProfile =
+                DisplayProfile.restore(
+                    name = preferences[Keys.DisplayProfile],
+                    windowBrightness = preferences[Keys.DisplayWindowBrightness],
+                    subtitleLevel = preferences[Keys.DisplaySubtitleLevel],
+                    controlLevel = preferences[Keys.DisplayControlLevel],
+                    subtitleSizeSp = preferences[Keys.DisplaySubtitleSize],
+                    subtitleVerticalBias = preferences[Keys.DisplaySubtitleVerticalBias],
+                ),
         )
     }
 
@@ -96,7 +105,19 @@ class SessionStore(context: Context) {
     }
 
     suspend fun saveDisplayProfile(profile: DisplayProfile) {
-        dataStore.edit { preferences -> preferences[Keys.DisplayProfile] = profile.name }
+        dataStore.edit { preferences ->
+            preferences[Keys.DisplayProfile] = profile.name
+            preferences[Keys.DisplayWindowBrightness] =
+                profile.glowWindowBrightness.coerceIn(0.01f, 0.30f)
+            preferences[Keys.DisplaySubtitleLevel] =
+                profile.glowSubtitleLevel.coerceIn(4, 96)
+            preferences[Keys.DisplayControlLevel] =
+                profile.glowControlLevel.coerceIn(24, 160)
+            preferences[Keys.DisplaySubtitleSize] =
+                profile.glowSubtitleSizeSp.coerceIn(18f, 36f)
+            preferences[Keys.DisplaySubtitleVerticalBias] =
+                profile.glowSubtitleVerticalBias.coerceIn(-0.60f, 0.60f)
+        }
     }
 
     private fun Preferences.readMediaSource(keys: SourceKeys): MediaSourceRef? {
@@ -167,6 +188,11 @@ class SessionStore(context: Context) {
         val LastSpeed = floatPreferencesKey("last_speed")
         val LastOffset = longPreferencesKey("last_subtitle_offset_ms")
         val DisplayProfile = stringPreferencesKey("display_profile")
+        val DisplayWindowBrightness = floatPreferencesKey("display_window_brightness")
+        val DisplaySubtitleLevel = intPreferencesKey("display_subtitle_level")
+        val DisplayControlLevel = intPreferencesKey("display_control_level")
+        val DisplaySubtitleSize = floatPreferencesKey("display_subtitle_size_sp")
+        val DisplaySubtitleVerticalBias = floatPreferencesKey("display_subtitle_vertical_bias")
 
         private fun sourceKeys(prefix: String) =
             SourceKeys(

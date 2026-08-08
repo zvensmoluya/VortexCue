@@ -20,6 +20,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -31,10 +33,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.absoluteValue
+import kotlin.math.roundToInt
 
 internal val WorkBackground = Color(0xFF080704)
 internal val WorkSurface = Color(0xFF141109)
@@ -200,6 +206,83 @@ internal fun HomeScreen(
                             }
                         }
                     }
+                    Text(
+                        text = "预设只负责快速填值；以下项目可以继续独立调整。",
+                        color = WorkMutedText,
+                        fontSize = 11.sp,
+                    )
+                    DisplaySettingSlider(
+                        label = "Glow 窗口亮度",
+                        valueLabel =
+                            "${(displayProfile.glowWindowBrightness * 100).roundToInt()}%",
+                        value = displayProfile.glowWindowBrightness,
+                        valueRange = 0.01f..0.30f,
+                        onValueChange = { value ->
+                            onDisplayProfileChanged(
+                                displayProfile.copy(
+                                    name = DisplayProfile.CustomName,
+                                    glowWindowBrightness = value,
+                                ),
+                            )
+                        },
+                    )
+                    DisplaySettingSlider(
+                        label = "字幕亮度",
+                        valueLabel = "${displayProfile.glowSubtitleLevel} / 255",
+                        value = displayProfile.glowSubtitleLevel.toFloat(),
+                        valueRange = 4f..96f,
+                        onValueChange = { value ->
+                            onDisplayProfileChanged(
+                                displayProfile.copy(
+                                    name = DisplayProfile.CustomName,
+                                    glowSubtitleLevel = value.roundToInt(),
+                                ),
+                            )
+                        },
+                    )
+                    DisplaySettingSlider(
+                        label = "临时控制亮度",
+                        valueLabel = "${displayProfile.glowControlLevel} / 255",
+                        value = displayProfile.glowControlLevel.toFloat(),
+                        valueRange = 24f..160f,
+                        onValueChange = { value ->
+                            onDisplayProfileChanged(
+                                displayProfile.copy(
+                                    name = DisplayProfile.CustomName,
+                                    glowControlLevel = value.roundToInt(),
+                                ),
+                            )
+                        },
+                    )
+                    DisplaySettingSlider(
+                        label = "字幕字号",
+                        valueLabel = "${displayProfile.glowSubtitleSizeSp.roundToInt()} sp",
+                        value = displayProfile.glowSubtitleSizeSp,
+                        valueRange = 18f..36f,
+                        onValueChange = { value ->
+                            onDisplayProfileChanged(
+                                displayProfile.copy(
+                                    name = DisplayProfile.CustomName,
+                                    glowSubtitleSizeSp = value,
+                                ),
+                            )
+                        },
+                    )
+                    DisplaySettingSlider(
+                        label = "字幕垂直位置",
+                        valueLabel =
+                            verticalPositionLabel(displayProfile.glowSubtitleVerticalBias),
+                        value = displayProfile.glowSubtitleVerticalBias,
+                        valueRange = -0.60f..0.60f,
+                        onValueChange = { value ->
+                            onDisplayProfileChanged(
+                                displayProfile.copy(
+                                    name = DisplayProfile.CustomName,
+                                    glowSubtitleVerticalBias = value,
+                                ),
+                            )
+                        },
+                    )
                 }
             }
 
@@ -423,4 +506,46 @@ private fun SourceRow(
             Text(action, color = WorkAccent)
         }
     }
+}
+
+@Composable
+private fun DisplaySettingSlider(
+    label: String,
+    valueLabel: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(text = label, color = WorkSecondaryText, fontSize = 12.sp)
+            Text(text = valueLabel, color = WorkPrimaryText, fontSize = 12.sp)
+        }
+        Slider(
+            value = value.coerceIn(valueRange),
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            modifier =
+                Modifier.semantics {
+                    contentDescription = "$label，$valueLabel"
+                },
+            colors =
+                SliderDefaults.colors(
+                    thumbColor = WorkAccent,
+                    activeTrackColor = WorkAccent.copy(alpha = 0.72f),
+                    inactiveTrackColor = WorkSurfaceRaised,
+                ),
+        )
+    }
+}
+
+private fun verticalPositionLabel(bias: Float): String {
+    val normalized = bias.coerceIn(-0.60f, 0.60f)
+    if (normalized.absoluteValue < 0.04f) return "居中"
+    val percent = (normalized.absoluteValue * 100).roundToInt()
+    return if (normalized < 0f) "偏上 $percent%" else "偏下 $percent%"
 }

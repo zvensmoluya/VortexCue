@@ -331,7 +331,10 @@ fun VortexCueApp(
         if (restorationCompleted) sessionStore.saveDraft(draft)
     }
     LaunchedEffect(restorationCompleted, displayProfile) {
-        if (restorationCompleted) sessionStore.saveDisplayProfile(displayProfile)
+        if (restorationCompleted) {
+            delay(300L)
+            sessionStore.saveDisplayProfile(displayProfile)
+        }
     }
     LaunchedEffect(restorationCompleted, activeSession) {
         if (!restorationCompleted) return@LaunchedEffect
@@ -373,11 +376,14 @@ fun VortexCueApp(
     }
 
     val lifecycleOwner = context as? LifecycleOwner
-    DisposableEffect(lifecycleOwner, restorationCompleted, activeSession) {
+    DisposableEffect(lifecycleOwner, restorationCompleted, activeSession, displayProfile) {
         val observer =
             LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_STOP && restorationCompleted) {
                     activeSession?.let(::persistSession)
+                    coroutineScope.launch {
+                        sessionStore.saveDisplayProfile(displayProfile)
+                    }
                 }
             }
         lifecycleOwner?.lifecycle?.addObserver(observer)
