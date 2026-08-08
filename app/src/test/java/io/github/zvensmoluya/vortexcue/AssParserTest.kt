@@ -43,6 +43,20 @@ class AssParserTest {
     }
 
     @Test
+    fun `removes consecutive override tags without a platform regex`() {
+        val content =
+            """
+            [Events]
+            Format: Layer, Start, End, Style, Text
+            Dialogue: 0,0:00:01.00,0:00:02.00,Default,{\an8}{\b1}Visible{\b0}
+            """.trimIndent()
+
+        val cue = AssParser.parse(content).single()
+
+        assertEquals("Visible", cue.text)
+    }
+
+    @Test
     fun `rejects dialogue without an events format`() {
         val content = "[Events]\nDialogue: 0,0:00:00.00,0:00:01.00,Default,text"
 

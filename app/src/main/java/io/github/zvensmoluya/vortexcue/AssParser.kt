@@ -4,7 +4,6 @@ class AssParseException(message: String) : IllegalArgumentException(message)
 
 object AssParser {
     private val timestamp = Regex("""^(\d+):([0-5]\d):([0-5]\d)(?:\.(\d{1,3}))?$""")
-    private val overrideTag = Regex("""\{[^}]*}""")
 
     fun parse(bytes: ByteArray): List<SubtitleCue> = parse(SubtitleTextDecoder.decode(bytes))
 
@@ -91,12 +90,27 @@ object AssParser {
     }
 
     private fun cleanText(text: String): String =
-        text
-            .replace(overrideTag, "")
+        stripOverrideTags(text)
             .replace("\\N", "\n")
             .replace("\\n", "\n")
             .replace("\\h", " ")
             .trim()
+
+    private fun stripOverrideTags(text: String): String =
+        buildString(text.length) {
+            var index = 0
+            while (index < text.length) {
+                if (text[index] == '{') {
+                    val tagEnd = text.indexOf('}', startIndex = index + 1)
+                    if (tagEnd >= 0) {
+                        index = tagEnd + 1
+                        continue
+                    }
+                }
+                append(text[index])
+                index += 1
+            }
+        }
 
     private data class TimeRange(
         val startMs: Long,
