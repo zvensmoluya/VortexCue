@@ -230,7 +230,7 @@ internal fun HomeScreen(
 
                 val subtitleValue =
                     when (val subtitle = draft.subtitle) {
-                        DraftSubtitle.None -> "可选：SRT 或 LRC"
+                        DraftSubtitle.None -> "可选：SRT、LRC、VTT 或 ASS"
                         is DraftSubtitle.Loading -> "正在读取 ${subtitle.source.displayName}"
                         is DraftSubtitle.Ready -> subtitle.subtitle.source.displayName
                         is DraftSubtitle.Failed -> subtitle.source.displayName
