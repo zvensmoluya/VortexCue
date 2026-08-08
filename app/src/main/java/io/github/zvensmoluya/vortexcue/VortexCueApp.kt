@@ -1,7 +1,10 @@
 package io.github.zvensmoluya.vortexcue
 
+import android.Manifest
 import android.content.ContentResolver
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
@@ -81,14 +85,64 @@ fun VortexCueApp(
     var mediaRequestId by remember { mutableLongStateOf(0L) }
     var subtitleLoadJob by remember { mutableStateOf<Job?>(null) }
     var subtitleRequestId by remember { mutableLongStateOf(0L) }
+    var notificationPermissionRequested by rememberSaveable { mutableStateOf(false) }
+    var pendingAutoPlay by rememberSaveable { mutableStateOf(false) }
 
-    fun currentRestorableSession(session: ActiveSession): RestorableSession =
-        RestorableSession(
+    fun startPlayer() {
+        if (player.playbackState == Player.STATE_ENDED) player.seekTo(0L)
+        if (player.playbackState == Player.STATE_IDLE && player.mediaItemCount > 0) {
+            player.prepare()
+        }
+        player.play()
+    }
+
+    val notificationPermissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+            if (pendingAutoPlay) {
+                pendingAutoPlay = false
+                startPlayer()
+            }
+        }
+
+    fun playWithNotificationPermission() {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                !notificationPermissionRequested &&
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS,
+                ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionRequested = true
+            pendingAutoPlay = true
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            startPlayer()
+        }
+    }
+
+    fun togglePlayback() {
+        if (player.isPlaying) player.pause() else playWithNotificationPermission()
+    }
+
+    fun currentRestorableSession(session: ActiveSession): RestorableSession {
+        val previous = lastSession?.takeIf { it.session.media.uri == session.media.uri }
+        return RestorableSession(
             session = session,
-            positionMs = player.currentPosition.coerceAtLeast(0L),
-            durationMs = playback.durationMs,
+            positionMs =
+                resolveRestorablePosition(
+                    currentPositionMs = player.currentPosition,
+                    currentDurationMs = playback.durationMs,
+                    previousPositionMs = previous?.positionMs,
+                ),
+            durationMs =
+                resolveRestorableDuration(
+                    currentDurationMs = playback.durationMs,
+                    previousDurationMs = previous?.durationMs,
+                ),
             playbackSpeed = player.playbackParameters.speed,
         )
+    }
 
     fun persistSession(session: ActiveSession) {
         val saved = currentRestorableSession(session)
@@ -97,16 +151,15 @@ fun VortexCueApp(
     }
 
     fun resumeSession(saved: RestorableSession) {
-        player.setMediaItem(saved.session.media.toMediaItem())
+        player.setMediaItem(saved.session.media.toMediaItem(), saved.positionMs)
         player.prepare()
-        player.seekTo(saved.positionMs)
         player.setPlaybackSpeed(saved.playbackSpeed)
         activeSession = saved.session
         lastSession = saved.copy(mediaAvailability = MediaAvailability.Ready)
         draft = saved.session.toDraft()
         playerSurface = PlayerSurface.Normal
         destination = AppDestination.Player
-        player.play()
+        playWithNotificationPermission()
     }
 
     fun cancelMediaLoad() {
@@ -496,7 +549,7 @@ fun VortexCueApp(
                         draft = applied.toDraft()
                         playerSurface = PlayerSurface.Normal
                         destination = AppDestination.Player
-                        player.play()
+                        playWithNotificationPermission()
                         persistSession(applied)
                     }
                 },
@@ -518,7 +571,7 @@ fun VortexCueApp(
                         }
                     }
                 },
-                onPlayPause = player::togglePlayPause,
+                onPlayPause = ::togglePlayback,
                 onDisplayProfileChanged = { displayProfile = it },
                 modifier = modifier,
             )
@@ -533,6 +586,7 @@ fun VortexCueApp(
                     playback = playback,
                     surface = playerSurface,
                     displayProfile = displayProfile,
+                    onPlayPause = ::togglePlayback,
                     onSurfaceChanged = { playerSurface = it },
                     onEditSources = { destination = AppDestination.Home },
                     onSubtitleOffsetChanged = { offsetMs ->
@@ -603,9 +657,31 @@ private fun MediaSourceRef.toMediaItem(): MediaItem =
         .setMediaMetadata(
             MediaMetadata.Builder()
                 .setTitle(displayName)
+                .setArtist("VortexCue")
                 .build(),
         )
         .build()
+
+internal fun resolveRestorablePosition(
+    currentPositionMs: Long,
+    currentDurationMs: Long,
+    previousPositionMs: Long?,
+): Long {
+    val current = currentPositionMs.coerceAtLeast(0L)
+    return if (current == 0L && currentDurationMs <= 0L) {
+        previousPositionMs?.coerceAtLeast(0L) ?: 0L
+    } else {
+        current
+    }
+}
+
+internal fun resolveRestorableDuration(
+    currentDurationMs: Long,
+    previousDurationMs: Long?,
+): Long =
+    currentDurationMs.takeIf { it > 0L }
+        ?: previousDurationMs?.coerceAtLeast(0L)
+        ?: 0L
 
 private fun MediaItem.toActiveSession(): ActiveSession? {
     val uri = localConfiguration?.uri ?: return null

@@ -64,6 +64,7 @@ internal fun PlayerScreen(
     playback: PlaybackSnapshot,
     surface: PlayerSurface,
     displayProfile: DisplayProfile,
+    onPlayPause: () -> Unit,
     onSurfaceChanged: (PlayerSurface) -> Unit,
     onEditSources: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
@@ -90,6 +91,7 @@ internal fun PlayerScreen(
                 playback = playback,
                 cuePositionMs = cuePositionMs,
                 currentCue = currentCue,
+                onPlayPause = onPlayPause,
                 onEditSources = onEditSources,
                 onEnterGlow = { onSurfaceChanged(PlayerSurface.Glow) },
                 onSubtitleOffsetChanged = onSubtitleOffsetChanged,
@@ -102,6 +104,7 @@ internal fun PlayerScreen(
                 playback = playback,
                 currentCue = currentCue,
                 displayProfile = displayProfile,
+                onPlayPause = onPlayPause,
                 onExitGlow = { onSurfaceChanged(PlayerSurface.Normal) },
                 onSubtitleOffsetChanged = onSubtitleOffsetChanged,
                 modifier = modifier,
@@ -116,6 +119,7 @@ private fun NormalPlayer(
     playback: PlaybackSnapshot,
     cuePositionMs: Long,
     currentCue: SubtitleCue?,
+    onPlayPause: () -> Unit,
     onEditSources: () -> Unit,
     onEnterGlow: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
@@ -226,6 +230,7 @@ private fun NormalPlayer(
             secondaryColor = WorkSecondaryText,
             accentColor = WorkAccent,
             trackColor = WorkSurfaceRaised,
+            onPlayPause = onPlayPause,
             onSubtitleOffsetChanged = onSubtitleOffsetChanged,
         )
 
@@ -254,6 +259,7 @@ private fun GlowPlayer(
     playback: PlaybackSnapshot,
     currentCue: SubtitleCue?,
     displayProfile: DisplayProfile,
+    onPlayPause: () -> Unit,
     onExitGlow: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
     modifier: Modifier = Modifier,
@@ -380,6 +386,7 @@ private fun GlowPlayer(
                     secondaryColor = controlColor.copy(alpha = 0.72f),
                     accentColor = controlColor,
                     trackColor = GlowTrackColor,
+                    onPlayPause = onPlayPause,
                     onSubtitleOffsetChanged = onSubtitleOffsetChanged,
                     onInteraction = ::showControls,
                 )
@@ -417,6 +424,7 @@ private fun PlaybackControls(
     secondaryColor: Color,
     accentColor: Color,
     trackColor: Color,
+    onPlayPause: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
     onInteraction: () -> Unit = {},
 ) {
@@ -473,7 +481,7 @@ private fun PlaybackControls(
         TextButton(
             onClick = {
                 onInteraction()
-                player.togglePlayPause()
+                onPlayPause()
             },
         ) {
             Text(playPauseLabel(playback), color = contentColor, fontWeight = FontWeight.Medium)
@@ -578,16 +586,6 @@ private fun Player.snapshot(): PlaybackSnapshot =
         errorMessage = playerError?.let { "播放失败：${it.errorCodeName}" },
         speed = playbackParameters.speed,
     )
-
-internal fun Player.togglePlayPause() {
-    if (isPlaying) {
-        pause()
-    } else {
-        if (playbackState == Player.STATE_ENDED) seekTo(0L)
-        if (playbackState == Player.STATE_IDLE && mediaItemCount > 0) prepare()
-        play()
-    }
-}
 
 private fun Player.seekWithinMedia(deltaMs: Long) {
     val maximum = duration.takeUnless { it == C.TIME_UNSET || it < 0L }
