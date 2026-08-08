@@ -2,7 +2,7 @@
 
 荧荧是一款 Android-first 的 OLED 微光同步文字播放器。它的核心约束很简单：音频继续提供声音和时间，纯黑屏幕只保留当前歌词或字幕。
 
-M0A 首轮 OLED 物理可行性验证已经完成。当前代码已经进入 M1：来源配置、普通播放与微光播放分离，播放器运行在后台媒体会话中，并具备一个可恢复的本地会话。M1A/M1B 的代码路径已形成，后台生命周期与来源恢复仍等待集中真机验收。
+M0A 首轮 OLED 物理可行性验证已经完成。当前代码已经进入 M1：来源配置、普通播放与微光播放分离，播放器运行在后台媒体会话中，并具备一个可恢复的本地会话。M1 首轮集中真机 smoke test 已通过 FLAC + ASS、后台播放、通知控制、冷启动恢复和 Glow 核心路径；完整格式、来源失效和外部设备矩阵仍待补齐。
 
 ## 当前实现基线
 
@@ -19,11 +19,11 @@ M0A 首轮 OLED 物理可行性验证已经完成。当前代码已经进入 M1�
 - 播放、暂停、前后 10 秒、倍速、字幕偏移及相邻字幕语境；
 - 普通界面遵循系统亮度，Glow 独立控制窗口、字幕、临时控制、字号与垂直位置。
 
-当前不包含网络媒体库、Room、依赖注入、转写或翻译任务。下一阶段重点是完成 M1C 的播放/微光细节，并集中进行真实设备验收。
+当前不包含网络媒体库、Room、依赖注入、转写或翻译任务。下一阶段重点是收口 M1C，并补齐视频容器、其余字幕格式、URI 失效恢复和实体耳机控制的真机覆盖。
 
 当前产品、工程边界和实施顺序统一见 [`docs/GUIDE.md`](docs/GUIDE.md)，文档层级见 [`docs/README.md`](docs/README.md)。
 
-M0A 首轮 OLED 真机验证记录见 [`docs/records/M0A_VALIDATION.md`](docs/records/M0A_VALIDATION.md)。
+真机记录见 [`docs/records/M0A_VALIDATION.md`](docs/records/M0A_VALIDATION.md) 与 [`docs/records/M1_SMOKE_VALIDATION.md`](docs/records/M1_SMOKE_VALIDATION.md)。
 
 ## 构建
 
