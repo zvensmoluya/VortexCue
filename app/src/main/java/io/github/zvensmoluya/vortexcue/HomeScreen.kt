@@ -49,6 +49,7 @@ internal val WorkError = Color(0xFFFF9A8F)
 internal fun HomeScreen(
     draft: SessionDraft,
     activeSession: ActiveSession?,
+    lastSession: RestorableSession?,
     playback: PlaybackSnapshot,
     displayProfile: DisplayProfile,
     onPickMedia: () -> Unit,
@@ -62,6 +63,11 @@ internal fun HomeScreen(
     modifier: Modifier = Modifier,
 ) {
     var settingsVisible by rememberSaveable { mutableStateOf(false) }
+    val resumableSession = activeSession ?: lastSession?.session
+    val resumablePositionMs =
+        if (activeSession != null) playback.positionMs else lastSession?.positionMs ?: 0L
+    val resumableDurationMs =
+        if (activeSession != null) playback.durationMs else lastSession?.durationMs ?: 0L
 
     Box(
         modifier =
@@ -105,10 +111,15 @@ internal fun HomeScreen(
                 }
             }
 
-            activeSession?.let { session ->
+            resumableSession?.let { session ->
                 SectionCard {
                     Text(
-                        text = if (playback.isPlaying) "正在播放" else "当前会话",
+                        text =
+                            when {
+                                activeSession == null -> "继续上次"
+                                playback.isPlaying -> "正在播放"
+                                else -> "当前会话"
+                            },
                         color = WorkAccent,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -123,7 +134,7 @@ internal fun HomeScreen(
                     )
                     Text(
                         text =
-                            "${formatTime(playback.positionMs)} / ${formatTime(playback.durationMs)} · " +
+                            "${formatTime(resumablePositionMs)} / ${formatTime(resumableDurationMs)} · " +
                                 (session.subtitle?.source?.displayName ?: "无字幕"),
                         color = WorkSecondaryText,
                         fontSize = 12.sp,
@@ -139,16 +150,21 @@ internal fun HomeScreen(
                             modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = WorkAccent),
                         ) {
-                            Text("返回播放", color = Color.Black)
-                        }
-                        OutlinedButton(
-                            onClick = onPlayPause,
-                            border = BorderStroke(1.dp, WorkMutedText),
-                        ) {
                             Text(
-                                text = if (playback.isPlaying) "暂停" else "播放",
-                                color = WorkPrimaryText,
+                                text = if (activeSession == null) "继续播放" else "返回播放",
+                                color = Color.Black,
                             )
+                        }
+                        if (activeSession != null) {
+                            OutlinedButton(
+                                onClick = onPlayPause,
+                                border = BorderStroke(1.dp, WorkMutedText),
+                            ) {
+                                Text(
+                                    text = if (playback.isPlaying) "暂停" else "播放",
+                                    color = WorkPrimaryText,
+                                )
+                            }
                         }
                     }
                 }

@@ -12,6 +12,7 @@ data class SubtitleSourceRef(
     val uri: Uri,
     val displayName: String,
     val mimeType: String?,
+    val cachedFileName: String? = null,
 )
 
 data class LoadedSubtitle(
@@ -47,6 +48,13 @@ data class ActiveSession(
     val subtitleOffsetMs: Long = 0L,
 )
 
+data class RestorableSession(
+    val session: ActiveSession,
+    val positionMs: Long,
+    val durationMs: Long,
+    val playbackSpeed: Float,
+)
+
 data class DisplayProfile(
     val name: String,
     val glowWindowBrightness: Float,
@@ -77,6 +85,9 @@ data class DisplayProfile(
             )
 
         val Presets = listOf(Soft, Balanced, HighReadability)
+
+        fun fromName(name: String?): DisplayProfile =
+            Presets.firstOrNull { it.name == name } ?: Balanced
     }
 }
 
