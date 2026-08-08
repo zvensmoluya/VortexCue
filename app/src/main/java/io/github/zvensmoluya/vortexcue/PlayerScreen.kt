@@ -1,20 +1,22 @@
 package io.github.zvensmoluya.vortexcue
 
-import android.net.Uri
-import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -25,11 +27,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -42,149 +41,228 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
 import java.util.Locale
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
-private val ControlText = Color(0xFF666666)
-private val SecondaryText = Color(0xFF454545)
-private val TrackColor = Color(0xFF242424)
+private val GlowTrackColor = Color(0xFF242424)
+private val PlaybackSpeeds = listOf(0.75f, 1f, 1.25f, 1.5f, 2f)
 
 @Composable
-fun VortexCuePlayer(
-    player: ExoPlayer,
-    onWindowBrightnessChanged: (Float) -> Unit,
-    onPlaybackActiveChanged: (Boolean) -> Unit,
+internal fun PlayerScreen(
+    player: Player,
+    session: ActiveSession,
+    playback: PlaybackSnapshot,
+    surface: PlayerSurface,
+    displayProfile: DisplayProfile,
+    onSurfaceChanged: (PlayerSurface) -> Unit,
+    onEditSources: () -> Unit,
+    onSubtitleOffsetChanged: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val contentResolver = context.contentResolver
-    val coroutineScope = rememberCoroutineScope()
-    val playback = rememberPlaybackSnapshot(player)
-
-    var controlsVisible by rememberSaveable { mutableStateOf(true) }
-    var subtitleGray by rememberSaveable { mutableFloatStateOf(12f) }
-    var windowBrightness by rememberSaveable { mutableFloatStateOf(0.08f) }
-    var subtitleOffsetMs by rememberSaveable { mutableLongStateOf(0L) }
-    var mediaName by remember { mutableStateOf<String?>(null) }
-    var subtitleName by remember { mutableStateOf<String?>(null) }
-    var subtitleTimeline by remember { mutableStateOf(SubtitleTimeline.Empty) }
-    var subtitleLoading by remember { mutableStateOf(false) }
-    var subtitleError by remember { mutableStateOf<String?>(null) }
-    var subtitleLoadJob by remember { mutableStateOf<Job?>(null) }
-    var subtitleRequestId by remember { mutableLongStateOf(0L) }
-
-    fun loadMedia(uri: Uri) {
-        contentResolver.persistReadPermission(uri)
-        mediaName = contentResolver.displayName(uri)
-        subtitleRequestId += 1L
-        subtitleLoadJob?.cancel()
-        subtitleLoading = false
-        subtitleName = null
-        subtitleTimeline = SubtitleTimeline.Empty
-        subtitleOffsetMs = 0L
-        subtitleError = null
-        player.stop()
-        player.clearMediaItems()
-        player.setMediaItem(MediaItem.fromUri(uri))
-        player.prepare()
-    }
-
-    fun loadSubtitle(uri: Uri) {
-        subtitleRequestId += 1L
-        val requestId = subtitleRequestId
-        subtitleLoadJob?.cancel()
-        subtitleLoadJob =
-            coroutineScope.launch {
-                subtitleLoading = true
-                subtitleError = null
-                try {
-                    val (name, timeline) =
-                        withContext(Dispatchers.IO) {
-                            contentResolver.persistReadPermission(uri)
-                            val displayName = contentResolver.displayName(uri)
-                            val cues =
-                                SubtitleParser.parse(
-                                    displayName,
-                                    contentResolver.readSubtitleBytes(uri),
-                                )
-                            displayName to SubtitleTimeline(cues)
-                        }
-                    if (requestId == subtitleRequestId) {
-                        subtitleName = name
-                        subtitleTimeline = timeline
-                    }
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Exception) {
-                    if (requestId == subtitleRequestId) {
-                        subtitleName = null
-                        subtitleTimeline = SubtitleTimeline.Empty
-                        subtitleError = error.message ?: "无法读取所选字幕"
-                    }
-                } finally {
-                    if (requestId == subtitleRequestId) subtitleLoading = false
-                }
-            }
-    }
-
-    val mediaPicker =
-        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            uri?.let(::loadMedia)
-        }
-    val subtitlePicker =
-        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            uri?.let(::loadSubtitle)
-        }
-
-    LaunchedEffect(windowBrightness) {
-        onWindowBrightnessChanged(windowBrightness)
-    }
-    LaunchedEffect(playback.isPlaying) {
-        onPlaybackActiveChanged(playback.isPlaying)
-    }
-    DisposableEffect(Unit) {
-        onDispose {
-            subtitleLoadJob?.cancel()
-            onPlaybackActiveChanged(false)
-        }
-    }
-
-    BackHandler(enabled = !controlsVisible) {
-        controlsVisible = true
-    }
-
-    val cuePositionMs = (playback.positionMs + subtitleOffsetMs).coerceAtLeast(0L)
+    val cuePositionMs =
+        (playback.positionMs + session.subtitleOffsetMs).coerceAtLeast(0L)
     val currentCue =
         if (
-            mediaName != null &&
-                playback.playbackState != Player.STATE_IDLE &&
+            playback.playbackState != Player.STATE_IDLE &&
                 playback.playbackState != Player.STATE_ENDED &&
                 playback.errorMessage == null
         ) {
-            subtitleTimeline.resolve(cuePositionMs)
+            session.subtitle?.timeline?.resolve(cuePositionMs)
         } else {
             null
         }
-    val gray = subtitleGray.toInt().coerceIn(0, 255)
-    val subtitleColor = Color(gray, gray, gray)
-    val centerHint =
-        when {
-            !controlsVisible -> null
-            subtitleLoading -> "正在读取字幕…"
-            mediaName == null -> "选择本地音频与 LRC / SRT"
-            subtitleName == null -> "选择 LRC 或 SRT 后开始测试"
-            else -> null
+
+    when (surface) {
+        PlayerSurface.Normal ->
+            NormalPlayer(
+                player = player,
+                session = session,
+                playback = playback,
+                cuePositionMs = cuePositionMs,
+                currentCue = currentCue,
+                onEditSources = onEditSources,
+                onEnterGlow = { onSurfaceChanged(PlayerSurface.Glow) },
+                onSubtitleOffsetChanged = onSubtitleOffsetChanged,
+                modifier = modifier,
+            )
+        PlayerSurface.Glow ->
+            GlowPlayer(
+                player = player,
+                session = session,
+                playback = playback,
+                currentCue = currentCue,
+                displayProfile = displayProfile,
+                onExitGlow = { onSurfaceChanged(PlayerSurface.Normal) },
+                onSubtitleOffsetChanged = onSubtitleOffsetChanged,
+                modifier = modifier,
+            )
+    }
+}
+
+@Composable
+private fun NormalPlayer(
+    player: Player,
+    session: ActiveSession,
+    playback: PlaybackSnapshot,
+    cuePositionMs: Long,
+    currentCue: SubtitleCue?,
+    onEditSources: () -> Unit,
+    onEnterGlow: () -> Unit,
+    onSubtitleOffsetChanged: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = subtitleContext(session.subtitle?.timeline, cuePositionMs, currentCue)
+
+    Column(
+        modifier =
+            modifier
+                .fillMaxSize()
+                .background(WorkBackground)
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onEditSources) {
+                Text("首页", color = WorkSecondaryText)
+            }
+            Text(
+                text = session.media.displayName,
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                color = WorkPrimaryText,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            TextButton(onClick = onEditSources) {
+                Text("来源", color = WorkAccent)
+            }
         }
+
+        if (playback.playbackState == Player.STATE_BUFFERING) {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth(),
+                color = WorkAccent,
+                trackColor = WorkSurfaceRaised,
+            )
+        } else {
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
+        Column(
+            modifier =
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            if (session.subtitle == null) {
+                Text(
+                    text = "当前会话没有字幕",
+                    color = WorkSecondaryText,
+                    fontSize = 15.sp,
+                )
+                TextButton(onClick = onEditSources) {
+                    Text("添加字幕源", color = WorkAccent)
+                }
+            } else {
+                CueText(
+                    text = context.previous?.text.orEmpty(),
+                    color = WorkMutedText,
+                    fontSize = 15,
+                    maxLines = 3,
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                CueText(
+                    text = currentCue?.text.orEmpty(),
+                    color = WorkPrimaryText,
+                    fontSize = 26,
+                    maxLines = 6,
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                CueText(
+                    text = context.next?.text.orEmpty(),
+                    color = WorkMutedText,
+                    fontSize = 15,
+                    maxLines = 3,
+                )
+            }
+        }
+
+        playback.errorMessage?.let { message ->
+            Text(
+                text = message,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                color = WorkError,
+                fontSize = 12.sp,
+                textAlign = TextAlign.Center,
+            )
+        }
+
+        PlaybackControls(
+            player = player,
+            playback = playback,
+            subtitleOffsetMs = session.subtitleOffsetMs,
+            subtitleControlsEnabled = session.subtitle != null,
+            contentColor = WorkPrimaryText,
+            secondaryColor = WorkSecondaryText,
+            accentColor = WorkAccent,
+            trackColor = WorkSurfaceRaised,
+            onSubtitleOffsetChanged = onSubtitleOffsetChanged,
+        )
+
+        Button(
+            onClick = onEnterGlow,
+            enabled = session.subtitle != null,
+            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+            colors =
+                ButtonDefaults.buttonColors(
+                    containerColor = WorkAccent,
+                    disabledContainerColor = WorkSurfaceRaised,
+                ),
+        ) {
+            Text(
+                text = if (session.subtitle == null) "添加字幕后进入微光" else "进入微光",
+                color = if (session.subtitle == null) WorkMutedText else Color.Black,
+            )
+        }
+    }
+}
+
+@Composable
+private fun GlowPlayer(
+    player: Player,
+    session: ActiveSession,
+    playback: PlaybackSnapshot,
+    currentCue: SubtitleCue?,
+    displayProfile: DisplayProfile,
+    onExitGlow: () -> Unit,
+    onSubtitleOffsetChanged: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var controlsVisible by rememberSaveable { mutableStateOf(true) }
+    val subtitleLevel = displayProfile.glowSubtitleLevel.coerceIn(0, 255)
+    val controlLevel = displayProfile.glowControlLevel.coerceIn(0, 255)
+    val subtitleColor = Color(subtitleLevel, subtitleLevel, subtitleLevel)
+    val controlColor = Color(controlLevel, controlLevel, controlLevel)
+
+    LaunchedEffect(controlsVisible, playback.isPlaying) {
+        if (controlsVisible && playback.isPlaying) {
+            delay(4_000L)
+            controlsVisible = false
+        }
+    }
 
     Box(
         modifier =
@@ -195,73 +273,58 @@ fun VortexCuePlayer(
                     detectTapGestures { controlsVisible = !controlsVisible }
                 },
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            Box(
+        Text(
+            text = currentCue?.text.orEmpty(),
+            modifier =
+                Modifier
+                    .align(Alignment.Center)
+                    .offset(y = 48.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = 28.dp),
+            color = subtitleColor,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Medium,
+            lineHeight = 34.sp,
+            textAlign = TextAlign.Center,
+        )
+
+        if (controlsVisible) {
+            Column(
                 modifier =
                     Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(Color.Black)
+                        .padding(horizontal = 20.dp, vertical = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text(
-                    text = currentCue?.text.orEmpty(),
-                    modifier =
-                        Modifier
-                            .align(Alignment.Center)
-                            .offset(y = if (controlsVisible) 16.dp else 48.dp)
-                            .fillMaxWidth()
-                            .padding(horizontal = 28.dp),
-                    color = subtitleColor,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Medium,
-                    lineHeight = 34.sp,
-                    textAlign = TextAlign.Center,
-                )
-
-                centerHint?.let { hint ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text(
-                        text = hint,
-                        modifier =
-                            Modifier
-                                .align(Alignment.Center)
-                                .fillMaxWidth()
-                                .padding(horizontal = 28.dp),
-                        color = SecondaryText,
-                        fontSize = 14.sp,
-                        textAlign = TextAlign.Center,
+                        text = session.media.displayName,
+                        modifier = Modifier.weight(1f),
+                        color = controlColor,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
+                    TextButton(onClick = onExitGlow) {
+                        Text("退出微光", color = controlColor)
+                    }
                 }
-            }
-
-            if (controlsVisible) {
-                PlayerControls(
-                    mediaName = mediaName,
-                    subtitleName = subtitleName,
-                    subtitleLoading = subtitleLoading,
-                    errorMessage = subtitleError ?: playback.errorMessage,
+                PlaybackControls(
+                    player = player,
                     playback = playback,
-                    subtitleOffsetMs = subtitleOffsetMs,
-                    subtitleGray = subtitleGray,
-                    windowBrightness = windowBrightness,
-                    onPickMedia = { mediaPicker.launch(arrayOf("audio/*")) },
-                    onPickSubtitle = { subtitlePicker.launch(arrayOf("*/*")) },
-                    onPlayPause = {
-                        if (player.isPlaying) {
-                            player.pause()
-                        } else {
-                            if (player.playbackState == Player.STATE_ENDED) player.seekTo(0L)
-                            player.play()
-                        }
-                    },
-                    onSeekBy = { deltaMs -> player.seekWithinMedia(deltaMs) },
-                    onSeekTo = player::seekTo,
-                    onSubtitleOffsetChanged = { subtitleOffsetMs = it.coerceIn(-60_000L, 60_000L) },
-                    onSubtitleGrayChanged = { subtitleGray = it },
-                    onWindowBrightnessChanged = { windowBrightness = it },
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .background(Color.Black)
-                            .padding(horizontal = 20.dp, vertical = 18.dp),
+                    subtitleOffsetMs = session.subtitleOffsetMs,
+                    subtitleControlsEnabled = true,
+                    contentColor = controlColor,
+                    secondaryColor = controlColor.copy(alpha = 0.72f),
+                    accentColor = controlColor,
+                    trackColor = GlowTrackColor,
+                    onSubtitleOffsetChanged = onSubtitleOffsetChanged,
                 )
             }
         }
@@ -269,173 +332,133 @@ fun VortexCuePlayer(
 }
 
 @Composable
-private fun PlayerControls(
-    mediaName: String?,
-    subtitleName: String?,
-    subtitleLoading: Boolean,
-    errorMessage: String?,
+private fun CueText(
+    text: String,
+    color: Color,
+    fontSize: Int,
+    maxLines: Int,
+) {
+    Text(
+        text = text,
+        modifier = Modifier.fillMaxWidth(),
+        color = color,
+        fontSize = fontSize.sp,
+        lineHeight = (fontSize * 1.4f).sp,
+        textAlign = TextAlign.Center,
+        maxLines = maxLines,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+@Composable
+private fun PlaybackControls(
+    player: Player,
     playback: PlaybackSnapshot,
     subtitleOffsetMs: Long,
-    subtitleGray: Float,
-    windowBrightness: Float,
-    onPickMedia: () -> Unit,
-    onPickSubtitle: () -> Unit,
-    onPlayPause: () -> Unit,
-    onSeekBy: (Long) -> Unit,
-    onSeekTo: (Long) -> Unit,
+    subtitleControlsEnabled: Boolean,
+    contentColor: Color,
+    secondaryColor: Color,
+    accentColor: Color,
+    trackColor: Color,
     onSubtitleOffsetChanged: (Long) -> Unit,
-    onSubtitleGrayChanged: (Float) -> Unit,
-    onWindowBrightnessChanged: (Float) -> Unit,
-    modifier: Modifier = Modifier,
 ) {
-    val buttonColors = ButtonDefaults.textButtonColors(contentColor = ControlText)
     val sliderColors =
         SliderDefaults.colors(
-            thumbColor = ControlText,
-            activeTrackColor = Color(0xFF383838),
-            inactiveTrackColor = TrackColor,
+            thumbColor = accentColor,
+            activeTrackColor = accentColor.copy(alpha = 0.75f),
+            inactiveTrackColor = trackColor,
         )
-    val hasMedia = mediaName != null
-    val durationMs = playback.durationMs
     var scrubPositionMs by remember { mutableStateOf<Long?>(null) }
     val displayedPositionMs = scrubPositionMs ?: playback.positionMs
     val progress =
-        if (durationMs > 0L) {
-            (displayedPositionMs.toDouble() / durationMs.toDouble()).toFloat().coerceIn(0f, 1f)
+        if (playback.durationMs > 0L) {
+            (displayedPositionMs.toDouble() / playback.durationMs.toDouble())
+                .toFloat()
+                .coerceIn(0f, 1f)
         } else {
             0f
         }
 
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onPickMedia, colors = buttonColors) {
-                Text("选择音频")
-            }
-            TextButton(onClick = onPickSubtitle, colors = buttonColors, enabled = !subtitleLoading) {
-                Text(if (subtitleLoading) "读取中…" else "选择字幕")
-            }
-        }
-        Text(
-            text = mediaName ?: "未选择音频",
-            modifier = Modifier.fillMaxWidth(),
-            color = SecondaryText,
-            fontSize = 12.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = subtitleName ?: "未选择 LRC / SRT",
-            modifier = Modifier.fillMaxWidth(),
-            color = SecondaryText,
-            fontSize = 12.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        errorMessage?.let { message ->
-            Text(
-                text = message,
-                modifier = Modifier.fillMaxWidth(),
-                color = Color(0xFF7A5555),
-                fontSize = 12.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+    Slider(
+        value = progress,
+        onValueChange = { value ->
+            scrubPositionMs = (playback.durationMs * value).toLong()
+        },
+        onValueChangeFinished = {
+            scrubPositionMs?.let(player::seekTo)
+            scrubPositionMs = null
+        },
+        enabled = playback.durationMs > 0L,
+        colors = sliderColors,
+    )
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(formatTime(displayedPositionMs), color = secondaryColor, fontSize = 11.sp)
+        Text(formatTime(playback.durationMs), color = secondaryColor, fontSize = 11.sp)
+    }
 
-        Slider(
-            value = progress,
-            onValueChange = { value -> scrubPositionMs = (durationMs * value).toLong() },
-            onValueChangeFinished = {
-                scrubPositionMs?.let(onSeekTo)
-                scrubPositionMs = null
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(onClick = { player.seekWithinMedia(-10_000L) }) {
+            Text("−10 秒", color = contentColor)
+        }
+        TextButton(onClick = player::togglePlayPause) {
+            Text(playPauseLabel(playback), color = contentColor, fontWeight = FontWeight.Medium)
+        }
+        TextButton(onClick = { player.seekWithinMedia(10_000L) }) {
+            Text("+10 秒", color = contentColor)
+        }
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(
+            onClick = {
+                onSubtitleOffsetChanged((subtitleOffsetMs - 500L).coerceAtLeast(-60_000L))
             },
-            enabled = durationMs > 0L,
-            colors = sliderColors,
-        )
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(formatTime(displayedPositionMs), color = SecondaryText, fontSize = 11.sp)
-            Text(formatTime(durationMs), color = SecondaryText, fontSize = 11.sp)
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
+            enabled = subtitleControlsEnabled,
         ) {
-            TextButton(onClick = { onSeekBy(-10_000L) }, enabled = hasMedia, colors = buttonColors) {
-                Text("−10 秒")
-            }
-            TextButton(onClick = onPlayPause, enabled = hasMedia, colors = buttonColors) {
-                Text(if (playback.isPlaying) "暂停" else "播放")
-            }
-            TextButton(onClick = { onSeekBy(10_000L) }, enabled = hasMedia, colors = buttonColors) {
-                Text("+10 秒")
-            }
+            Text("字幕 −0.5 秒", color = if (subtitleControlsEnabled) contentColor else trackColor)
         }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+        TextButton(onClick = { player.setPlaybackSpeed(nextPlaybackSpeed(playback.speed)) }) {
+            Text(formatSpeed(playback.speed), color = contentColor)
+        }
+        TextButton(
+            onClick = {
+                onSubtitleOffsetChanged((subtitleOffsetMs + 500L).coerceAtMost(60_000L))
+            },
+            enabled = subtitleControlsEnabled,
         ) {
-            TextButton(
-                onClick = { onSubtitleOffsetChanged(subtitleOffsetMs - 500L) },
-                colors = buttonColors,
-            ) {
-                Text("字幕 −0.5 秒")
-            }
-            Text(
-                text = formatOffset(subtitleOffsetMs),
-                color = SecondaryText,
-                fontSize = 11.sp,
-            )
-            TextButton(
-                onClick = { onSubtitleOffsetChanged(subtitleOffsetMs + 500L) },
-                colors = buttonColors,
-            ) {
-                Text("+0.5 秒")
-            }
+            Text("+0.5 秒", color = if (subtitleControlsEnabled) contentColor else trackColor)
         }
-
+    }
+    if (subtitleControlsEnabled) {
         Text(
-            text = "窗口亮度  ${(windowBrightness * 100).toInt()}%",
-            color = SecondaryText,
+            text = formatOffset(subtitleOffsetMs),
+            modifier = Modifier.fillMaxWidth(),
+            color = secondaryColor,
             fontSize = 11.sp,
-        )
-        Slider(
-            value = windowBrightness,
-            onValueChange = onWindowBrightnessChanged,
-            valueRange = 0.01f..0.25f,
-            colors = sliderColors,
-        )
-        Text(
-            text = "字幕灰阶  RGB ${subtitleGray.toInt()}",
-            color = SecondaryText,
-            fontSize = 11.sp,
-        )
-        Slider(
-            value = subtitleGray,
-            onValueChange = onSubtitleGrayChanged,
-            valueRange = 2f..32f,
-            colors = sliderColors,
+            textAlign = TextAlign.Center,
         )
     }
 }
 
-private data class PlaybackSnapshot(
+internal data class PlaybackSnapshot(
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val isPlaying: Boolean = false,
     val playbackState: Int = Player.STATE_IDLE,
     val errorMessage: String? = null,
+    val speed: Float = 1f,
 )
 
 @Composable
-private fun rememberPlaybackSnapshot(player: Player): PlaybackSnapshot {
+internal fun rememberPlaybackSnapshot(player: Player): PlaybackSnapshot {
     var snapshot by remember(player) { mutableStateOf(player.snapshot()) }
 
     DisposableEffect(player) {
@@ -456,7 +479,7 @@ private fun rememberPlaybackSnapshot(player: Player): PlaybackSnapshot {
     LaunchedEffect(player) {
         while (isActive) {
             snapshot = player.snapshot()
-            delay(if (player.isPlaying) 50L else 250L)
+            delay(if (player.isPlaying) 100L else 300L)
         }
     }
 
@@ -470,7 +493,18 @@ private fun Player.snapshot(): PlaybackSnapshot =
         isPlaying = isPlaying,
         playbackState = playbackState,
         errorMessage = playerError?.let { "播放失败：${it.errorCodeName}" },
+        speed = playbackParameters.speed,
     )
+
+internal fun Player.togglePlayPause() {
+    if (isPlaying) {
+        pause()
+    } else {
+        if (playbackState == Player.STATE_ENDED) seekTo(0L)
+        if (playbackState == Player.STATE_IDLE && mediaItemCount > 0) prepare()
+        play()
+    }
+}
 
 private fun Player.seekWithinMedia(deltaMs: Long) {
     val maximum = duration.takeUnless { it == C.TIME_UNSET || it < 0L }
@@ -478,7 +512,35 @@ private fun Player.seekWithinMedia(deltaMs: Long) {
     seekTo(maximum?.let { target.coerceAtMost(it) } ?: target)
 }
 
-private fun formatTime(milliseconds: Long): String {
+private data class SubtitleContext(
+    val previous: SubtitleCue?,
+    val next: SubtitleCue?,
+)
+
+private fun subtitleContext(
+    timeline: SubtitleTimeline?,
+    positionMs: Long,
+    current: SubtitleCue?,
+): SubtitleContext {
+    val cues = timeline?.cues.orEmpty()
+    if (cues.isEmpty()) return SubtitleContext(null, null)
+
+    if (current != null) {
+        val index = cues.indexOf(current)
+        return SubtitleContext(
+            previous = cues.getOrNull(index - 1),
+            next = cues.getOrNull(index + 1),
+        )
+    }
+
+    val nextIndex = cues.indexOfFirst { it.startMs > positionMs }.let { if (it < 0) cues.size else it }
+    return SubtitleContext(
+        previous = cues.getOrNull(nextIndex - 1),
+        next = cues.getOrNull(nextIndex),
+    )
+}
+
+internal fun formatTime(milliseconds: Long): String {
     val totalSeconds = milliseconds.coerceAtLeast(0L) / 1_000L
     val hours = totalSeconds / 3_600L
     val minutes = (totalSeconds % 3_600L) / 60L
@@ -492,9 +554,29 @@ private fun formatTime(milliseconds: Long): String {
 
 private fun formatOffset(milliseconds: Long): String =
     if (milliseconds == 0L) {
-        "同步"
+        "字幕同步"
     } else {
-        String.format(Locale.ROOT, "%+.1f 秒", milliseconds / 1_000f)
+        String.format(Locale.ROOT, "字幕 %+.1f 秒", milliseconds / 1_000f)
+    }
+
+private fun formatSpeed(speed: Float): String =
+    if (speed == speed.toInt().toFloat()) {
+        "${speed.toInt()}.0×"
+    } else {
+        "${speed}×"
+    }
+
+private fun nextPlaybackSpeed(current: Float): Float {
+    val index = PlaybackSpeeds.indexOfFirst { it > current + 0.01f }
+    return if (index >= 0) PlaybackSpeeds[index] else PlaybackSpeeds.first()
+}
+
+private fun playPauseLabel(playback: PlaybackSnapshot): String =
+    when {
+        playback.playbackState == Player.STATE_BUFFERING -> "缓冲中"
+        playback.playbackState == Player.STATE_ENDED -> "重新播放"
+        playback.isPlaying -> "暂停"
+        else -> "播放"
     }
 
 @Composable
@@ -502,11 +584,11 @@ fun VortexCueTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme =
             darkColorScheme(
-                background = Color.Black,
-                surface = Color.Black,
-                primary = ControlText,
-                onBackground = ControlText,
-                onSurface = ControlText,
+                background = WorkBackground,
+                surface = WorkSurface,
+                primary = WorkAccent,
+                onBackground = WorkPrimaryText,
+                onSurface = WorkPrimaryText,
             ),
         content = content,
     )

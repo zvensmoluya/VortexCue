@@ -29,6 +29,7 @@ dependencies {
     implementation(libs.activity.compose)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.media3.exoplayer)
+    implementation(libs.media3.session)
 
     val composeBom = platform(libs.compose.bom)
     implementation(composeBom)
