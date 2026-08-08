@@ -1,5 +1,8 @@
 package io.github.zvensmoluya.vortexcue
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -35,6 +39,9 @@ import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -252,15 +259,34 @@ private fun GlowPlayer(
     modifier: Modifier = Modifier,
 ) {
     var controlsVisible by rememberSaveable { mutableStateOf(true) }
+    var controlInteractionRevision by rememberSaveable { mutableIntStateOf(0) }
     val subtitleLevel = displayProfile.glowSubtitleLevel.coerceIn(0, 255)
     val controlLevel = displayProfile.glowControlLevel.coerceIn(0, 255)
     val subtitleColor = Color(subtitleLevel, subtitleLevel, subtitleLevel)
     val controlColor = Color(controlLevel, controlLevel, controlLevel)
 
-    LaunchedEffect(controlsVisible, playback.isPlaying) {
+    fun showControls() {
+        controlsVisible = true
+        controlInteractionRevision += 1
+    }
+
+    fun toggleControls() {
+        if (controlsVisible) controlsVisible = false else showControls()
+    }
+
+    LaunchedEffect(controlsVisible, playback.isPlaying, controlInteractionRevision) {
         if (controlsVisible && playback.isPlaying) {
             delay(4_000L)
             controlsVisible = false
+        }
+    }
+    LaunchedEffect(playback.isPlaying, playback.playbackState, playback.errorMessage) {
+        if (
+            !playback.isPlaying ||
+                playback.playbackState == Player.STATE_ENDED ||
+                playback.errorMessage != null
+        ) {
+            showControls()
         }
     }
 
@@ -269,8 +295,18 @@ private fun GlowPlayer(
             modifier
                 .fillMaxSize()
                 .background(Color.Black)
-                .pointerInput(Unit) {
-                    detectTapGestures { controlsVisible = !controlsVisible }
+                .semantics {
+                    contentDescription =
+                        if (controlsVisible) "隐藏微光控制" else "显示微光控制"
+                    onClick(
+                        label = if (controlsVisible) "隐藏控制" else "显示控制",
+                    ) {
+                        toggleControls()
+                        true
+                    }
+                }
+                .pointerInput(controlsVisible) {
+                    detectTapGestures { toggleControls() }
                 },
     ) {
         Text(
@@ -295,11 +331,15 @@ private fun GlowPlayer(
             textAlign = TextAlign.Center,
         )
 
-        if (controlsVisible) {
+        AnimatedVisibility(
+            visible = controlsVisible,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
             Column(
                 modifier =
                     Modifier
-                        .align(Alignment.BottomCenter)
                         .fillMaxWidth()
                         .background(Color.Black)
                         .padding(horizontal = 20.dp, vertical = 18.dp),
@@ -322,6 +362,15 @@ private fun GlowPlayer(
                         Text("退出微光", color = controlColor)
                     }
                 }
+                playback.errorMessage?.let { message ->
+                    Text(
+                        text = message,
+                        modifier = Modifier.fillMaxWidth(),
+                        color = controlColor,
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center,
+                    )
+                }
                 PlaybackControls(
                     player = player,
                     playback = playback,
@@ -332,6 +381,7 @@ private fun GlowPlayer(
                     accentColor = controlColor,
                     trackColor = GlowTrackColor,
                     onSubtitleOffsetChanged = onSubtitleOffsetChanged,
+                    onInteraction = ::showControls,
                 )
             }
         }
@@ -368,6 +418,7 @@ private fun PlaybackControls(
     accentColor: Color,
     trackColor: Color,
     onSubtitleOffsetChanged: (Long) -> Unit,
+    onInteraction: () -> Unit = {},
 ) {
     val sliderColors =
         SliderDefaults.colors(
@@ -389,13 +440,16 @@ private fun PlaybackControls(
     Slider(
         value = progress,
         onValueChange = { value ->
+            onInteraction()
             scrubPositionMs = (playback.durationMs * value).toLong()
         },
         onValueChangeFinished = {
+            onInteraction()
             scrubPositionMs?.let(player::seekTo)
             scrubPositionMs = null
         },
         enabled = playback.durationMs > 0L,
+        modifier = Modifier.semantics { contentDescription = "播放进度" },
         colors = sliderColors,
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -408,13 +462,28 @@ private fun PlaybackControls(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = { player.seekWithinMedia(-10_000L) }) {
+        TextButton(
+            onClick = {
+                onInteraction()
+                player.seekWithinMedia(-10_000L)
+            },
+        ) {
             Text("−10 秒", color = contentColor)
         }
-        TextButton(onClick = player::togglePlayPause) {
+        TextButton(
+            onClick = {
+                onInteraction()
+                player.togglePlayPause()
+            },
+        ) {
             Text(playPauseLabel(playback), color = contentColor, fontWeight = FontWeight.Medium)
         }
-        TextButton(onClick = { player.seekWithinMedia(10_000L) }) {
+        TextButton(
+            onClick = {
+                onInteraction()
+                player.seekWithinMedia(10_000L)
+            },
+        ) {
             Text("+10 秒", color = contentColor)
         }
     }
@@ -426,17 +495,24 @@ private fun PlaybackControls(
     ) {
         TextButton(
             onClick = {
+                onInteraction()
                 onSubtitleOffsetChanged((subtitleOffsetMs - 500L).coerceAtLeast(-60_000L))
             },
             enabled = subtitleControlsEnabled,
         ) {
             Text("字幕 −0.5 秒", color = if (subtitleControlsEnabled) contentColor else trackColor)
         }
-        TextButton(onClick = { player.setPlaybackSpeed(nextPlaybackSpeed(playback.speed)) }) {
+        TextButton(
+            onClick = {
+                onInteraction()
+                player.setPlaybackSpeed(nextPlaybackSpeed(playback.speed))
+            },
+        ) {
             Text(formatSpeed(playback.speed), color = contentColor)
         }
         TextButton(
             onClick = {
+                onInteraction()
                 onSubtitleOffsetChanged((subtitleOffsetMs + 500L).coerceAtMost(60_000L))
             },
             enabled = subtitleControlsEnabled,
