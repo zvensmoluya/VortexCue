@@ -66,6 +66,7 @@ class SessionStore(context: Context) {
     }
 
     suspend fun saveDraft(draft: SessionDraft) {
+        val media = draft.media.source
         val subtitle =
             when (val value = draft.subtitle) {
                 DraftSubtitle.None -> null
@@ -74,7 +75,7 @@ class SessionStore(context: Context) {
                 is DraftSubtitle.Failed -> value.source
             }
         dataStore.edit { preferences ->
-            preferences.writeMediaSource(Keys.DraftMedia, draft.media)
+            preferences.writeMediaSource(Keys.DraftMedia, media)
             preferences.writeSubtitleSource(Keys.DraftSubtitle, subtitle)
         }
     }

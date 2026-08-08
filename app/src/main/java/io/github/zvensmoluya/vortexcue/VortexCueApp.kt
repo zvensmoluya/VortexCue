@@ -23,9 +23,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import java.io.FileNotFoundException
+import java.io.IOException
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -36,6 +41,11 @@ import kotlinx.coroutines.withContext
 private enum class AppDestination {
     Home,
     Player,
+}
+
+private enum class MediaPickTarget {
+    Draft,
+    LastSession,
 }
 
 @Composable
@@ -66,6 +76,9 @@ fun VortexCueApp(
     var draft by remember { mutableStateOf(initialSession?.toDraft() ?: SessionDraft()) }
     var displayProfile by remember { mutableStateOf(DisplayProfile.Balanced) }
     var restorationCompleted by remember { mutableStateOf(false) }
+    var mediaPickTarget by rememberSaveable { mutableStateOf(MediaPickTarget.Draft) }
+    var mediaLoadJob by remember { mutableStateOf<Job?>(null) }
+    var mediaRequestId by remember { mutableLongStateOf(0L) }
     var subtitleLoadJob by remember { mutableStateOf<Job?>(null) }
     var subtitleRequestId by remember { mutableLongStateOf(0L) }
 
@@ -81,6 +94,97 @@ fun VortexCueApp(
         val saved = currentRestorableSession(session)
         lastSession = saved
         coroutineScope.launch { sessionStore.saveLastSession(saved) }
+    }
+
+    fun resumeSession(saved: RestorableSession) {
+        player.setMediaItem(saved.session.media.toMediaItem())
+        player.prepare()
+        player.seekTo(saved.positionMs)
+        player.setPlaybackSpeed(saved.playbackSpeed)
+        activeSession = saved.session
+        lastSession = saved.copy(mediaAvailability = MediaAvailability.Ready)
+        draft = saved.session.toDraft()
+        playerSurface = PlayerSurface.Normal
+        destination = AppDestination.Player
+        player.play()
+    }
+
+    fun cancelMediaLoad() {
+        mediaRequestId += 1L
+        mediaLoadJob?.cancel()
+        mediaLoadJob = null
+    }
+
+    fun loadMedia(
+        uri: Uri,
+        target: MediaPickTarget,
+    ) {
+        cancelMediaLoad()
+        val source =
+            MediaSourceRef(
+                uri = uri,
+                displayName = contentResolver.displayName(uri),
+                mimeType = contentResolver.safeMimeType(uri),
+            )
+        val requestId = mediaRequestId
+        val relinkedSession =
+            if (target == MediaPickTarget.LastSession) {
+                lastSession?.let { saved ->
+                    saved.copy(
+                        session = saved.session.copy(media = source),
+                        mediaAvailability = MediaAvailability.Checking,
+                    )
+                }
+            } else {
+                null
+            }
+
+        when (target) {
+            MediaPickTarget.Draft -> draft = draft.copy(media = DraftMedia.Checking(source))
+            MediaPickTarget.LastSession -> relinkedSession?.let { lastSession = it }
+        }
+
+        mediaLoadJob =
+            coroutineScope.launch {
+                try {
+                    ensureMediaReadable(contentResolver, source)
+                    if (requestId != mediaRequestId) return@launch
+                    when (target) {
+                        MediaPickTarget.Draft ->
+                            draft = draft.copy(media = DraftMedia.Ready(source))
+                        MediaPickTarget.LastSession ->
+                            relinkedSession?.let { session ->
+                                val ready =
+                                    session.copy(mediaAvailability = MediaAvailability.Ready)
+                                lastSession = ready
+                                sessionStore.saveLastSession(ready)
+                                resumeSession(ready)
+                            }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    if (requestId != mediaRequestId) return@launch
+                    val message = mediaAccessMessage(error)
+                    when (target) {
+                        MediaPickTarget.Draft ->
+                            draft =
+                                draft.copy(
+                                    media = DraftMedia.Unavailable(source, message),
+                                )
+                        MediaPickTarget.LastSession ->
+                            relinkedSession?.let { session ->
+                                val unavailable =
+                                    session.copy(
+                                        mediaAvailability =
+                                            MediaAvailability.Unavailable(message),
+                                    )
+                                lastSession = unavailable
+                                sessionStore.saveLastSession(unavailable)
+                            }
+                    }
+                }
+            }
     }
 
     fun cancelSubtitleLoad() {
@@ -138,6 +242,10 @@ fun VortexCueApp(
 
         val storedLast = stored.lastSession
         if (storedLast != null) {
+            val mediaError =
+                runCatching {
+                    ensureMediaReadable(contentResolver, storedLast.media)
+                }.exceptionOrNull()
             val loadedSubtitle =
                 storedLast.subtitle?.let { source ->
                     runCatching {
@@ -155,6 +263,10 @@ fun VortexCueApp(
                     positionMs = storedLast.positionMs,
                     durationMs = storedLast.durationMs,
                     playbackSpeed = storedLast.playbackSpeed,
+                    mediaAvailability =
+                        mediaError?.let {
+                            MediaAvailability.Unavailable(mediaAccessMessage(it))
+                        } ?: MediaAvailability.Ready,
                 )
             lastSession = restored
             if (initialSession?.media?.uri == storedLast.media.uri) {
@@ -169,14 +281,32 @@ fun VortexCueApp(
 
         val storedDraft = stored.draft
         if (storedDraft.media != null || storedDraft.subtitle != null) {
+            val storedMedia = storedDraft.media
             val storedSubtitle = storedDraft.subtitle
             draft =
                 SessionDraft(
-                    media = storedDraft.media,
+                    media =
+                        storedMedia?.let(DraftMedia::Checking)
+                            ?: DraftMedia.None,
                     subtitle =
                         storedSubtitle?.let(DraftSubtitle::Loading)
                             ?: DraftSubtitle.None,
                 )
+            if (storedMedia != null) {
+                draft =
+                    try {
+                        ensureMediaReadable(contentResolver, storedMedia)
+                        draft.copy(media = DraftMedia.Ready(storedMedia))
+                    } catch (error: Exception) {
+                        draft.copy(
+                            media =
+                                DraftMedia.Unavailable(
+                                    source = storedMedia,
+                                    message = mediaAccessMessage(error),
+                                ),
+                        )
+                    }
+            }
             if (storedSubtitle != null) {
                 draft =
                     try {
@@ -216,21 +346,47 @@ fun VortexCueApp(
             activeSession?.let(::persistSession)
         }
     }
+    LaunchedEffect(restorationCompleted, playback.speed) {
+        if (restorationCompleted) activeSession?.let(::persistSession)
+    }
+
+    DisposableEffect(player, restorationCompleted, activeSession) {
+        val session = activeSession
+        val listener =
+            object : Player.Listener {
+                override fun onPositionDiscontinuity(
+                    oldPosition: Player.PositionInfo,
+                    newPosition: Player.PositionInfo,
+                    reason: Int,
+                ) {
+                    if (
+                        restorationCompleted &&
+                            session != null &&
+                            player.currentMediaItem?.localConfiguration?.uri == session.media.uri
+                    ) {
+                        persistSession(session)
+                    }
+                }
+            }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+
+    val lifecycleOwner = context as? LifecycleOwner
+    DisposableEffect(lifecycleOwner, restorationCompleted, activeSession) {
+        val observer =
+            LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_STOP && restorationCompleted) {
+                    activeSession?.let(::persistSession)
+                }
+            }
+        lifecycleOwner?.lifecycle?.addObserver(observer)
+        onDispose { lifecycleOwner?.lifecycle?.removeObserver(observer) }
+    }
 
     val mediaPicker =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            uri?.let {
-                contentResolver.persistReadPermission(it)
-                draft =
-                    draft.copy(
-                        media =
-                            MediaSourceRef(
-                                uri = it,
-                                displayName = contentResolver.displayName(it),
-                                mimeType = contentResolver.safeMimeType(it),
-                            ),
-                    )
-            }
+            uri?.let { loadMedia(it, mediaPickTarget) }
         }
     val subtitlePicker =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -250,6 +406,7 @@ fun VortexCueApp(
     }
     DisposableEffect(Unit) {
         onDispose {
+            mediaLoadJob?.cancel()
             subtitleLoadJob?.cancel()
             onPlaybackActiveChanged(false)
             onImmersiveModeChanged(false)
@@ -287,18 +444,22 @@ fun VortexCueApp(
                 lastSession = lastSession,
                 playback = playback,
                 displayProfile = displayProfile,
-                onPickMedia = { mediaPicker.launch(arrayOf("audio/*", "video/*")) },
+                onPickMedia = {
+                    mediaPickTarget = MediaPickTarget.Draft
+                    mediaPicker.launch(arrayOf("audio/*", "video/*"))
+                },
                 onPickSubtitle = { subtitlePicker.launch(arrayOf("*/*")) },
                 onRemoveSubtitle = {
                     cancelSubtitleLoad()
                     draft = draft.copy(subtitle = DraftSubtitle.None)
                 },
                 onClearDraft = {
+                    cancelMediaLoad()
                     cancelSubtitleLoad()
                     draft = SessionDraft()
                 },
                 onApplyDraft = {
-                    draft.media?.let { media ->
+                    (draft.media as? DraftMedia.Ready)?.source?.let { media ->
                         val loadedSubtitle =
                             (draft.subtitle as? DraftSubtitle.Ready)?.subtitle
                         val mediaChanged =
@@ -334,19 +495,22 @@ fun VortexCueApp(
                     }
                 },
                 onContinue = {
-                    if (activeSession == null) {
+                    val currentSession = activeSession
+                    if (currentSession != null) {
+                        playerSurface = PlayerSurface.Normal
+                        destination = AppDestination.Player
+                    } else {
                         lastSession?.let { saved ->
-                            player.setMediaItem(saved.session.media.toMediaItem())
-                            player.prepare()
-                            player.seekTo(saved.positionMs)
-                            player.setPlaybackSpeed(saved.playbackSpeed)
-                            activeSession = saved.session
-                            draft = saved.session.toDraft()
-                            player.play()
+                            when (saved.mediaAvailability) {
+                                MediaAvailability.Ready -> resumeSession(saved)
+                                MediaAvailability.Checking -> Unit
+                                is MediaAvailability.Unavailable -> {
+                                    mediaPickTarget = MediaPickTarget.LastSession
+                                    mediaPicker.launch(arrayOf("audio/*", "video/*"))
+                                }
+                            }
                         }
                     }
-                    playerSurface = PlayerSurface.Normal
-                    destination = AppDestination.Player
                 },
                 onPlayPause = player::togglePlayPause,
                 onDisplayProfileChanged = { displayProfile = it },
@@ -388,17 +552,40 @@ private suspend fun loadSubtitleSource(
             providerBytes.getOrElse { providerError ->
                 subtitleCache.read(source.cachedFileName) ?: throw providerError
             }
+        val parseName =
+            if (providerBytes.isSuccess) source.displayName else source.cachedFileName ?: source.displayName
+        val cues = SubtitleParser.parse(parseName, bytes)
         val cachedFileName =
             if (providerBytes.isSuccess) {
-                runCatching { subtitleCache.store(source.uri, bytes) }
+                runCatching { subtitleCache.store(source.uri, cues) }
                     .getOrNull()
                     ?: source.cachedFileName
             } else {
                 source.cachedFileName
             }
         val cachedSource = source.copy(cachedFileName = cachedFileName)
-        val cues = SubtitleParser.parse(cachedSource.displayName, bytes)
         LoadedSubtitle(cachedSource, SubtitleTimeline(cues))
+    }
+
+private suspend fun ensureMediaReadable(
+    contentResolver: ContentResolver,
+    source: MediaSourceRef,
+) {
+    withContext(Dispatchers.IO) {
+        contentResolver.persistReadPermission(source.uri)
+        val descriptor =
+            contentResolver.openAssetFileDescriptor(source.uri, "r")
+                ?: throw FileNotFoundException("Media descriptor is unavailable")
+        descriptor.use { }
+    }
+}
+
+private fun mediaAccessMessage(error: Throwable): String =
+    when (error) {
+        is SecurityException -> "播放文件授权已失效，请重新定位。"
+        is FileNotFoundException -> "播放文件已移动、删除或无法访问，请重新定位。"
+        is IOException -> "无法读取播放文件，请重新定位后重试。"
+        else -> "无法验证播放文件，请重新定位后重试。"
     }
 
 private fun ContentResolver.safeMimeType(uri: Uri): String? =
@@ -435,6 +622,6 @@ private fun MediaItem.toActiveSession(): ActiveSession? {
 
 private fun ActiveSession.toDraft(): SessionDraft =
     SessionDraft(
-        media = media,
+        media = DraftMedia.Ready(media),
         subtitle = subtitle?.let(DraftSubtitle::Ready) ?: DraftSubtitle.None,
     )

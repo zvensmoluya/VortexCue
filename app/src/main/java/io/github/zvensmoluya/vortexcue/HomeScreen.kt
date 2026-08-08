@@ -68,6 +68,8 @@ internal fun HomeScreen(
         if (activeSession != null) playback.positionMs else lastSession?.positionMs ?: 0L
     val resumableDurationMs =
         if (activeSession != null) playback.durationMs else lastSession?.durationMs ?: 0L
+    val resumableAvailability =
+        if (activeSession != null) MediaAvailability.Ready else lastSession?.mediaAvailability
 
     Box(
         modifier =
@@ -141,18 +143,49 @@ internal fun HomeScreen(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    when (val availability = resumableAvailability) {
+                        MediaAvailability.Checking ->
+                            Text(
+                                text = "正在验证播放文件…",
+                                color = WorkSecondaryText,
+                                fontSize = 12.sp,
+                            )
+                        is MediaAvailability.Unavailable ->
+                            Text(
+                                text = availability.message,
+                                color = WorkError,
+                                fontSize = 12.sp,
+                            )
+                        else -> Unit
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         Button(
                             onClick = onContinue,
+                            enabled = resumableAvailability != MediaAvailability.Checking,
                             modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = WorkAccent),
+                            colors =
+                                ButtonDefaults.buttonColors(
+                                    containerColor = WorkAccent,
+                                    disabledContainerColor = WorkSurfaceRaised,
+                                ),
                         ) {
                             Text(
-                                text = if (activeSession == null) "继续播放" else "返回播放",
-                                color = Color.Black,
+                                text =
+                                    when {
+                                        activeSession != null -> "返回播放"
+                                        resumableAvailability is MediaAvailability.Unavailable ->
+                                            "重新定位并继续"
+                                        else -> "继续播放"
+                                    },
+                                color =
+                                    if (resumableAvailability == MediaAvailability.Checking) {
+                                        WorkMutedText
+                                    } else {
+                                        Color.Black
+                                    },
                             )
                         }
                         if (activeSession != null) {
@@ -229,12 +262,27 @@ internal fun HomeScreen(
             }
 
             SectionCard {
+                val mediaValue =
+                    when (val media = draft.media) {
+                        DraftMedia.None -> "尚未选择音频或视频"
+                        is DraftMedia.Checking -> "正在验证 ${media.source.displayName}"
+                        is DraftMedia.Ready -> media.source.displayName
+                        is DraftMedia.Unavailable -> media.source.displayName
+                    }
                 SourceRow(
                     label = "播放源",
-                    value = draft.media?.displayName ?: "尚未选择音频或视频",
-                    action = if (draft.media == null) "选择" else "更换",
+                    value = mediaValue,
+                    action = if (draft.media == DraftMedia.None) "选择" else "更换",
                     onClick = onPickMedia,
                 )
+
+                if (draft.media is DraftMedia.Unavailable) {
+                    Text(
+                        text = draft.media.message,
+                        color = WorkError,
+                        fontSize = 12.sp,
+                    )
+                }
 
                 Spacer(
                     modifier =
@@ -291,7 +339,7 @@ internal fun HomeScreen(
                     Button(
                         onClick = onApplyDraft,
                         enabled =
-                            draft.media != null &&
+                            draft.media is DraftMedia.Ready &&
                                 draft.subtitle !is DraftSubtitle.Loading,
                         modifier = Modifier.weight(1f),
                         colors =
@@ -303,13 +351,15 @@ internal fun HomeScreen(
                         Text(
                             text =
                                 when {
+                                    draft.media is DraftMedia.Checking -> "正在验证播放源"
+                                    draft.media is DraftMedia.Unavailable -> "播放源需要重新定位"
                                     draft.subtitle is DraftSubtitle.Failed -> "忽略字幕并播放"
                                     activeSession == null -> "开始播放"
                                     else -> "应用并播放"
                                 },
                             color =
                                 if (
-                                    draft.media != null &&
+                                    draft.media is DraftMedia.Ready &&
                                         draft.subtitle !is DraftSubtitle.Loading
                                 ) {
                                     Color.Black

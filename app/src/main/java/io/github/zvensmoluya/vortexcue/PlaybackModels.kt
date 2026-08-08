@@ -20,6 +20,27 @@ data class LoadedSubtitle(
     val timeline: SubtitleTimeline,
 )
 
+sealed interface DraftMedia {
+    val source: MediaSourceRef?
+
+    data object None : DraftMedia {
+        override val source: MediaSourceRef? = null
+    }
+
+    data class Checking(
+        override val source: MediaSourceRef,
+    ) : DraftMedia
+
+    data class Ready(
+        override val source: MediaSourceRef,
+    ) : DraftMedia
+
+    data class Unavailable(
+        override val source: MediaSourceRef,
+        val message: String,
+    ) : DraftMedia
+}
+
 sealed interface DraftSubtitle {
     data object None : DraftSubtitle
 
@@ -38,7 +59,7 @@ sealed interface DraftSubtitle {
 }
 
 data class SessionDraft(
-    val media: MediaSourceRef? = null,
+    val media: DraftMedia = DraftMedia.None,
     val subtitle: DraftSubtitle = DraftSubtitle.None,
 )
 
@@ -53,7 +74,18 @@ data class RestorableSession(
     val positionMs: Long,
     val durationMs: Long,
     val playbackSpeed: Float,
+    val mediaAvailability: MediaAvailability = MediaAvailability.Ready,
 )
+
+sealed interface MediaAvailability {
+    data object Checking : MediaAvailability
+
+    data object Ready : MediaAvailability
+
+    data class Unavailable(
+        val message: String,
+    ) : MediaAvailability
+}
 
 data class DisplayProfile(
     val name: String,

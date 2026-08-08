@@ -12,16 +12,16 @@ class SubtitleCache(context: Context) {
 
     fun store(
         uri: Uri,
-        bytes: ByteArray,
+        cues: List<SubtitleCue>,
     ): String {
         if (!directory.exists() && !directory.mkdirs()) {
             throw IOException("无法建立字幕会话目录")
         }
-        val fileName = "${uri.toString().sha256().take(32)}.subtitle"
+        val fileName = "${uri.toString().sha256().take(32)}.vtt"
         val atomicFile = AtomicFile(File(directory, fileName))
         val output = atomicFile.startWrite()
         try {
-            output.write(bytes)
+            output.write(NormalizedSubtitleWriter.encode(cues))
             atomicFile.finishWrite(output)
         } catch (error: Exception) {
             atomicFile.failWrite(output)
