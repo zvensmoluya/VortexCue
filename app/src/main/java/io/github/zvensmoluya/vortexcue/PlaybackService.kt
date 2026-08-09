@@ -8,10 +8,12 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -160,17 +162,19 @@ class PlaybackService : MediaSessionService() {
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
         ): MediaSession.ConnectionResult {
+            val base = super.onConnect(session, controller)
             val commands =
-                MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
+                base.availableSessionCommands
                     .buildUpon()
                     .apply { SleepTimerCommands.All.forEach(::add) }
                     .build()
             return MediaSession.ConnectionResult.accept(
                 commands,
-                MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS,
+                base.availablePlayerCommands,
             )
         }
 
+        @UnstableApi
         override fun onCustomCommand(
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
@@ -183,7 +187,7 @@ class PlaybackService : MediaSessionService() {
                     SleepTimerCommands.ActionSetDuration -> {
                         val durationMs = args.getLong(SleepTimerCommands.DurationMs)
                         if (durationMs <= 0L) {
-                            SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE)
+                            SessionResult(SessionError.ERROR_BAD_VALUE)
                         } else {
                             setDurationTimer(durationMs)
                             sleepTimerResult()
@@ -197,7 +201,7 @@ class PlaybackService : MediaSessionService() {
                         clearSleepTimer()
                         sleepTimerResult()
                     }
-                    else -> SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED)
+                    else -> SessionResult(SessionError.ERROR_NOT_SUPPORTED)
                 }
             return Futures.immediateFuture(result)
         }
