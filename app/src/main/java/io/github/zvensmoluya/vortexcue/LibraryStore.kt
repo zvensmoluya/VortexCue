@@ -27,10 +27,11 @@ class LibraryStore(context: Context) {
 
     private fun encodeConfig(config: LibraryConfig): JSONObject =
         JSONObject()
-            .put("version", 1)
+            .put("version", 2)
             .put("manualItems", MediaSourceJson.encodeList(config.manualItems))
             .put("folders", JSONArray().apply { config.folders.forEach { put(it.toJson()) } })
             .put("playlists", JSONArray().apply { config.playlists.forEach { put(it.toJson()) } })
+            .put("pins", JSONArray().apply { config.pins.forEach { put(it.toJson()) } })
             .put(
                 "subtitleAssociations",
                 JSONArray().apply { config.subtitleAssociations.forEach { put(it.toJson()) } },
@@ -43,12 +44,19 @@ class LibraryStore(context: Context) {
             playlists = json.optJSONArray("playlists").mapObjects(::playlistFromJson),
             subtitleAssociations =
                 json.optJSONArray("subtitleAssociations").mapObjects(::subtitleAssociationFromJson),
+            pins = json.optJSONArray("pins").mapObjects(::pinFromJson).distinct(),
         )
 
     private fun LibraryFolderRef.toJson(): JSONObject =
         JSONObject()
             .put("uri", uri.toString())
             .put("displayName", displayName)
+            .put("id", id)
+
+    private fun LibraryPin.toJson(): JSONObject =
+        JSONObject()
+            .put("type", type.name)
+            .put("key", key)
 
     private fun LibraryPlaylist.toJson(): JSONObject =
         JSONObject()
@@ -72,6 +80,17 @@ class LibraryStore(context: Context) {
         LibraryFolderRef(
             uri = Uri.parse(json.getString("uri")),
             displayName = json.optString("displayName").ifBlank { "已授权文件夹" },
+            id =
+                json.optString("id").ifBlank {
+                    "folder:${json.getString("uri")}"
+                },
+        )
+
+    private fun pinFromJson(json: JSONObject): LibraryPin =
+        LibraryPin(
+            type = LibraryPinType.valueOf(json.getString("type")),
+            key = json.getString("key").takeIf(String::isNotBlank)
+                ?: throw IllegalArgumentException("Pin key is empty"),
         )
 
     private fun playlistFromJson(json: JSONObject): LibraryPlaylist =

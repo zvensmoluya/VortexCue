@@ -19,6 +19,7 @@ data class MediaSourceRef(
     val folder: String? = null,
     val dateAddedSeconds: Long = 0L,
     val origin: MediaOrigin = MediaOrigin.OpenDocument,
+    val sourceId: String? = null,
 )
 
 val MediaSourceRef.displayTitle: String

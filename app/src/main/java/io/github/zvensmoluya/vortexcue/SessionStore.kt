@@ -166,6 +166,7 @@ class SessionStore(context: Context) {
             origin =
                 runCatching { MediaOrigin.valueOf(this[keys.origin].orEmpty()) }
                     .getOrDefault(MediaOrigin.OpenDocument),
+            sourceId = this[keys.sourceId],
         )
     }
 
@@ -191,6 +192,7 @@ class SessionStore(context: Context) {
         writeOptional(keys.album, source?.album)
         writeOptional(keys.folder, source?.folder)
         writeOptional(keys.origin, source?.origin?.name)
+        writeOptional(keys.sourceId, source?.sourceId)
         writeOptional(keys.duration, source?.durationMs)
         writeOptional(keys.dateAdded, source?.dateAddedSeconds)
     }
@@ -230,6 +232,7 @@ class SessionStore(context: Context) {
         val folder: Preferences.Key<String>,
         val dateAdded: Preferences.Key<Long>,
         val origin: Preferences.Key<String>,
+        val sourceId: Preferences.Key<String>,
     )
 
     private data class SubtitleKeys(
@@ -273,6 +276,7 @@ class SessionStore(context: Context) {
                 folder = stringPreferencesKey("${prefix}_folder"),
                 dateAdded = longPreferencesKey("${prefix}_date_added_seconds"),
                 origin = stringPreferencesKey("${prefix}_origin"),
+                sourceId = stringPreferencesKey("${prefix}_source_id"),
             )
 
         private fun subtitleKeys(prefix: String) =

@@ -90,6 +90,7 @@ class LocalMediaScanner(private val context: Context) {
                                     },
                                 dateAddedSeconds = cursor.longOrZero(addedIndex),
                                 origin = MediaOrigin.MediaStore,
+                                sourceId = LibrarySourceIds.SystemLibrary,
                             ),
                         )
                     }
@@ -134,6 +135,7 @@ class LocalMediaScanner(private val context: Context) {
                                     folder = current.path,
                                     dateAddedSeconds = cursor.longOrZero(modifiedIndex) / 1_000L,
                                     origin = MediaOrigin.DocumentTree,
+                                    sourceId = folder.id,
                                 )
                             results += inspect(source)
                         }

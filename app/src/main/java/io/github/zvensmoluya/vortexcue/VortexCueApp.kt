@@ -2,9 +2,11 @@ package io.github.zvensmoluya.vortexcue
 
 import android.Manifest
 import android.content.ContentResolver
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -114,19 +116,61 @@ fun VortexCueApp(
             )
         libraryScanJob =
             coroutineScope.launch {
-                val errors = mutableListOf<String>()
                 val scanned = mutableListOf<MediaSourceRef>()
+                val sources = mutableListOf<LibrarySourceState>()
                 if (hasSystemAccess) {
-                    runCatching { mediaScanner.scanSystemAudio() }
-                        .onSuccess(scanned::addAll)
-                        .onFailure { errors += "无法读取系统媒体目录" }
+                    val result = runCatching { mediaScanner.scanSystemAudio() }
+                    val items = result.getOrDefault(emptyList())
+                    scanned += items
+                    sources +=
+                        LibrarySourceState(
+                            id = LibrarySourceIds.SystemLibrary,
+                            kind = LibrarySourceKind.SystemLibrary,
+                            displayName = "设备媒体库",
+                            itemCount = items.size,
+                            errorMessage = result.exceptionOrNull()?.let { "无法读取系统媒体目录" },
+                        )
+                } else {
+                    sources +=
+                        LibrarySourceState(
+                            id = LibrarySourceIds.SystemLibrary,
+                            kind = LibrarySourceKind.SystemLibrary,
+                            displayName = "设备媒体库",
+                            hasAccess = false,
+                        )
                 }
                 config.folders.forEach { folder ->
-                    runCatching { mediaScanner.scanFolder(folder) }
-                        .onSuccess(scanned::addAll)
-                        .onFailure { errors += "无法读取文件夹：${folder.displayName}" }
+                    val result = runCatching { mediaScanner.scanFolder(folder) }
+                    val items = result.getOrDefault(emptyList())
+                    scanned += items
+                    sources +=
+                        LibrarySourceState(
+                            id = folder.id,
+                            kind = LibrarySourceKind.Folder,
+                            displayName = folder.displayName,
+                            itemCount = items.size,
+                            hasAccess = result.isSuccess,
+                            errorMessage =
+                                result.exceptionOrNull()?.let {
+                                    "文件夹授权已失效或暂时不可用"
+                                },
+                        )
                 }
-                scanned += config.manualItems
+                val looseItems =
+                    config.manualItems.map { item ->
+                        item.copy(
+                            origin = MediaOrigin.OpenDocument,
+                            sourceId = LibrarySourceIds.LooseFiles,
+                        )
+                    }
+                scanned += looseItems
+                sources +=
+                    LibrarySourceState(
+                        id = LibrarySourceIds.LooseFiles,
+                        kind = LibrarySourceKind.LooseFiles,
+                        displayName = "单独打开",
+                        itemCount = looseItems.size,
+                    )
                 if (requestId != libraryScanRequestId) return@launch
                 libraryState =
                     libraryState.copy(
@@ -135,9 +179,10 @@ fun VortexCueApp(
                                 .distinctBy { it.uri.toString() }
                                 .sortedBy { it.displayTitle.lowercase() },
                         config = config,
+                        sources = sources,
                         isLoading = false,
                         hasSystemAccess = hasSystemAccess,
-                        errorMessage = errors.firstOrNull(),
+                        errorMessage = sources.firstNotNullOfOrNull { it.errorMessage },
                     )
             }
     }
@@ -153,10 +198,15 @@ fun VortexCueApp(
 
     fun rememberManualMedia(source: MediaSourceRef) {
         val config = libraryState.config
+        val looseSource =
+            source.copy(
+                origin = MediaOrigin.OpenDocument,
+                sourceId = LibrarySourceIds.LooseFiles,
+            )
         val updated =
             config.copy(
                 manualItems =
-                    listOf(source) + config.manualItems.filterNot { it.uri == source.uri },
+                    listOf(looseSource) + config.manualItems.filterNot { it.uri == source.uri },
             )
         updateLibraryConfig(updated, rescan = true)
     }
@@ -170,6 +220,37 @@ fun VortexCueApp(
                 folders = listOf(folder) + config.folders.filterNot { it.uri == uri },
             )
         updateLibraryConfig(updated, rescan = true)
+    }
+
+    fun removeLibraryFolder(folderId: String) {
+        val config = libraryState.config
+        val folder = config.folders.firstOrNull { it.id == folderId } ?: return
+        runCatching {
+            contentResolver.releasePersistableUriPermission(
+                folder.uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        }
+        updateLibraryConfig(
+            config.copy(folders = config.folders.filterNot { it.id == folderId }),
+            rescan = true,
+        )
+    }
+
+    fun clearLooseFiles() {
+        val config = libraryState.config
+        updateLibraryConfig(config.copy(manualItems = emptyList()), rescan = true)
+    }
+
+    fun toggleLibraryPin(pin: LibraryPin) {
+        val config = libraryState.config
+        val pins =
+            if (pin in config.pins) {
+                config.pins - pin
+            } else {
+                config.pins + pin
+            }
+        updateLibraryConfig(config.copy(pins = pins), rescan = false)
     }
 
     fun createPlaylist(
@@ -377,6 +458,7 @@ fun VortexCueApp(
                 displayName = contentResolver.displayName(uri),
                 mimeType = contentResolver.safeMimeType(uri),
                 origin = MediaOrigin.OpenDocument,
+                sourceId = LibrarySourceIds.LooseFiles,
             )
         val requestId = mediaRequestId
         val relinkedSession =
@@ -1013,6 +1095,16 @@ private fun MediaSourceRef.toMediaItem(): MediaItem =
                 .setTitle(displayTitle)
                 .setArtist(displayArtist)
                 .setAlbumTitle(album)
+                .setExtras(
+                    Bundle().apply {
+                        putString(MediaExtraDisplayName, displayName)
+                        putString(MediaExtraFolder, folder)
+                        putString(MediaExtraOrigin, origin.name)
+                        putString(MediaExtraSourceId, sourceId)
+                        putLong(MediaExtraDuration, durationMs)
+                        putLong(MediaExtraDateAdded, dateAddedSeconds)
+                    },
+                )
                 .build(),
         )
         .build()
@@ -1020,13 +1112,26 @@ private fun MediaSourceRef.toMediaItem(): MediaItem =
 private fun MediaItem.toMediaSourceRef(): MediaSourceRef? {
     val uri = localConfiguration?.uri ?: return null
     val title = mediaMetadata.title?.toString()?.takeIf(String::isNotBlank)
+    val extras = mediaMetadata.extras
     return MediaSourceRef(
         uri = uri,
-        displayName = title ?: uri.lastPathSegment ?: "未命名媒体",
+        displayName =
+            extras?.getString(MediaExtraDisplayName)
+                ?: title
+                ?: uri.lastPathSegment
+                ?: "未命名媒体",
         mimeType = localConfiguration?.mimeType,
         title = title,
         artist = mediaMetadata.artist?.toString(),
         album = mediaMetadata.albumTitle?.toString(),
+        durationMs = extras?.getLong(MediaExtraDuration) ?: 0L,
+        folder = extras?.getString(MediaExtraFolder),
+        dateAddedSeconds = extras?.getLong(MediaExtraDateAdded) ?: 0L,
+        origin =
+            runCatching {
+                MediaOrigin.valueOf(extras?.getString(MediaExtraOrigin).orEmpty())
+            }.getOrDefault(MediaOrigin.OpenDocument),
+        sourceId = extras?.getString(MediaExtraSourceId),
     )
 }
 
@@ -1064,3 +1169,10 @@ private fun ActiveSession.toDraft(): SessionDraft =
         media = DraftMedia.Ready(media),
         subtitle = subtitle?.let(DraftSubtitle::Ready) ?: DraftSubtitle.None,
     )
+
+private const val MediaExtraDisplayName = "vortexcue.display_name"
+private const val MediaExtraFolder = "vortexcue.folder"
+private const val MediaExtraOrigin = "vortexcue.origin"
+private const val MediaExtraSourceId = "vortexcue.source_id"
+private const val MediaExtraDuration = "vortexcue.duration_ms"
+private const val MediaExtraDateAdded = "vortexcue.date_added_seconds"

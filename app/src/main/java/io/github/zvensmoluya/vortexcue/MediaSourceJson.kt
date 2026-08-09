@@ -17,6 +17,7 @@ internal object MediaSourceJson {
             .putNullable("folder", source.folder)
             .put("dateAddedSeconds", source.dateAddedSeconds)
             .put("origin", source.origin.name)
+            .putNullable("sourceId", source.sourceId)
 
     fun decode(json: JSONObject): MediaSourceRef =
         MediaSourceRef(
@@ -32,6 +33,7 @@ internal object MediaSourceJson {
             origin =
                 runCatching { MediaOrigin.valueOf(json.optString("origin")) }
                     .getOrDefault(MediaOrigin.OpenDocument),
+            sourceId = json.nullableString("sourceId"),
         )
 
     fun encodeList(items: List<MediaSourceRef>): JSONArray =
