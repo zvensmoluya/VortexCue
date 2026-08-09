@@ -72,7 +72,9 @@ internal fun PlayerScreen(
     showGestureHint: Boolean,
     onPlayPause: () -> Unit,
     onSurfaceChanged: (PlayerSurface) -> Unit,
-    onEditSources: () -> Unit,
+    onBackToLibrary: () -> Unit,
+    onOpenSources: () -> Unit,
+    onAddSubtitle: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
     onDisplayProfileChanged: (DisplayProfile) -> Unit,
     onCalibrationCompleted: () -> Unit,
@@ -105,7 +107,9 @@ internal fun PlayerScreen(
                 currentCue = currentCue,
                 sleepTimer = sleepTimer,
                 onPlayPause = onPlayPause,
-                onEditSources = onEditSources,
+                onBackToLibrary = onBackToLibrary,
+                onOpenSources = onOpenSources,
+                onAddSubtitle = onAddSubtitle,
                 onEnterGlow = { onSurfaceChanged(PlayerSurface.Glow) },
                 onEnterCalibration = { onSurfaceChanged(PlayerSurface.Calibration) },
                 onSubtitleOffsetChanged = onSubtitleOffsetChanged,
@@ -287,7 +291,9 @@ private fun NormalPlayer(
     currentCue: SubtitleCue?,
     sleepTimer: SleepTimerState,
     onPlayPause: () -> Unit,
-    onEditSources: () -> Unit,
+    onBackToLibrary: () -> Unit,
+    onOpenSources: () -> Unit,
+    onAddSubtitle: () -> Unit,
     onEnterGlow: () -> Unit,
     onEnterCalibration: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
@@ -314,7 +320,7 @@ private fun NormalPlayer(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = onEditSources) {
+            TextButton(onClick = onBackToLibrary) {
                 Text("首页", color = AppSecondaryText)
             }
             Text(
@@ -327,7 +333,7 @@ private fun NormalPlayer(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            TextButton(onClick = onEditSources) {
+            TextButton(onClick = onOpenSources) {
                 Text("来源", color = AppSecondaryText)
             }
         }
@@ -362,7 +368,7 @@ private fun NormalPlayer(
                     color = AppMutedText,
                     fontSize = 12.sp,
                 )
-                TextButton(onClick = onEditSources) {
+                TextButton(onClick = onAddSubtitle) {
                     Text("添加字幕", color = AppSecondaryText)
                 }
             } else {

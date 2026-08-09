@@ -83,6 +83,8 @@ internal fun HomeScreen(
     playback: PlaybackSnapshot,
     displayProfile: DisplayProfile,
     library: MediaLibraryState,
+    openImportRequested: Boolean,
+    onImportRequestConsumed: () -> Unit,
     onPickMedia: () -> Unit,
     onPickSubtitle: () -> Unit,
     onRequestLibraryAccess: () -> Unit,
@@ -127,6 +129,12 @@ internal fun HomeScreen(
             libraryView = null
             selectedGroupKey = null
             searchVisible = false
+        }
+    }
+    LaunchedEffect(openImportRequested) {
+        if (openImportRequested) {
+            importVisible = true
+            onImportRequestConsumed()
         }
     }
 
@@ -1041,15 +1049,8 @@ private fun ContentSources(
                     },
             )
         }
-        item(key = "source-actions-divider") { Hairline() }
         item(key = "source-actions") {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                QuietButton(
-                    label = if (library.hasSystemAccess) "重新扫描设备" else "扫描设备音乐",
-                    onClick = onRequestLibraryAccess,
-                    modifier = Modifier.fillMaxWidth(),
-                    emphasized = !library.hasSystemAccess,
-                )
                 QuietButton("添加文件夹", onAddFolder, Modifier.fillMaxWidth())
                 TextButton(onClick = onOpenFile, modifier = Modifier.fillMaxWidth()) {
                     Text("打开单个文件", color = AppSecondaryText)

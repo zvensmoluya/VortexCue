@@ -99,6 +99,7 @@ fun VortexCueApp(
     var subtitleRequestId by remember { mutableLongStateOf(0L) }
     var notificationPermissionRequested by rememberSaveable { mutableStateOf(false) }
     var pendingAutoPlay by rememberSaveable { mutableStateOf(false) }
+    var openImportOnHome by rememberSaveable { mutableStateOf(false) }
     var libraryState by remember { mutableStateOf(MediaLibraryState()) }
     var libraryScanJob by remember { mutableStateOf<Job?>(null) }
     var libraryScanRequestId by remember { mutableLongStateOf(0L) }
@@ -844,6 +845,8 @@ fun VortexCueApp(
                 playback = playback,
                 displayProfile = displayProfile,
                 library = libraryState,
+                openImportRequested = openImportOnHome,
+                onImportRequestConsumed = { openImportOnHome = false },
                 onPickMedia = {
                     mediaPickTarget = MediaPickTarget.Draft
                     mediaPicker.launch(arrayOf("audio/*", "video/*"))
@@ -1022,9 +1025,20 @@ fun VortexCueApp(
                             }
                         }
                     },
-                    onEditSources = {
+                    onBackToLibrary = {
+                        homeSection = HomeSection.Library
+                        destination = AppDestination.Home
+                    },
+                    onOpenSources = {
                         homeSection = HomeSection.Sources
                         destination = AppDestination.Home
+                    },
+                    onAddSubtitle = {
+                        draft = session.toDraft()
+                        homeSection = HomeSection.Library
+                        openImportOnHome = true
+                        destination = AppDestination.Home
+                        subtitlePicker.launch(arrayOf("*/*"))
                     },
                     onSubtitleOffsetChanged = { offsetMs ->
                         val updated = session.copy(subtitleOffsetMs = offsetMs)
