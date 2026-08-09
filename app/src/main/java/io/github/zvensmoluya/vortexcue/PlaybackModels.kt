@@ -96,6 +96,10 @@ data class RestorableSession(
     val durationMs: Long,
     val playbackSpeed: Float,
     val mediaAvailability: MediaAvailability = MediaAvailability.Ready,
+    val queue: List<MediaSourceRef> = listOf(session.media),
+    val currentIndex: Int = 0,
+    val shuffleEnabled: Boolean = false,
+    val repeatMode: Int = 0,
 )
 
 sealed interface MediaAvailability {

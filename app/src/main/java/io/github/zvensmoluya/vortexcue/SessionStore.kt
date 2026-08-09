@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
+import org.json.JSONObject
 
 private val Context.sessionDataStore by preferencesDataStore(name = "session_state")
 
@@ -32,6 +33,10 @@ data class StoredLastSession(
     val durationMs: Long,
     val playbackSpeed: Float,
     val subtitleOffsetMs: Long,
+    val queue: List<MediaSourceRef>,
+    val currentIndex: Int,
+    val shuffleEnabled: Boolean,
+    val repeatMode: Int,
 )
 
 class SessionStore(context: Context) {
@@ -53,6 +58,10 @@ class SessionStore(context: Context) {
                             ?: 1f,
                     subtitleOffsetMs =
                         (preferences[Keys.LastOffset] ?: 0L).coerceIn(-60_000L, 60_000L),
+                    queue = decodeQueue(preferences[Keys.LastQueue], media),
+                    currentIndex = (preferences[Keys.LastQueueIndex] ?: 0).coerceAtLeast(0),
+                    shuffleEnabled = preferences[Keys.LastShuffle] ?: false,
+                    repeatMode = (preferences[Keys.LastRepeatMode] ?: 0).coerceIn(0, 2),
                 )
             }
         return StoredAppState(
@@ -101,6 +110,13 @@ class SessionStore(context: Context) {
                     ?: 1f
             preferences[Keys.LastOffset] =
                 session.session.subtitleOffsetMs.coerceIn(-60_000L, 60_000L)
+            preferences[Keys.LastQueue] =
+                JSONObject()
+                    .put("items", MediaSourceJson.encodeList(session.queue))
+                    .toString()
+            preferences[Keys.LastQueueIndex] = session.currentIndex.coerceAtLeast(0)
+            preferences[Keys.LastShuffle] = session.shuffleEnabled
+            preferences[Keys.LastRepeatMode] = session.repeatMode.coerceIn(0, 2)
         }
     }
 
@@ -217,6 +233,10 @@ class SessionStore(context: Context) {
         val LastDuration = longPreferencesKey("last_duration_ms")
         val LastSpeed = floatPreferencesKey("last_speed")
         val LastOffset = longPreferencesKey("last_subtitle_offset_ms")
+        val LastQueue = stringPreferencesKey("last_queue_json")
+        val LastQueueIndex = intPreferencesKey("last_queue_index")
+        val LastShuffle = androidx.datastore.preferences.core.booleanPreferencesKey("last_shuffle")
+        val LastRepeatMode = intPreferencesKey("last_repeat_mode")
         val DisplayProfile = stringPreferencesKey("display_profile")
         val DisplayWindowBrightness = floatPreferencesKey("display_window_brightness")
         val DisplaySubtitleLevel = intPreferencesKey("display_subtitle_level")
@@ -247,3 +267,11 @@ class SessionStore(context: Context) {
             )
     }
 }
+
+private fun decodeQueue(
+    encoded: String?,
+    fallback: MediaSourceRef,
+): List<MediaSourceRef> =
+    runCatching {
+        MediaSourceJson.decodeList(JSONObject(encoded.orEmpty()).optJSONArray("items"))
+    }.getOrDefault(emptyList()).ifEmpty { listOf(fallback) }

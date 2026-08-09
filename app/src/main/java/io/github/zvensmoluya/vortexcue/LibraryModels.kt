@@ -13,10 +13,16 @@ data class LibraryPlaylist(
     val items: List<MediaSourceRef>,
 )
 
+data class SubtitleAssociation(
+    val mediaUri: Uri,
+    val subtitle: SubtitleSourceRef,
+)
+
 data class LibraryConfig(
     val manualItems: List<MediaSourceRef> = emptyList(),
     val folders: List<LibraryFolderRef> = emptyList(),
     val playlists: List<LibraryPlaylist> = emptyList(),
+    val subtitleAssociations: List<SubtitleAssociation> = emptyList(),
 )
 
 data class MediaLibraryState(

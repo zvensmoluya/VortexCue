@@ -14,9 +14,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
@@ -63,10 +67,14 @@ internal fun PlayerScreen(
     playback: PlaybackSnapshot,
     surface: PlayerSurface,
     displayProfile: DisplayProfile,
+    sleepTimer: SleepTimerState,
     onPlayPause: () -> Unit,
     onSurfaceChanged: (PlayerSurface) -> Unit,
     onEditSources: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
+    onSetSleepTimer: (Long) -> Unit,
+    onStopAfterCurrent: () -> Unit,
+    onCancelSleepTimer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val cuePositionMs =
@@ -90,10 +98,14 @@ internal fun PlayerScreen(
                 playback = playback,
                 cuePositionMs = cuePositionMs,
                 currentCue = currentCue,
+                sleepTimer = sleepTimer,
                 onPlayPause = onPlayPause,
                 onEditSources = onEditSources,
                 onEnterGlow = { onSurfaceChanged(PlayerSurface.Glow) },
                 onSubtitleOffsetChanged = onSubtitleOffsetChanged,
+                onSetSleepTimer = onSetSleepTimer,
+                onStopAfterCurrent = onStopAfterCurrent,
+                onCancelSleepTimer = onCancelSleepTimer,
                 modifier = modifier,
             )
         PlayerSurface.Glow ->
@@ -103,6 +115,7 @@ internal fun PlayerScreen(
                 playback = playback,
                 currentCue = currentCue,
                 displayProfile = displayProfile,
+                sleepTimer = sleepTimer,
                 onPlayPause = onPlayPause,
                 onExitGlow = { onSurfaceChanged(PlayerSurface.Normal) },
                 onSubtitleOffsetChanged = onSubtitleOffsetChanged,
@@ -118,13 +131,19 @@ private fun NormalPlayer(
     playback: PlaybackSnapshot,
     cuePositionMs: Long,
     currentCue: SubtitleCue?,
+    sleepTimer: SleepTimerState,
     onPlayPause: () -> Unit,
     onEditSources: () -> Unit,
     onEnterGlow: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
+    onSetSleepTimer: (Long) -> Unit,
+    onStopAfterCurrent: () -> Unit,
+    onCancelSleepTimer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = subtitleContext(session.subtitle?.timeline, cuePositionMs, currentCue)
+    var queueVisible by rememberSaveable { mutableStateOf(false) }
+    var timerVisible by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier =
@@ -144,7 +163,7 @@ private fun NormalPlayer(
                 Text("首页", color = AppSecondaryText)
             }
             Text(
-                text = session.media.displayName,
+                text = session.media.displayTitle,
                 modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                 color = AppPrimaryText,
                 fontSize = 14.sp,
@@ -238,6 +257,14 @@ private fun NormalPlayer(
             onSubtitleOffsetChanged = onSubtitleOffsetChanged,
         )
 
+        PlayerOptions(
+            player = player,
+            playback = playback,
+            sleepTimer = sleepTimer,
+            onShowQueue = { queueVisible = true },
+            onShowTimer = { timerVisible = true },
+        )
+
         OutlinedButton(
             onClick = onEnterGlow,
             modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
@@ -254,6 +281,32 @@ private fun NormalPlayer(
             )
         }
     }
+
+    if (queueVisible) {
+        QueueDialog(
+            player = player,
+            playback = playback,
+            onDismiss = { queueVisible = false },
+        )
+    }
+    if (timerVisible) {
+        SleepTimerDialog(
+            state = sleepTimer,
+            onSetDuration = {
+                onSetSleepTimer(it)
+                timerVisible = false
+            },
+            onEndOfItem = {
+                onStopAfterCurrent()
+                timerVisible = false
+            },
+            onCancelTimer = {
+                onCancelSleepTimer()
+                timerVisible = false
+            },
+            onDismiss = { timerVisible = false },
+        )
+    }
 }
 
 @Composable
@@ -263,6 +316,7 @@ private fun GlowPlayer(
     playback: PlaybackSnapshot,
     currentCue: SubtitleCue?,
     displayProfile: DisplayProfile,
+    sleepTimer: SleepTimerState,
     onPlayPause: () -> Unit,
     onExitGlow: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
@@ -361,13 +415,20 @@ private fun GlowPlayer(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = session.media.displayName,
+                        text = session.media.displayTitle,
                         modifier = Modifier.weight(1f),
                         color = controlColor,
                         fontSize = 12.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    if (sleepTimer.isActive) {
+                        Text(
+                            text = sleepTimerLabel(sleepTimer),
+                            color = controlColor,
+                            fontSize = 11.sp,
+                        )
+                    }
                     TextButton(onClick = onExitGlow) {
                         Text("退出微光", color = controlColor)
                     }
@@ -477,10 +538,11 @@ private fun PlaybackControls(
         TextButton(
             onClick = {
                 onInteraction()
-                player.seekWithinMedia(-10_000L)
+                player.seekToPreviousMediaItem()
             },
+            enabled = playback.hasPrevious,
         ) {
-            Text("−10 秒", color = contentColor)
+            Text("上一项", color = if (playback.hasPrevious) contentColor else trackColor)
         }
         TextButton(
             onClick = {
@@ -493,26 +555,26 @@ private fun PlaybackControls(
         TextButton(
             onClick = {
                 onInteraction()
-                player.seekWithinMedia(10_000L)
+                player.seekToNextMediaItem()
             },
+            enabled = playback.hasNext,
         ) {
-            Text("+10 秒", color = contentColor)
+            Text("下一项", color = if (playback.hasNext) contentColor else trackColor)
         }
     }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TextButton(
             onClick = {
                 onInteraction()
-                onSubtitleOffsetChanged((subtitleOffsetMs - 500L).coerceAtLeast(-60_000L))
+                player.seekWithinMedia(-10_000L)
             },
-            enabled = subtitleControlsEnabled,
         ) {
-            Text("字幕 −0.5 秒", color = if (subtitleControlsEnabled) contentColor else trackColor)
+            Text("−10 秒", color = contentColor)
         }
         TextButton(
             onClick = {
@@ -525,23 +587,222 @@ private fun PlaybackControls(
         TextButton(
             onClick = {
                 onInteraction()
-                onSubtitleOffsetChanged((subtitleOffsetMs + 500L).coerceAtMost(60_000L))
+                player.seekWithinMedia(10_000L)
             },
-            enabled = subtitleControlsEnabled,
         ) {
-            Text("+0.5 秒", color = if (subtitleControlsEnabled) contentColor else trackColor)
+            Text("+10 秒", color = contentColor)
         }
     }
+
     if (subtitleControlsEnabled) {
-        Text(
-            text = formatOffset(subtitleOffsetMs),
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            color = secondaryColor,
-            fontSize = 11.sp,
-            textAlign = TextAlign.Center,
-        )
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(
+                onClick = {
+                    onInteraction()
+                    onSubtitleOffsetChanged((subtitleOffsetMs - 500L).coerceAtLeast(-60_000L))
+                },
+            ) {
+                Text("字幕 −0.5 秒", color = contentColor)
+            }
+            Text(formatOffset(subtitleOffsetMs), color = secondaryColor, fontSize = 11.sp)
+            TextButton(
+                onClick = {
+                    onInteraction()
+                    onSubtitleOffsetChanged((subtitleOffsetMs + 500L).coerceAtMost(60_000L))
+                },
+            ) {
+                Text("+0.5 秒", color = contentColor)
+            }
+        }
     }
 }
+
+@Composable
+private fun PlayerOptions(
+    player: Player,
+    playback: PlaybackSnapshot,
+    sleepTimer: SleepTimerState,
+    onShowQueue: () -> Unit,
+    onShowTimer: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(onClick = { player.shuffleModeEnabled = !playback.shuffleEnabled }) {
+            Text(
+                "随机",
+                color = if (playback.shuffleEnabled) AppAccent else AppMutedText,
+                fontSize = 12.sp,
+            )
+        }
+        TextButton(onClick = { player.repeatMode = nextRepeatMode(playback.repeatMode) }) {
+            Text(repeatModeLabel(playback.repeatMode), color = AppMutedText, fontSize = 12.sp)
+        }
+        TextButton(onClick = onShowQueue) {
+            Text("队列 ${playback.queue.size}", color = AppMutedText, fontSize = 12.sp)
+        }
+        TextButton(onClick = onShowTimer) {
+            Text(
+                sleepTimerLabel(sleepTimer),
+                color = if (sleepTimer.isActive) AppAccent else AppMutedText,
+                fontSize = 12.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun QueueDialog(
+    player: Player,
+    playback: PlaybackSnapshot,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("播放队列", color = AppPrimaryText) },
+        text = {
+            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
+                itemsIndexed(
+                    items = playback.queue,
+                    key = { index, item -> "queue-$index-${item.mediaId}" },
+                ) { index, item ->
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        player.seekToDefaultPosition(index)
+                                        player.play()
+                                    },
+                                ) {
+                                    Column {
+                                        Text(
+                                            item.title,
+                                            color =
+                                                if (index == playback.currentIndex) {
+                                                    AppAccent
+                                                } else {
+                                                    AppPrimaryText
+                                                },
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        item.artist?.let {
+                                            Text(it, color = AppMutedText, fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+                            TextButton(
+                                onClick = { player.moveMediaItem(index, index - 1) },
+                                enabled = index > 0,
+                            ) {
+                                Text("↑", color = if (index > 0) AppSecondaryText else AppMutedText)
+                            }
+                            TextButton(
+                                onClick = { player.moveMediaItem(index, index + 1) },
+                                enabled = index < playback.queue.lastIndex,
+                            ) {
+                                Text(
+                                    "↓",
+                                    color =
+                                        if (index < playback.queue.lastIndex) {
+                                            AppSecondaryText
+                                        } else {
+                                            AppMutedText
+                                        },
+                                )
+                            }
+                            TextButton(
+                                onClick = { player.removeMediaItem(index) },
+                                enabled = playback.queue.size > 1,
+                            ) {
+                                Text(
+                                    "移除",
+                                    color =
+                                        if (playback.queue.size > 1) AppMutedText else AppHairline,
+                                    fontSize = 11.sp,
+                                )
+                            }
+                        }
+                        Spacer(
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(1.dp)
+                                    .background(AppHairline),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("完成", color = AppAccent) }
+        },
+        containerColor = AppSurfaceRaised,
+    )
+}
+
+@Composable
+private fun SleepTimerDialog(
+    state: SleepTimerState,
+    onSetDuration: (Long) -> Unit,
+    onEndOfItem: () -> Unit,
+    onCancelTimer: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("睡眠定时", color = AppPrimaryText) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                if (state.isActive) {
+                    Text(
+                        text = "当前：${sleepTimerLabel(state)}",
+                        color = AppAccent,
+                        fontSize = 13.sp,
+                    )
+                }
+                listOf(15, 30, 45, 60).forEach { minutes ->
+                    TextButton(onClick = { onSetDuration(minutes * 60_000L) }) {
+                        Text("$minutes 分钟后停止", color = AppPrimaryText)
+                    }
+                }
+                TextButton(onClick = onEndOfItem) {
+                    Text("当前内容结束后停止", color = AppPrimaryText)
+                }
+                if (state.isActive) {
+                    TextButton(onClick = onCancelTimer) {
+                        Text("取消定时", color = AppError)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("关闭", color = AppSecondaryText) }
+        },
+        containerColor = AppSurfaceRaised,
+    )
+}
+
+internal data class QueueItemSnapshot(
+    val mediaId: String,
+    val title: String,
+    val artist: String?,
+)
 
 internal data class PlaybackSnapshot(
     val positionMs: Long = 0L,
@@ -550,6 +811,12 @@ internal data class PlaybackSnapshot(
     val playbackState: Int = Player.STATE_IDLE,
     val errorMessage: String? = null,
     val speed: Float = 1f,
+    val currentIndex: Int = 0,
+    val queue: List<QueueItemSnapshot> = emptyList(),
+    val hasPrevious: Boolean = false,
+    val hasNext: Boolean = false,
+    val shuffleEnabled: Boolean = false,
+    val repeatMode: Int = Player.REPEAT_MODE_OFF,
 )
 
 @Composable
@@ -589,6 +856,25 @@ private fun Player.snapshot(): PlaybackSnapshot =
         playbackState = playbackState,
         errorMessage = playerError?.let { "播放失败：${it.errorCodeName}" },
         speed = playbackParameters.speed,
+        currentIndex = currentMediaItemIndex.coerceAtLeast(0),
+        queue =
+            (0 until mediaItemCount).map { index ->
+                val item = getMediaItemAt(index)
+                QueueItemSnapshot(
+                    mediaId = item.mediaId.ifBlank { item.localConfiguration?.uri.toString() },
+                    title =
+                        item.mediaMetadata.title
+                            ?.toString()
+                            ?.takeIf(String::isNotBlank)
+                            ?: item.localConfiguration?.uri?.lastPathSegment
+                            ?: "未命名媒体",
+                    artist = item.mediaMetadata.artist?.toString(),
+                )
+            },
+        hasPrevious = hasPreviousMediaItem(),
+        hasNext = hasNextMediaItem(),
+        shuffleEnabled = shuffleModeEnabled,
+        repeatMode = repeatMode,
     )
 
 private fun Player.seekWithinMedia(deltaMs: Long) {
@@ -655,6 +941,30 @@ private fun nextPlaybackSpeed(current: Float): Float {
     val index = PlaybackSpeeds.indexOfFirst { it > current + 0.01f }
     return if (index >= 0) PlaybackSpeeds[index] else PlaybackSpeeds.first()
 }
+
+private fun nextRepeatMode(current: Int): Int =
+    when (current) {
+        Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+        Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+        else -> Player.REPEAT_MODE_OFF
+    }
+
+private fun repeatModeLabel(mode: Int): String =
+    when (mode) {
+        Player.REPEAT_MODE_ALL -> "循环全部"
+        Player.REPEAT_MODE_ONE -> "单曲循环"
+        else -> "不循环"
+    }
+
+private fun sleepTimerLabel(state: SleepTimerState): String =
+    when (state.mode) {
+        SleepTimerMode.None -> "定时"
+        SleepTimerMode.EndOfItem -> "本曲结束"
+        SleepTimerMode.Duration -> {
+            val minutes = ((state.remainingMs + 59_999L) / 60_000L).coerceAtLeast(1L)
+            "剩余 $minutes 分"
+        }
+    }
 
 private fun playPauseLabel(playback: PlaybackSnapshot): String =
     when {

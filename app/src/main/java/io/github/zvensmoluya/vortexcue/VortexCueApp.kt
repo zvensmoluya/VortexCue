@@ -17,6 +17,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -33,6 +34,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.session.MediaController
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.util.UUID
@@ -55,7 +57,7 @@ private enum class MediaPickTarget {
 
 @Composable
 fun VortexCueApp(
-    player: Player,
+    player: MediaController,
     onWindowBrightnessChanged: (Float?) -> Unit,
     onImmersiveModeChanged: (Boolean) -> Unit,
     onPlaybackActiveChanged: (Boolean) -> Unit,
@@ -65,6 +67,8 @@ fun VortexCueApp(
     val contentResolver = context.contentResolver
     val coroutineScope = rememberCoroutineScope()
     val playback = rememberPlaybackSnapshot(player)
+    var sleepTimerRevision by remember { mutableIntStateOf(0) }
+    val sleepTimer = rememberSleepTimerState(player, sleepTimerRevision)
     val sessionStore = remember(context) { SessionStore(context) }
     val libraryStore = remember(context) { LibraryStore(context) }
     val mediaScanner = remember(context) { LocalMediaScanner(context) }
@@ -225,6 +229,21 @@ fun VortexCueApp(
         )
     }
 
+    fun updateSubtitleAssociation(
+        mediaUri: Uri,
+        subtitle: SubtitleSourceRef?,
+    ) {
+        val config = libraryState.config
+        val associations =
+            config.subtitleAssociations.filterNot { it.mediaUri == mediaUri } +
+                subtitle?.let { SubtitleAssociation(mediaUri, it) }
+                    .let { association -> listOfNotNull(association) }
+        updateLibraryConfig(
+            config.copy(subtitleAssociations = associations),
+            rescan = false,
+        )
+    }
+
     fun startPlayer() {
         if (player.playbackState == Player.STATE_ENDED) player.seekTo(0L)
         if (player.playbackState == Player.STATE_IDLE && player.mediaItemCount > 0) {
@@ -264,6 +283,16 @@ fun VortexCueApp(
 
     fun currentRestorableSession(session: ActiveSession): RestorableSession {
         val previous = lastSession?.takeIf { it.session.media.uri == session.media.uri }
+        val queue =
+            (0 until player.mediaItemCount)
+                .mapNotNull { index ->
+                    val item = player.getMediaItemAt(index)
+                    val decoded = item.toMediaSourceRef() ?: return@mapNotNull null
+                    libraryState.items.firstOrNull { it.uri == decoded.uri }
+                        ?: previous?.queue?.firstOrNull { it.uri == decoded.uri }
+                        ?: decoded
+                }
+                .ifEmpty { listOf(session.media) }
         return RestorableSession(
             session = session,
             positionMs =
@@ -278,6 +307,10 @@ fun VortexCueApp(
                     previousDurationMs = previous?.durationMs,
                 ),
             playbackSpeed = player.playbackParameters.speed,
+            queue = queue,
+            currentIndex = player.currentMediaItemIndex.coerceAtLeast(0),
+            shuffleEnabled = player.shuffleModeEnabled,
+            repeatMode = player.repeatMode,
         )
     }
 
@@ -287,10 +320,36 @@ fun VortexCueApp(
         coroutineScope.launch { sessionStore.saveLastSession(saved) }
     }
 
+    fun restoreAssociatedSubtitle(media: MediaSourceRef) {
+        val subtitleSource =
+            libraryState.config.subtitleAssociations
+                .firstOrNull { it.mediaUri == media.uri }
+                ?.subtitle
+                ?: return
+        coroutineScope.launch {
+            runCatching {
+                loadSubtitleSource(contentResolver, subtitleCache, subtitleSource)
+            }.onSuccess { loaded ->
+                val current = activeSession
+                if (current?.media?.uri == media.uri && current.subtitle == null) {
+                    val updated = current.copy(subtitle = loaded)
+                    activeSession = updated
+                    draft = updated.toDraft()
+                    updateSubtitleAssociation(media.uri, loaded.source)
+                    persistSession(updated)
+                }
+            }
+        }
+    }
+
     fun resumeSession(saved: RestorableSession) {
-        player.setMediaItem(saved.session.media.toMediaItem(), saved.positionMs)
+        val queue = saved.queue.ifEmpty { listOf(saved.session.media) }
+        val index = saved.currentIndex.coerceIn(queue.indices)
+        player.setMediaItems(queue.map { it.toMediaItem() }, index, saved.positionMs)
         player.prepare()
         player.setPlaybackSpeed(saved.playbackSpeed)
+        player.shuffleModeEnabled = saved.shuffleEnabled
+        player.repeatMode = saved.repeatMode
         activeSession = saved.session
         lastSession = saved.copy(mediaAvailability = MediaAvailability.Ready)
         draft = saved.session.toDraft()
@@ -465,6 +524,11 @@ fun VortexCueApp(
                     positionMs = storedLast.positionMs,
                     durationMs = storedLast.durationMs,
                     playbackSpeed = storedLast.playbackSpeed,
+                    queue = storedLast.queue,
+                    currentIndex =
+                        storedLast.currentIndex.coerceIn(storedLast.queue.indices),
+                    shuffleEnabled = storedLast.shuffleEnabled,
+                    repeatMode = storedLast.repeatMode,
                     mediaAvailability =
                         mediaError?.let {
                             MediaAvailability.Unavailable(mediaAccessMessage(it))
@@ -573,6 +637,27 @@ fun VortexCueApp(
                         persistSession(session)
                     }
                 }
+
+                override fun onMediaItemTransition(
+                    mediaItem: MediaItem?,
+                    reason: Int,
+                ) {
+                    val decoded = mediaItem?.toMediaSourceRef() ?: return
+                    val media =
+                        libraryState.items.firstOrNull { it.uri == decoded.uri }
+                            ?: lastSession?.queue?.firstOrNull { it.uri == decoded.uri }
+                            ?: decoded
+                    val updated =
+                        if (session?.media?.uri == media.uri) {
+                            session.copy(media = media)
+                        } else {
+                            ActiveSession(media = media, subtitle = null)
+                        }
+                    activeSession = updated
+                    draft = updated.toDraft()
+                    if (restorationCompleted) persistSession(updated)
+                    if (updated.subtitle == null) restoreAssociatedSubtitle(media)
+                }
             }
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
@@ -679,7 +764,11 @@ fun VortexCueApp(
                 onAddFolder = { folderPicker.launch(null) },
                 onPlayLibraryItems = { items, index ->
                     items.getOrNull(index)?.let { media ->
-                        player.setMediaItem(media.toMediaItem())
+                        player.setMediaItems(
+                            items.map { it.toMediaItem() },
+                            index,
+                            0L,
+                        )
                         player.prepare()
                         val session =
                             ActiveSession(
@@ -700,7 +789,20 @@ fun VortexCueApp(
                         destination = AppDestination.Player
                         playWithNotificationPermission()
                         persistSession(session)
+                        if (session.subtitle == null) restoreAssociatedSubtitle(media)
                     }
+                },
+                onPlayNext = { media ->
+                    val targetIndex =
+                        if (player.mediaItemCount == 0) {
+                            0
+                        } else {
+                            (player.currentMediaItemIndex + 1).coerceAtMost(player.mediaItemCount)
+                        }
+                    player.addMediaItem(targetIndex, media.toMediaItem())
+                },
+                onAddToQueue = { media ->
+                    player.addMediaItem(media.toMediaItem())
                 },
                 onCreatePlaylist = ::createPlaylist,
                 onAddToPlaylist = ::addToPlaylist,
@@ -744,6 +846,7 @@ fun VortexCueApp(
                                 subtitleOffsetMs = preservedOffsetMs,
                             )
                         activeSession = applied
+                        updateSubtitleAssociation(media.uri, loadedSubtitle?.source)
                         draft = applied.toDraft()
                         playerSurface = PlayerSurface.Normal
                         destination = AppDestination.Player
@@ -784,6 +887,7 @@ fun VortexCueApp(
                     playback = playback,
                     surface = playerSurface,
                     displayProfile = displayProfile,
+                    sleepTimer = sleepTimer,
                     onPlayPause = ::togglePlayback,
                     onSurfaceChanged = { playerSurface = it },
                     onEditSources = { destination = AppDestination.Home },
@@ -791,6 +895,18 @@ fun VortexCueApp(
                         val updated = session.copy(subtitleOffsetMs = offsetMs)
                         activeSession = updated
                         persistSession(updated)
+                    },
+                    onSetSleepTimer = { durationMs ->
+                        player.setSleepTimer(durationMs)
+                        sleepTimerRevision += 1
+                    },
+                    onStopAfterCurrent = {
+                        player.stopAfterCurrentItem()
+                        sleepTimerRevision += 1
+                    },
+                    onCancelSleepTimer = {
+                        player.cancelSleepTimer()
+                        sleepTimerRevision += 1
                     },
                     modifier = modifier,
                 )
@@ -851,7 +967,9 @@ private fun ContentResolver.safeMimeType(uri: Uri): String? =
 
 private fun MediaSourceRef.toMediaItem(): MediaItem =
     MediaItem.Builder()
+        .setMediaId(uri.toString())
         .setUri(uri)
+        .setMimeType(mimeType)
         .setMediaMetadata(
             MediaMetadata.Builder()
                 .setTitle(displayTitle)
@@ -860,6 +978,19 @@ private fun MediaSourceRef.toMediaItem(): MediaItem =
                 .build(),
         )
         .build()
+
+private fun MediaItem.toMediaSourceRef(): MediaSourceRef? {
+    val uri = localConfiguration?.uri ?: return null
+    val title = mediaMetadata.title?.toString()?.takeIf(String::isNotBlank)
+    return MediaSourceRef(
+        uri = uri,
+        displayName = title ?: uri.lastPathSegment ?: "未命名媒体",
+        mimeType = localConfiguration?.mimeType,
+        title = title,
+        artist = mediaMetadata.artist?.toString(),
+        album = mediaMetadata.albumTitle?.toString(),
+    )
+}
 
 internal fun resolveRestorablePosition(
     currentPositionMs: Long,
@@ -883,23 +1014,9 @@ internal fun resolveRestorableDuration(
         ?: 0L
 
 private fun MediaItem.toActiveSession(): ActiveSession? {
-    val uri = localConfiguration?.uri ?: return null
-    val displayName =
-        mediaMetadata.title
-            ?.toString()
-            ?.takeIf(String::isNotBlank)
-            ?: uri.lastPathSegment
-            ?: "未命名媒体"
+    val source = toMediaSourceRef() ?: return null
     return ActiveSession(
-        media =
-            MediaSourceRef(
-                uri = uri,
-                displayName = displayName,
-                mimeType = localConfiguration?.mimeType,
-                title = mediaMetadata.title?.toString(),
-                artist = mediaMetadata.artist?.toString(),
-                album = mediaMetadata.albumTitle?.toString(),
-            ),
+        media = source,
         subtitle = null,
     )
 }

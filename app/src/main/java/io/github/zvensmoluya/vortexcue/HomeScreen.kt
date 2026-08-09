@@ -72,6 +72,8 @@ internal fun HomeScreen(
     onRefreshLibrary: () -> Unit,
     onAddFolder: () -> Unit,
     onPlayLibraryItems: (List<MediaSourceRef>, Int) -> Unit,
+    onPlayNext: (MediaSourceRef) -> Unit,
+    onAddToQueue: (MediaSourceRef) -> Unit,
     onCreatePlaylist: (String, MediaSourceRef?) -> Unit,
     onAddToPlaylist: (String, MediaSourceRef) -> Unit,
     onRemoveFromPlaylist: (String, MediaSourceRef) -> Unit,
@@ -89,6 +91,7 @@ internal fun HomeScreen(
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var selectedGroupKey by rememberSaveable { mutableStateOf<String?>(null) }
     var playlistTarget by remember { mutableStateOf<MediaSourceRef?>(null) }
+    var mediaActionTarget by remember { mutableStateOf<MediaSourceRef?>(null) }
     var createPlaylistVisible by rememberSaveable { mutableStateOf(false) }
     var createPlaylistName by rememberSaveable { mutableStateOf("") }
     var createPlaylistSeed by remember { mutableStateOf<MediaSourceRef?>(null) }
@@ -146,7 +149,7 @@ internal fun HomeScreen(
                 onContinue = onContinue,
                 onPlayPause = onPlayPause,
                 onPlayLibraryItems = onPlayLibraryItems,
-                onChoosePlaylist = { playlistTarget = it },
+                onOpenMediaActions = { mediaActionTarget = it },
                 onCreateEmptyPlaylist = {
                     createPlaylistSeed = null
                     createPlaylistName = ""
@@ -173,6 +176,25 @@ internal fun HomeScreen(
                 createPlaylistName = ""
                 playlistTarget = null
                 createPlaylistVisible = true
+            },
+        )
+    }
+
+    mediaActionTarget?.let { item ->
+        MediaActionDialog(
+            item = item,
+            onDismiss = { mediaActionTarget = null },
+            onPlayNext = {
+                onPlayNext(item)
+                mediaActionTarget = null
+            },
+            onAddToQueue = {
+                onAddToQueue(item)
+                mediaActionTarget = null
+            },
+            onChoosePlaylist = {
+                mediaActionTarget = null
+                playlistTarget = item
             },
         )
     }
@@ -245,7 +267,7 @@ private fun LibraryHome(
     onContinue: () -> Unit,
     onPlayPause: () -> Unit,
     onPlayLibraryItems: (List<MediaSourceRef>, Int) -> Unit,
-    onChoosePlaylist: (MediaSourceRef) -> Unit,
+    onOpenMediaActions: (MediaSourceRef) -> Unit,
     onCreateEmptyPlaylist: () -> Unit,
     onRemoveFromPlaylist: (String, MediaSourceRef) -> Unit,
     onDeletePlaylist: (String) -> Unit,
@@ -381,6 +403,10 @@ private fun LibraryHome(
                         ) {
                             Text("删除列表", color = AppMutedText)
                         }
+                    } else if (selectedGroupItems.isNotEmpty()) {
+                        TextButton(onClick = { onPlayLibraryItems(selectedGroupItems, 0) }) {
+                            Text("播放全部", color = AppSecondaryText)
+                        }
                     }
                 }
             }
@@ -391,7 +417,7 @@ private fun LibraryHome(
                 TrackRow(
                     media = media,
                     onPlay = { onPlayLibraryItems(selectedGroupItems, index) },
-                    onChoosePlaylist = { onChoosePlaylist(media) },
+                    onOpenMediaActions = { onOpenMediaActions(media) },
                     onRemove =
                         selectedPlaylist?.let { playlist ->
                             { onRemoveFromPlaylist(playlist.id, media) }
@@ -413,7 +439,7 @@ private fun LibraryHome(
                         TrackRow(
                             media = media,
                             onPlay = { onPlayLibraryItems(filteredItems, index) },
-                            onChoosePlaylist = { onChoosePlaylist(media) },
+                            onOpenMediaActions = { onOpenMediaActions(media) },
                         )
                     }
                 LibraryView.Playlists -> {
@@ -432,6 +458,9 @@ private fun LibraryHome(
                             name = playlist.name,
                             count = playlist.items.size,
                             onOpen = { onSelectedGroupChanged(playlist.id) },
+                            onPlay = {
+                                if (playlist.items.isNotEmpty()) onPlayLibraryItems(playlist.items, 0)
+                            },
                         )
                     }
                 }
@@ -444,6 +473,7 @@ private fun LibraryHome(
                             name = group.first,
                             count = group.second.size,
                             onOpen = { onSelectedGroupChanged(group.first) },
+                            onPlay = { onPlayLibraryItems(group.second, 0) },
                         )
                     }
             }
@@ -544,7 +574,7 @@ private fun NowPlayingBlock(
 private fun TrackRow(
     media: MediaSourceRef,
     onPlay: () -> Unit,
-    onChoosePlaylist: () -> Unit,
+    onOpenMediaActions: () -> Unit,
     onRemove: (() -> Unit)? = null,
 ) {
     Row(
@@ -578,8 +608,8 @@ private fun TrackRow(
         if (media.durationMs > 0L) {
             Text(formatTime(media.durationMs), color = AppMutedText, fontSize = 11.sp)
         }
-        TextButton(onClick = onRemove ?: onChoosePlaylist) {
-            Text(if (onRemove == null) "+列表" else "移除", color = AppMutedText, fontSize = 11.sp)
+        TextButton(onClick = onRemove ?: onOpenMediaActions) {
+            Text(if (onRemove == null) "操作" else "移除", color = AppMutedText, fontSize = 11.sp)
         }
     }
     Hairline()
@@ -590,6 +620,7 @@ private fun GroupRow(
     name: String,
     count: Int,
     onOpen: () -> Unit,
+    onPlay: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(vertical = 10.dp),
@@ -600,7 +631,9 @@ private fun GroupRow(
             Text(name, color = AppPrimaryText, fontSize = 15.sp, maxLines = 1)
             Text("$count 项", color = AppMutedText, fontSize = 11.sp)
         }
-        Text("查看", color = AppMutedText, fontSize = 12.sp)
+        TextButton(onClick = onPlay, enabled = count > 0) {
+            Text("播放", color = if (count > 0) AppSecondaryText else AppMutedText)
+        }
     }
     Hairline()
 }
@@ -706,6 +739,44 @@ private fun PlaylistChooserDialog(
             TextButton(onClick = onCreate) { Text("新建播放列表", color = AppAccent) }
         },
         dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消", color = AppSecondaryText) }
+        },
+        containerColor = AppSurfaceRaised,
+    )
+}
+
+@Composable
+private fun MediaActionDialog(
+    item: MediaSourceRef,
+    onDismiss: () -> Unit,
+    onPlayNext: () -> Unit,
+    onAddToQueue: () -> Unit,
+    onChoosePlaylist: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                item.displayTitle,
+                color = AppPrimaryText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                TextButton(onClick = onPlayNext) {
+                    Text("下一项播放", color = AppPrimaryText)
+                }
+                TextButton(onClick = onAddToQueue) {
+                    Text("添加到队列末尾", color = AppPrimaryText)
+                }
+                TextButton(onClick = onChoosePlaylist) {
+                    Text("添加到播放列表", color = AppPrimaryText)
+                }
+            }
+        },
+        confirmButton = {
             TextButton(onClick = onDismiss) { Text("取消", color = AppSecondaryText) }
         },
         containerColor = AppSurfaceRaised,
