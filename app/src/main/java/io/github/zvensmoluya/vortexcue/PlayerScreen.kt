@@ -3,6 +3,7 @@ package io.github.zvensmoluya.vortexcue
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -16,15 +17,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -131,7 +130,7 @@ private fun NormalPlayer(
         modifier =
             modifier
                 .fillMaxSize()
-                .background(WorkBackground)
+                .background(AppBackground)
                 .statusBarsPadding()
                 .navigationBarsPadding()
                 .padding(horizontal = 20.dp, vertical = 12.dp),
@@ -142,12 +141,12 @@ private fun NormalPlayer(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TextButton(onClick = onEditSources) {
-                Text("首页", color = WorkSecondaryText)
+                Text("首页", color = AppSecondaryText)
             }
             Text(
                 text = session.media.displayName,
                 modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                color = WorkPrimaryText,
+                color = AppPrimaryText,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 textAlign = TextAlign.Center,
@@ -155,15 +154,15 @@ private fun NormalPlayer(
                 overflow = TextOverflow.Ellipsis,
             )
             TextButton(onClick = onEditSources) {
-                Text("来源", color = WorkAccent)
+                Text("来源", color = AppSecondaryText)
             }
         }
 
         if (playback.playbackState == Player.STATE_BUFFERING) {
             LinearProgressIndicator(
                 modifier = Modifier.fillMaxWidth(),
-                color = WorkAccent,
-                trackColor = WorkSurfaceRaised,
+                color = AppAccent,
+                trackColor = AppSurfaceRaised,
             )
         } else {
             Spacer(modifier = Modifier.height(4.dp))
@@ -181,30 +180,35 @@ private fun NormalPlayer(
             if (session.subtitle == null) {
                 Text(
                     text = "当前会话没有字幕",
-                    color = WorkSecondaryText,
+                    color = AppSecondaryText,
                     fontSize = 15.sp,
                 )
+                Text(
+                    text = "仍可进入纯黑微光",
+                    color = AppMutedText,
+                    fontSize = 12.sp,
+                )
                 TextButton(onClick = onEditSources) {
-                    Text("添加字幕源", color = WorkAccent)
+                    Text("添加字幕", color = AppSecondaryText)
                 }
             } else {
                 CueText(
                     text = context.previous?.text.orEmpty(),
-                    color = WorkMutedText,
+                    color = AppMutedText,
                     fontSize = 15,
                     maxLines = 3,
                 )
                 Spacer(modifier = Modifier.height(24.dp))
                 CueText(
                     text = currentCue?.text.orEmpty(),
-                    color = WorkPrimaryText,
+                    color = AppPrimaryText,
                     fontSize = 26,
                     maxLines = 6,
                 )
                 Spacer(modifier = Modifier.height(24.dp))
                 CueText(
                     text = context.next?.text.orEmpty(),
-                    color = WorkMutedText,
+                    color = AppMutedText,
                     fontSize = 15,
                     maxLines = 3,
                 )
@@ -215,7 +219,7 @@ private fun NormalPlayer(
             Text(
                 text = message,
                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                color = WorkError,
+                color = AppError,
                 fontSize = 12.sp,
                 textAlign = TextAlign.Center,
             )
@@ -226,27 +230,27 @@ private fun NormalPlayer(
             playback = playback,
             subtitleOffsetMs = session.subtitleOffsetMs,
             subtitleControlsEnabled = session.subtitle != null,
-            contentColor = WorkPrimaryText,
-            secondaryColor = WorkSecondaryText,
-            accentColor = WorkAccent,
-            trackColor = WorkSurfaceRaised,
+            contentColor = AppPrimaryText,
+            secondaryColor = AppSecondaryText,
+            accentColor = AppAccent,
+            trackColor = AppSurfaceRaised,
             onPlayPause = onPlayPause,
             onSubtitleOffsetChanged = onSubtitleOffsetChanged,
         )
 
-        Button(
+        OutlinedButton(
             onClick = onEnterGlow,
-            enabled = session.subtitle != null,
             modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+            border = BorderStroke(1.dp, AppAccent),
             colors =
-                ButtonDefaults.buttonColors(
-                    containerColor = WorkAccent,
-                    disabledContainerColor = WorkSurfaceRaised,
+                ButtonDefaults.outlinedButtonColors(
+                    containerColor = Color.Transparent,
+                    contentColor = AppAccent,
                 ),
         ) {
             Text(
-                text = if (session.subtitle == null) "添加字幕后进入微光" else "进入微光",
-                color = if (session.subtitle == null) WorkMutedText else Color.Black,
+                text = if (session.subtitle == null) "无字幕 · 进入微光" else "进入微光",
+                color = AppAccent,
             )
         }
     }
@@ -381,7 +385,7 @@ private fun GlowPlayer(
                     player = player,
                     playback = playback,
                     subtitleOffsetMs = session.subtitleOffsetMs,
-                    subtitleControlsEnabled = true,
+                    subtitleControlsEnabled = session.subtitle != null,
                     contentColor = controlColor,
                     secondaryColor = controlColor.copy(alpha = 0.72f),
                     accentColor = controlColor,
@@ -659,18 +663,3 @@ private fun playPauseLabel(playback: PlaybackSnapshot): String =
         playback.isPlaying -> "暂停"
         else -> "播放"
     }
-
-@Composable
-fun VortexCueTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme =
-            darkColorScheme(
-                background = WorkBackground,
-                surface = WorkSurface,
-                primary = WorkAccent,
-                onBackground = WorkPrimaryText,
-                onSurface = WorkPrimaryText,
-            ),
-        content = content,
-    )
-}

@@ -475,12 +475,12 @@ fun VortexCueApp(
 
     if (!restorationCompleted) {
         Box(
-            modifier = modifier.fillMaxSize().background(WorkBackground),
+            modifier = modifier.fillMaxSize().background(AppBackground),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 text = "正在恢复会话…",
-                color = WorkSecondaryText,
+                color = AppSecondaryText,
                 fontSize = 14.sp,
             )
         }
