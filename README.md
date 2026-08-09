@@ -24,7 +24,7 @@
 
 当前不包含在线媒体库、账号与云同步、转写、翻译、字幕编辑、视频观看界面或复杂音效系统。
 
-产品定义、交互约束和近期方向统一见 [`docs/GUIDE.md`](docs/GUIDE.md)，文档层级见 [`docs/README.md`](docs/README.md)。早期 OLED 与播放器真机记录保留在 [`docs/records`](docs/records)，不代表本轮新增能力已经完成真机验收。
+产品定义、交互约束和近期方向统一见 [`docs/GUIDE.md`](docs/GUIDE.md)，文档层级见 [`docs/README.md`](docs/README.md)。OLED、播放器和选择性内容库的真机记录保留在 [`docs/records`](docs/records)。
 
 ## 构建与检查
 
