@@ -895,6 +895,16 @@ private fun DisplaySettings(
             },
         )
     }
+    Hairline()
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionHeading(title = "微光交互", detail = "锁定态")
+        Text(
+            text = "左右区域双击快退或快进，中央双击播放或暂停，长按任意位置显示临时控制。普通单击不会打断沉浸。",
+            color = AppSecondaryText,
+            fontSize = 12.sp,
+            lineHeight = 18.sp,
+        )
+    }
     Spacer(modifier = Modifier.height(8.dp))
 }
 

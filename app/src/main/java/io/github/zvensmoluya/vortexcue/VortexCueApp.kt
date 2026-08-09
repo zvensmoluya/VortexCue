@@ -86,6 +86,8 @@ fun VortexCueApp(
     var lastSession by remember { mutableStateOf<RestorableSession?>(null) }
     var draft by remember { mutableStateOf(initialSession?.toDraft() ?: SessionDraft()) }
     var displayProfile by remember { mutableStateOf(DisplayProfile.Balanced) }
+    var glowCalibrationCompleted by remember { mutableStateOf(false) }
+    var glowGestureHintSeen by remember { mutableStateOf(false) }
     var restorationCompleted by remember { mutableStateOf(false) }
     var mediaPickTarget by rememberSaveable { mutableStateOf(MediaPickTarget.Draft) }
     var mediaLoadJob by remember { mutableStateOf<Job?>(null) }
@@ -500,6 +502,8 @@ fun VortexCueApp(
                     )
                 }
         displayProfile = stored.displayProfile
+        glowCalibrationCompleted = stored.glowCalibrationCompleted
+        glowGestureHintSeen = stored.glowGestureHintSeen
 
         val storedLast = stored.lastSession
         if (storedLast != null) {
@@ -695,7 +699,8 @@ fun VortexCueApp(
             scanLibrary()
         }
 
-    val glowActive = destination == AppDestination.Player && playerSurface == PlayerSurface.Glow
+    val glowActive =
+        destination == AppDestination.Player && playerSurface != PlayerSurface.Normal
 
     LaunchedEffect(glowActive, displayProfile) {
         onImmersiveModeChanged(glowActive)
@@ -732,7 +737,7 @@ fun VortexCueApp(
     }
 
     BackHandler(enabled = destination == AppDestination.Player) {
-        if (playerSurface == PlayerSurface.Glow) {
+        if (playerSurface != PlayerSurface.Normal) {
             playerSurface = PlayerSurface.Normal
         } else {
             destination = AppDestination.Home
@@ -888,8 +893,41 @@ fun VortexCueApp(
                     surface = playerSurface,
                     displayProfile = displayProfile,
                     sleepTimer = sleepTimer,
+                    showGestureHint = !glowGestureHintSeen,
                     onPlayPause = ::togglePlayback,
-                    onSurfaceChanged = { playerSurface = it },
+                    onSurfaceChanged = { requested ->
+                        playerSurface =
+                            if (
+                                requested == PlayerSurface.Glow &&
+                                    !glowCalibrationCompleted
+                            ) {
+                                PlayerSurface.Calibration
+                            } else {
+                                requested
+                            }
+                    },
+                    onDisplayProfileChanged = { displayProfile = it },
+                    onCalibrationCompleted = {
+                        glowCalibrationCompleted = true
+                        playerSurface = PlayerSurface.Glow
+                        coroutineScope.launch {
+                            sessionStore.saveGlowOnboarding(
+                                calibrationCompleted = true,
+                                gestureHintSeen = glowGestureHintSeen,
+                            )
+                        }
+                    },
+                    onGestureHintSeen = {
+                        if (!glowGestureHintSeen) {
+                            glowGestureHintSeen = true
+                            coroutineScope.launch {
+                                sessionStore.saveGlowOnboarding(
+                                    calibrationCompleted = glowCalibrationCompleted,
+                                    gestureHintSeen = true,
+                                )
+                            }
+                        }
+                    },
                     onEditSources = { destination = AppDestination.Home },
                     onSubtitleOffsetChanged = { offsetMs ->
                         val updated = session.copy(subtitleOffsetMs = offsetMs)

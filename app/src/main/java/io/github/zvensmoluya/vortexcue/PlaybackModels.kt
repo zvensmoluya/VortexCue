@@ -193,5 +193,6 @@ data class DisplayProfile(
 
 enum class PlayerSurface {
     Normal,
+    Calibration,
     Glow,
 }

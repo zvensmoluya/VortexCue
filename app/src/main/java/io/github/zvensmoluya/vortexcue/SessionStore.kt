@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -19,6 +20,8 @@ data class StoredAppState(
     val draft: StoredDraft,
     val lastSession: StoredLastSession?,
     val displayProfile: DisplayProfile,
+    val glowCalibrationCompleted: Boolean = false,
+    val glowGestureHintSeen: Boolean = false,
 )
 
 data class StoredDraft(
@@ -80,6 +83,8 @@ class SessionStore(context: Context) {
                     subtitleSizeSp = preferences[Keys.DisplaySubtitleSize],
                     subtitleVerticalBias = preferences[Keys.DisplaySubtitleVerticalBias],
                 ),
+            glowCalibrationCompleted = preferences[Keys.GlowCalibrationCompleted] ?: false,
+            glowGestureHintSeen = preferences[Keys.GlowGestureHintSeen] ?: false,
         )
     }
 
@@ -133,6 +138,16 @@ class SessionStore(context: Context) {
                 profile.glowSubtitleSizeSp.coerceIn(18f, 36f)
             preferences[Keys.DisplaySubtitleVerticalBias] =
                 profile.glowSubtitleVerticalBias.coerceIn(-0.60f, 0.60f)
+        }
+    }
+
+    suspend fun saveGlowOnboarding(
+        calibrationCompleted: Boolean,
+        gestureHintSeen: Boolean,
+    ) {
+        dataStore.edit { preferences ->
+            preferences[Keys.GlowCalibrationCompleted] = calibrationCompleted
+            preferences[Keys.GlowGestureHintSeen] = gestureHintSeen
         }
     }
 
@@ -235,7 +250,7 @@ class SessionStore(context: Context) {
         val LastOffset = longPreferencesKey("last_subtitle_offset_ms")
         val LastQueue = stringPreferencesKey("last_queue_json")
         val LastQueueIndex = intPreferencesKey("last_queue_index")
-        val LastShuffle = androidx.datastore.preferences.core.booleanPreferencesKey("last_shuffle")
+        val LastShuffle = booleanPreferencesKey("last_shuffle")
         val LastRepeatMode = intPreferencesKey("last_repeat_mode")
         val DisplayProfile = stringPreferencesKey("display_profile")
         val DisplayWindowBrightness = floatPreferencesKey("display_window_brightness")
@@ -243,6 +258,8 @@ class SessionStore(context: Context) {
         val DisplayControlLevel = intPreferencesKey("display_control_level")
         val DisplaySubtitleSize = floatPreferencesKey("display_subtitle_size_sp")
         val DisplaySubtitleVerticalBias = floatPreferencesKey("display_subtitle_vertical_bias")
+        val GlowCalibrationCompleted = booleanPreferencesKey("glow_calibration_completed")
+        val GlowGestureHintSeen = booleanPreferencesKey("glow_gesture_hint_seen")
 
         private fun sourceKeys(prefix: String) =
             SourceKeys(
