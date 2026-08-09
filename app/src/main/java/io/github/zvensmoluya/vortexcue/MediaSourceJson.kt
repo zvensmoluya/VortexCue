@@ -18,6 +18,10 @@ internal object MediaSourceJson {
             .put("dateAddedSeconds", source.dateAddedSeconds)
             .put("origin", source.origin.name)
             .putNullable("sourceId", source.sourceId)
+            .put("kind", source.kind.name)
+            .put("sizeBytes", source.sizeBytes)
+            .put("videoWidth", source.videoWidth)
+            .put("videoHeight", source.videoHeight)
 
     fun decode(json: JSONObject): MediaSourceRef =
         MediaSourceRef(
@@ -34,6 +38,17 @@ internal object MediaSourceJson {
                 runCatching { MediaOrigin.valueOf(json.optString("origin")) }
                     .getOrDefault(MediaOrigin.OpenDocument),
             sourceId = json.nullableString("sourceId"),
+            kind =
+                runCatching { MediaKind.valueOf(json.optString("kind")) }
+                    .getOrDefault(
+                        MediaKind.infer(
+                            json.nullableString("mimeType"),
+                            json.optString("displayName"),
+                        ),
+                    ),
+            sizeBytes = json.optLong("sizeBytes").coerceAtLeast(0L),
+            videoWidth = json.optInt("videoWidth").coerceAtLeast(0),
+            videoHeight = json.optInt("videoHeight").coerceAtLeast(0),
         )
 
     fun encodeList(items: List<MediaSourceRef>): JSONArray =

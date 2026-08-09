@@ -27,11 +27,16 @@ class LibraryStore(context: Context) {
 
     private fun encodeConfig(config: LibraryConfig): JSONObject =
         JSONObject()
-            .put("version", 2)
+            .put("version", 3)
             .put("manualItems", MediaSourceJson.encodeList(config.manualItems))
             .put("folders", JSONArray().apply { config.folders.forEach { put(it.toJson()) } })
             .put("playlists", JSONArray().apply { config.playlists.forEach { put(it.toJson()) } })
-            .put("pins", JSONArray().apply { config.pins.forEach { put(it.toJson()) } })
+            .put("includedUris", JSONArray(config.includedUris))
+            .put("ignoredUris", JSONArray(config.ignoredUris))
+            .put(
+                "homeShortcuts",
+                JSONArray().apply { config.homeShortcuts.forEach { put(it.toJson()) } },
+            )
             .put(
                 "subtitleAssociations",
                 JSONArray().apply { config.subtitleAssociations.forEach { put(it.toJson()) } },
@@ -44,7 +49,10 @@ class LibraryStore(context: Context) {
             playlists = json.optJSONArray("playlists").mapObjects(::playlistFromJson),
             subtitleAssociations =
                 json.optJSONArray("subtitleAssociations").mapObjects(::subtitleAssociationFromJson),
-            pins = json.optJSONArray("pins").mapObjects(::pinFromJson).distinct(),
+            includedUris = json.optJSONArray("includedUris").stringValues().distinct(),
+            ignoredUris = json.optJSONArray("ignoredUris").stringValues().distinct(),
+            homeShortcuts =
+                json.optJSONArray("homeShortcuts").mapObjects(::shortcutFromJson).distinct(),
         )
 
     private fun LibraryFolderRef.toJson(): JSONObject =
@@ -53,7 +61,7 @@ class LibraryStore(context: Context) {
             .put("displayName", displayName)
             .put("id", id)
 
-    private fun LibraryPin.toJson(): JSONObject =
+    private fun LibraryShortcut.toJson(): JSONObject =
         JSONObject()
             .put("type", type.name)
             .put("key", key)
@@ -86,11 +94,11 @@ class LibraryStore(context: Context) {
                 },
         )
 
-    private fun pinFromJson(json: JSONObject): LibraryPin =
-        LibraryPin(
-            type = LibraryPinType.valueOf(json.getString("type")),
+    private fun shortcutFromJson(json: JSONObject): LibraryShortcut =
+        LibraryShortcut(
+            type = LibraryShortcutType.valueOf(json.getString("type")),
             key = json.getString("key").takeIf(String::isNotBlank)
-                ?: throw IllegalArgumentException("Pin key is empty"),
+                ?: throw IllegalArgumentException("Shortcut key is empty"),
         )
 
     private fun playlistFromJson(json: JSONObject): LibraryPlaylist =
@@ -116,5 +124,14 @@ class LibraryStore(context: Context) {
 
     private companion object {
         val StateKey = stringPreferencesKey("state_json")
+    }
+}
+
+private fun JSONArray?.stringValues(): List<String> {
+    if (this == null) return emptyList()
+    return buildList {
+        for (index in 0 until length()) {
+            optString(index).takeIf(String::isNotBlank)?.let(::add)
+        }
     }
 }

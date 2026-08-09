@@ -108,12 +108,15 @@ fun VortexCueApp(
         libraryScanRequestId += 1L
         val requestId = libraryScanRequestId
         libraryScanJob?.cancel()
-        val hasSystemAccess = context.hasAudioLibraryPermission()
+        val hasAudioAccess = context.hasAudioLibraryPermission()
+        val hasVideoAccess = context.hasVideoLibraryPermission()
+        val hasSystemAccess = hasAudioAccess || hasVideoAccess
         libraryState =
             libraryState.copy(
                 config = config,
                 isLoading = true,
-                hasSystemAccess = hasSystemAccess,
+                hasAudioAccess = hasAudioAccess,
+                hasVideoAccess = hasVideoAccess,
                 errorMessage = null,
             )
         libraryScanJob =
@@ -121,16 +124,25 @@ fun VortexCueApp(
                 val scanned = mutableListOf<MediaSourceRef>()
                 val sources = mutableListOf<LibrarySourceState>()
                 if (hasSystemAccess) {
-                    val result = runCatching { mediaScanner.scanSystemAudio() }
-                    val items = result.getOrDefault(emptyList())
-                    scanned += items
+                    val audioResult =
+                        if (hasAudioAccess) runCatching { mediaScanner.scanSystemAudio() }
+                        else Result.success(emptyList())
+                    val videoResult =
+                        if (hasVideoAccess) runCatching { mediaScanner.scanSystemVideo() }
+                        else Result.success(emptyList())
+                    val audioItems = audioResult.getOrDefault(emptyList())
+                    val videoItems = videoResult.getOrDefault(emptyList())
+                    scanned += audioItems
+                    scanned += videoItems
                     sources +=
                         LibrarySourceState(
                             id = LibrarySourceIds.SystemLibrary,
                             kind = LibrarySourceKind.SystemLibrary,
                             displayName = "设备媒体库",
-                            itemCount = items.size,
-                            errorMessage = result.exceptionOrNull()?.let { "无法读取系统媒体目录" },
+                            itemCount = audioItems.size + videoItems.size,
+                            errorMessage =
+                                (audioResult.exceptionOrNull() ?: videoResult.exceptionOrNull())
+                                    ?.let { "无法完整读取系统媒体目录" },
                         )
                 } else {
                     sources +=
@@ -141,16 +153,18 @@ fun VortexCueApp(
                             hasAccess = false,
                         )
                 }
+                val subtitleSuggestions = mutableListOf<SubtitleAssociation>()
                 config.folders.forEach { folder ->
                     val result = runCatching { mediaScanner.scanFolder(folder) }
-                    val items = result.getOrDefault(emptyList())
-                    scanned += items
+                    val batch = result.getOrDefault(LibraryScanBatch())
+                    scanned += batch.media
+                    subtitleSuggestions += batch.subtitleSuggestions
                     sources +=
                         LibrarySourceState(
                             id = folder.id,
                             kind = LibrarySourceKind.Folder,
                             displayName = folder.displayName,
-                            itemCount = items.size,
+                            itemCount = batch.media.size,
                             hasAccess = result.isSuccess,
                             errorMessage =
                                 result.exceptionOrNull()?.let {
@@ -174,16 +188,22 @@ fun VortexCueApp(
                         itemCount = looseItems.size,
                     )
                 if (requestId != libraryScanRequestId) return@launch
+                val discovered =
+                    scanned
+                        .distinctBy { it.uri.toString() }
+                        .sortedBy { it.displayTitle.lowercase() }
+                val partition = partitionLibrary(discovered, config)
                 libraryState =
                     libraryState.copy(
-                        items =
-                            scanned
-                                .distinctBy { it.uri.toString() }
-                                .sortedBy { it.displayTitle.lowercase() },
+                        items = partition.included,
+                        candidates = partition.candidates,
+                        ignoredItems = partition.ignored,
                         config = config,
                         sources = sources,
+                        suggestedSubtitleAssociations = subtitleSuggestions,
                         isLoading = false,
-                        hasSystemAccess = hasSystemAccess,
+                        hasAudioAccess = hasAudioAccess,
+                        hasVideoAccess = hasVideoAccess,
                         errorMessage = sources.firstNotNullOfOrNull { it.errorMessage },
                     )
             }
@@ -192,8 +212,21 @@ fun VortexCueApp(
     fun updateLibraryConfig(
         config: LibraryConfig,
         rescan: Boolean,
+        repartition: Boolean = false,
     ) {
-        libraryState = libraryState.copy(config = config)
+        libraryState =
+            if (repartition) {
+                val discovered = libraryState.allDiscoveredItems()
+                val partition = partitionLibrary(discovered, config)
+                libraryState.copy(
+                    items = partition.included,
+                    candidates = partition.candidates,
+                    ignoredItems = partition.ignored,
+                    config = config,
+                )
+            } else {
+                libraryState.copy(config = config)
+            }
         coroutineScope.launch { libraryStore.save(config) }
         if (rescan) scanLibrary(config)
     }
@@ -209,6 +242,11 @@ fun VortexCueApp(
             config.copy(
                 manualItems =
                     listOf(looseSource) + config.manualItems.filterNot { it.uri == source.uri },
+                includedUris =
+                    (config.includedUris + looseSource.uri.toString()).distinct(),
+                ignoredUris = config.ignoredUris - looseSource.uri.toString(),
+                homeShortcuts =
+                    (config.homeShortcuts + looseSource.toFolderShortcut()).distinct(),
             )
         updateLibraryConfig(updated, rescan = true)
     }
@@ -233,26 +271,118 @@ fun VortexCueApp(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
         }
+        val removedItems = libraryState.allDiscoveredItems().filter { it.sourceId == folderId }
+        val removedUris = removedItems.map { it.uri.toString() }.toSet()
         updateLibraryConfig(
-            config.copy(folders = config.folders.filterNot { it.id == folderId }),
+            config.copy(
+                folders = config.folders.filterNot { it.id == folderId },
+                includedUris = config.includedUris.filterNot(removedUris::contains),
+                ignoredUris = config.ignoredUris.filterNot(removedUris::contains),
+                homeShortcuts =
+                    config.homeShortcuts.filterNot { shortcut ->
+                        shortcut.type == LibraryShortcutType.Folder &&
+                            shortcut.key.startsWith("$folderId|")
+                    },
+                subtitleAssociations =
+                    config.subtitleAssociations.filterNot { it.mediaUri.toString() in removedUris },
+                playlists = config.playlists.withoutItems(removedUris),
+            ),
             rescan = true,
         )
     }
 
     fun clearLooseFiles() {
         val config = libraryState.config
-        updateLibraryConfig(config.copy(manualItems = emptyList()), rescan = true)
+        val looseUris = config.manualItems.map { it.uri.toString() }.toSet()
+        updateLibraryConfig(
+            config.copy(
+                manualItems = emptyList(),
+                includedUris = config.includedUris.filterNot(looseUris::contains),
+                ignoredUris = config.ignoredUris.filterNot(looseUris::contains),
+                homeShortcuts =
+                    config.homeShortcuts.filterNot { shortcut ->
+                        shortcut.type == LibraryShortcutType.Folder &&
+                            shortcut.key.startsWith("${LibrarySourceIds.LooseFiles}|")
+                    },
+                playlists = config.playlists.withoutItems(looseUris),
+            ),
+            rescan = true,
+        )
     }
 
-    fun toggleLibraryPin(pin: LibraryPin) {
+    fun acceptLibraryCandidates(uriValues: Set<String>) {
+        if (uriValues.isEmpty()) return
         val config = libraryState.config
-        val pins =
-            if (pin in config.pins) {
-                config.pins - pin
-            } else {
-                config.pins + pin
+        val suggestions =
+            libraryState.suggestedSubtitleAssociations.filter {
+                it.mediaUri.toString() in uriValues
             }
-        updateLibraryConfig(config.copy(pins = pins), rescan = false)
+        val updatedAssociations =
+            (config.subtitleAssociations.filterNot { existing ->
+                suggestions.any { it.mediaUri == existing.mediaUri }
+            } + suggestions).distinctBy { it.mediaUri }
+        updateLibraryConfig(
+            config.copy(
+                includedUris = (config.includedUris + uriValues).distinct(),
+                ignoredUris = config.ignoredUris.filterNot(uriValues::contains),
+                subtitleAssociations = updatedAssociations,
+            ),
+            rescan = false,
+            repartition = true,
+        )
+    }
+
+    fun ignoreLibraryCandidates(uriValues: Set<String>) {
+        if (uriValues.isEmpty()) return
+        val config = libraryState.config
+        updateLibraryConfig(
+            config.copy(
+                includedUris = config.includedUris.filterNot(uriValues::contains),
+                ignoredUris = (config.ignoredUris + uriValues).distinct(),
+            ),
+            rescan = false,
+            repartition = true,
+        )
+    }
+
+    fun removeIncludedMedia(uriValues: Set<String>) {
+        if (uriValues.isEmpty()) return
+        val config = libraryState.config
+        val remainingManual =
+            config.manualItems.filterNot { it.uri.toString() in uriValues }
+        updateLibraryConfig(
+            config.copy(
+                manualItems = remainingManual,
+                includedUris = config.includedUris.filterNot(uriValues::contains),
+                ignoredUris = (config.ignoredUris + uriValues).distinct(),
+                subtitleAssociations =
+                    config.subtitleAssociations.filterNot { it.mediaUri.toString() in uriValues },
+                playlists = config.playlists.withoutItems(uriValues),
+            ),
+            rescan = false,
+            repartition = true,
+        )
+    }
+
+    fun restoreIgnoredMedia(uriValues: Set<String>) {
+        if (uriValues.isEmpty()) return
+        val config = libraryState.config
+        updateLibraryConfig(
+            config.copy(ignoredUris = config.ignoredUris.filterNot(uriValues::contains)),
+            rescan = false,
+            repartition = true,
+        )
+    }
+
+    fun toggleHomeShortcut(shortcut: LibraryShortcut) {
+        val config = libraryState.config
+        val shortcuts =
+            if (shortcut in config.homeShortcuts) {
+                config.homeShortcuts - shortcut
+            } else {
+                config.homeShortcuts + shortcut
+            }
+        updateLibraryConfig(config.copy(homeShortcuts = shortcuts), rescan = false)
     }
 
     fun createPlaylist(
@@ -269,7 +399,12 @@ fun VortexCueApp(
                 items = initialItem?.let(::listOf).orEmpty(),
             )
         updateLibraryConfig(
-            config.copy(playlists = config.playlists + playlist),
+            config.copy(
+                playlists = config.playlists + playlist,
+                homeShortcuts =
+                    config.homeShortcuts +
+                        LibraryShortcut(LibraryShortcutType.Playlist, playlist.id),
+            ),
             rescan = false,
         )
     }
@@ -309,7 +444,13 @@ fun VortexCueApp(
     fun deletePlaylist(playlistId: String) {
         val config = libraryState.config
         updateLibraryConfig(
-            config.copy(playlists = config.playlists.filterNot { it.id == playlistId }),
+            config.copy(
+                playlists = config.playlists.filterNot { it.id == playlistId },
+                homeShortcuts =
+                    config.homeShortcuts.filterNot {
+                        it.type == LibraryShortcutType.Playlist && it.key == playlistId
+                    },
+            ),
             rescan = false,
         )
     }
@@ -574,7 +715,8 @@ fun VortexCueApp(
         libraryState =
             libraryState.copy(
                 config = storedLibrary,
-                hasSystemAccess = context.hasAudioLibraryPermission(),
+                hasAudioAccess = context.hasAudioLibraryPermission(),
+                hasVideoAccess = context.hasVideoLibraryPermission(),
             )
         val stored =
             runCatching { sessionStore.load() }
@@ -779,7 +921,7 @@ fun VortexCueApp(
             uri?.let(::addLibraryFolder)
         }
     val libraryPermissionLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             scanLibrary()
         }
 
@@ -853,17 +995,26 @@ fun VortexCueApp(
                 },
                 onPickSubtitle = { subtitlePicker.launch(arrayOf("*/*")) },
                 onRequestLibraryAccess = {
-                    if (context.hasAudioLibraryPermission()) {
+                    val missingPermissions =
+                        requiredMediaLibraryPermissions().filterNot { permission ->
+                            ContextCompat.checkSelfPermission(context, permission) ==
+                                PackageManager.PERMISSION_GRANTED
+                        }
+                    if (missingPermissions.isEmpty()) {
                         scanLibrary()
                     } else {
-                        libraryPermissionLauncher.launch(requiredAudioLibraryPermission())
+                        libraryPermissionLauncher.launch(missingPermissions.toTypedArray())
                     }
                 },
                 onRefreshLibrary = { scanLibrary() },
                 onAddFolder = { folderPicker.launch(null) },
                 onRemoveFolder = ::removeLibraryFolder,
                 onClearLooseFiles = ::clearLooseFiles,
-                onTogglePin = ::toggleLibraryPin,
+                onAcceptCandidates = ::acceptLibraryCandidates,
+                onIgnoreCandidates = ::ignoreLibraryCandidates,
+                onRemoveIncluded = ::removeIncludedMedia,
+                onRestoreIgnored = ::restoreIgnoredMedia,
+                onToggleHomeShortcut = ::toggleHomeShortcut,
                 onPlayLibraryItems = { items, index ->
                     items.getOrNull(index)?.let { media ->
                         player.setMediaItems(
@@ -1030,7 +1181,7 @@ fun VortexCueApp(
                         destination = AppDestination.Home
                     },
                     onOpenSources = {
-                        homeSection = HomeSection.Sources
+                        homeSection = HomeSection.Manage
                         destination = AppDestination.Home
                     },
                     onAddSubtitle = {
@@ -1132,6 +1283,10 @@ private fun MediaSourceRef.toMediaItem(): MediaItem =
                         putString(MediaExtraSourceId, sourceId)
                         putLong(MediaExtraDuration, durationMs)
                         putLong(MediaExtraDateAdded, dateAddedSeconds)
+                        putString(MediaExtraKind, kind.name)
+                        putLong(MediaExtraSize, sizeBytes)
+                        putInt(MediaExtraVideoWidth, videoWidth)
+                        putInt(MediaExtraVideoHeight, videoHeight)
                     },
                 )
                 .build(),
@@ -1161,6 +1316,17 @@ private fun MediaItem.toMediaSourceRef(): MediaSourceRef? {
                 MediaOrigin.valueOf(extras?.getString(MediaExtraOrigin).orEmpty())
             }.getOrDefault(MediaOrigin.OpenDocument),
         sourceId = extras?.getString(MediaExtraSourceId),
+        kind =
+            runCatching { MediaKind.valueOf(extras?.getString(MediaExtraKind).orEmpty()) }
+                .getOrDefault(
+                    MediaKind.infer(
+                        localConfiguration?.mimeType,
+                        extras?.getString(MediaExtraDisplayName) ?: title.orEmpty(),
+                    ),
+                ),
+        sizeBytes = extras?.getLong(MediaExtraSize) ?: 0L,
+        videoWidth = extras?.getInt(MediaExtraVideoWidth) ?: 0,
+        videoHeight = extras?.getInt(MediaExtraVideoHeight) ?: 0,
     )
 }
 
@@ -1205,3 +1371,44 @@ private const val MediaExtraOrigin = "vortexcue.origin"
 private const val MediaExtraSourceId = "vortexcue.source_id"
 private const val MediaExtraDuration = "vortexcue.duration_ms"
 private const val MediaExtraDateAdded = "vortexcue.date_added_seconds"
+private const val MediaExtraKind = "vortexcue.kind"
+private const val MediaExtraSize = "vortexcue.size_bytes"
+private const val MediaExtraVideoWidth = "vortexcue.video_width"
+private const val MediaExtraVideoHeight = "vortexcue.video_height"
+
+private data class LibraryPartition(
+    val included: List<MediaSourceRef>,
+    val candidates: List<MediaSourceRef>,
+    val ignored: List<MediaSourceRef>,
+)
+
+private fun partitionLibrary(
+    discovered: List<MediaSourceRef>,
+    config: LibraryConfig,
+): LibraryPartition {
+    val explicitUris =
+        (
+            config.includedUris +
+                config.manualItems.map { it.uri.toString() } +
+                config.playlists.flatMap { playlist ->
+                    playlist.items.map { it.uri.toString() }
+                }
+        ).toSet()
+    val ignoredUris = config.ignoredUris.toSet() - explicitUris
+    return LibraryPartition(
+        included = discovered.filter { it.uri.toString() in explicitUris },
+        candidates =
+            discovered.filter {
+                it.uri.toString() !in explicitUris && it.uri.toString() !in ignoredUris
+            },
+        ignored = discovered.filter { it.uri.toString() in ignoredUris },
+    )
+}
+
+private fun MediaLibraryState.allDiscoveredItems(): List<MediaSourceRef> =
+    (items + candidates + ignoredItems).distinctBy { it.uri.toString() }
+
+private fun List<LibraryPlaylist>.withoutItems(uriValues: Set<String>): List<LibraryPlaylist> =
+    map { playlist ->
+        playlist.copy(items = playlist.items.filterNot { it.uri.toString() in uriValues })
+    }

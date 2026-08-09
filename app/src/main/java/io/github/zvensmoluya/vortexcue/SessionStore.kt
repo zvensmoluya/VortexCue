@@ -167,6 +167,17 @@ class SessionStore(context: Context) {
                 runCatching { MediaOrigin.valueOf(this[keys.origin].orEmpty()) }
                     .getOrDefault(MediaOrigin.OpenDocument),
             sourceId = this[keys.sourceId],
+            kind =
+                runCatching { MediaKind.valueOf(this[keys.kind].orEmpty()) }
+                    .getOrDefault(
+                        MediaKind.infer(
+                            this[keys.mime],
+                            this[keys.name] ?: uri.lastPathSegment.orEmpty(),
+                        ),
+                    ),
+            sizeBytes = (this[keys.size] ?: 0L).coerceAtLeast(0L),
+            videoWidth = (this[keys.videoWidth] ?: 0).coerceAtLeast(0),
+            videoHeight = (this[keys.videoHeight] ?: 0).coerceAtLeast(0),
         )
     }
 
@@ -195,6 +206,10 @@ class SessionStore(context: Context) {
         writeOptional(keys.sourceId, source?.sourceId)
         writeOptional(keys.duration, source?.durationMs)
         writeOptional(keys.dateAdded, source?.dateAddedSeconds)
+        writeOptional(keys.kind, source?.kind?.name)
+        writeOptional(keys.size, source?.sizeBytes)
+        writeOptional(keys.videoWidth, source?.videoWidth)
+        writeOptional(keys.videoHeight, source?.videoHeight)
     }
 
     private fun MutablePreferences.writeSubtitleSource(
@@ -221,6 +236,13 @@ class SessionStore(context: Context) {
         if (value == null) remove(key) else this[key] = value
     }
 
+    private fun MutablePreferences.writeOptional(
+        key: Preferences.Key<Int>,
+        value: Int?,
+    ) {
+        if (value == null) remove(key) else this[key] = value
+    }
+
     private data class SourceKeys(
         val uri: Preferences.Key<String>,
         val name: Preferences.Key<String>,
@@ -233,6 +255,10 @@ class SessionStore(context: Context) {
         val dateAdded: Preferences.Key<Long>,
         val origin: Preferences.Key<String>,
         val sourceId: Preferences.Key<String>,
+        val kind: Preferences.Key<String>,
+        val size: Preferences.Key<Long>,
+        val videoWidth: Preferences.Key<Int>,
+        val videoHeight: Preferences.Key<Int>,
     )
 
     private data class SubtitleKeys(
@@ -277,6 +303,10 @@ class SessionStore(context: Context) {
                 dateAdded = longPreferencesKey("${prefix}_date_added_seconds"),
                 origin = stringPreferencesKey("${prefix}_origin"),
                 sourceId = stringPreferencesKey("${prefix}_source_id"),
+                kind = stringPreferencesKey("${prefix}_kind"),
+                size = longPreferencesKey("${prefix}_size_bytes"),
+                videoWidth = intPreferencesKey("${prefix}_video_width"),
+                videoHeight = intPreferencesKey("${prefix}_video_height"),
             )
 
         private fun subtitleKeys(prefix: String) =

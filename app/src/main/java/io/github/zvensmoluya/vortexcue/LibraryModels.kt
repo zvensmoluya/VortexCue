@@ -23,16 +23,13 @@ data class LibrarySourceState(
     val errorMessage: String? = null,
 )
 
-enum class LibraryPinType {
-    Track,
-    Album,
-    Artist,
+enum class LibraryShortcutType {
     Folder,
     Playlist,
 }
 
-data class LibraryPin(
-    val type: LibraryPinType,
+data class LibraryShortcut(
+    val type: LibraryShortcutType,
     val key: String,
 )
 
@@ -52,19 +49,50 @@ data class LibraryConfig(
     val folders: List<LibraryFolderRef> = emptyList(),
     val playlists: List<LibraryPlaylist> = emptyList(),
     val subtitleAssociations: List<SubtitleAssociation> = emptyList(),
-    val pins: List<LibraryPin> = emptyList(),
+    val includedUris: List<String> = emptyList(),
+    val ignoredUris: List<String> = emptyList(),
+    val homeShortcuts: List<LibraryShortcut> = emptyList(),
 )
 
 data class MediaLibraryState(
     val items: List<MediaSourceRef> = emptyList(),
+    val candidates: List<MediaSourceRef> = emptyList(),
+    val ignoredItems: List<MediaSourceRef> = emptyList(),
     val config: LibraryConfig = LibraryConfig(),
     val sources: List<LibrarySourceState> = emptyList(),
+    val suggestedSubtitleAssociations: List<SubtitleAssociation> = emptyList(),
     val isLoading: Boolean = false,
-    val hasSystemAccess: Boolean = false,
+    val hasAudioAccess: Boolean = false,
+    val hasVideoAccess: Boolean = false,
     val errorMessage: String? = null,
+) {
+    val hasSystemAccess: Boolean
+        get() = hasAudioAccess || hasVideoAccess
+
+    val hasCompleteSystemAccess: Boolean
+        get() = hasAudioAccess && hasVideoAccess
+}
+
+data class LibraryScanBatch(
+    val media: List<MediaSourceRef> = emptyList(),
+    val subtitleSuggestions: List<SubtitleAssociation> = emptyList(),
 )
 
 object LibrarySourceIds {
     const val SystemLibrary = "system-library"
     const val LooseFiles = "loose-files"
 }
+
+fun MediaSourceRef.libraryFolderKey(): String =
+    "${sourceId.orEmpty()}|${folder.orEmpty()}"
+
+val MediaSourceRef.libraryFolderName: String
+    get() =
+        folder
+            ?.trimEnd('/')
+            ?.substringAfterLast('/')
+            ?.takeIf(String::isNotBlank)
+            ?: if (sourceId == LibrarySourceIds.LooseFiles) "单独打开" else "未分类"
+
+fun MediaSourceRef.toFolderShortcut(): LibraryShortcut =
+    LibraryShortcut(LibraryShortcutType.Folder, libraryFolderKey())

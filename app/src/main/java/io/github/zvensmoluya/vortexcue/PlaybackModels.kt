@@ -8,6 +8,28 @@ enum class MediaOrigin {
     DocumentTree,
 }
 
+enum class MediaKind {
+    Audio,
+    Video,
+    ;
+
+    companion object {
+        fun infer(
+            mimeType: String?,
+            displayName: String,
+        ): MediaKind =
+            when {
+                mimeType?.startsWith("video/") == true -> Video
+                mimeType?.startsWith("audio/") == true -> Audio
+                displayName.substringAfterLast('.', "").lowercase() in VideoExtensions -> Video
+                else -> Audio
+            }
+
+        private val VideoExtensions =
+            setOf("3gp", "m2ts", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "ts", "webm")
+    }
+}
+
 data class MediaSourceRef(
     val uri: Uri,
     val displayName: String,
@@ -20,6 +42,10 @@ data class MediaSourceRef(
     val dateAddedSeconds: Long = 0L,
     val origin: MediaOrigin = MediaOrigin.OpenDocument,
     val sourceId: String? = null,
+    val kind: MediaKind = MediaKind.infer(mimeType, displayName),
+    val sizeBytes: Long = 0L,
+    val videoWidth: Int = 0,
+    val videoHeight: Int = 0,
 )
 
 val MediaSourceRef.displayTitle: String
