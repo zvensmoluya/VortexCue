@@ -83,6 +83,7 @@ fun VortexCueApp(
                 if (initialSession == null) AppDestination.Home else AppDestination.Player,
             )
         }
+    var homeSection by rememberSaveable { mutableStateOf(HomeSection.Library) }
     var playerSurface by rememberSaveable { mutableStateOf(PlayerSurface.Normal) }
     var activeSession by remember { mutableStateOf(initialSession) }
     var lastSession by remember { mutableStateOf<RestorableSession?>(null) }
@@ -822,13 +823,21 @@ fun VortexCueApp(
         if (playerSurface != PlayerSurface.Normal) {
             playerSurface = PlayerSurface.Normal
         } else {
+            homeSection = HomeSection.Library
             destination = AppDestination.Home
         }
+    }
+    BackHandler(
+        enabled = destination == AppDestination.Home && homeSection != HomeSection.Library,
+    ) {
+        homeSection = HomeSection.Library
     }
 
     when (destination) {
         AppDestination.Home ->
             HomeScreen(
+                section = homeSection,
+                onSectionChanged = { homeSection = it },
                 draft = draft,
                 activeSession = activeSession,
                 lastSession = lastSession,
@@ -849,6 +858,9 @@ fun VortexCueApp(
                 },
                 onRefreshLibrary = { scanLibrary() },
                 onAddFolder = { folderPicker.launch(null) },
+                onRemoveFolder = ::removeLibraryFolder,
+                onClearLooseFiles = ::clearLooseFiles,
+                onTogglePin = ::toggleLibraryPin,
                 onPlayLibraryItems = { items, index ->
                     items.getOrNull(index)?.let { media ->
                         player.setMediaItems(
@@ -1010,7 +1022,10 @@ fun VortexCueApp(
                             }
                         }
                     },
-                    onEditSources = { destination = AppDestination.Home },
+                    onEditSources = {
+                        homeSection = HomeSection.Sources
+                        destination = AppDestination.Home
+                    },
                     onSubtitleOffsetChanged = { offsetMs ->
                         val updated = session.copy(subtitleOffsetMs = offsetMs)
                         activeSession = updated
