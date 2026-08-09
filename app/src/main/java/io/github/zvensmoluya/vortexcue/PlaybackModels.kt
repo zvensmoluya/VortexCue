@@ -2,11 +2,32 @@ package io.github.zvensmoluya.vortexcue
 
 import android.net.Uri
 
+enum class MediaOrigin {
+    MediaStore,
+    OpenDocument,
+    DocumentTree,
+}
+
 data class MediaSourceRef(
     val uri: Uri,
     val displayName: String,
     val mimeType: String?,
+    val title: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+    val durationMs: Long = 0L,
+    val folder: String? = null,
+    val dateAddedSeconds: Long = 0L,
+    val origin: MediaOrigin = MediaOrigin.OpenDocument,
 )
+
+val MediaSourceRef.displayTitle: String
+    get() =
+        title?.takeIf(String::isNotBlank)
+            ?: displayName.substringBeforeLast('.', missingDelimiterValue = displayName)
+
+val MediaSourceRef.displayArtist: String?
+    get() = artist?.takeIf { it.isNotBlank() && it != "<unknown>" }
 
 data class SubtitleSourceRef(
     val uri: Uri,

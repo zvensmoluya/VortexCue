@@ -2,6 +2,8 @@ package io.github.zvensmoluya.vortexcue
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,17 +15,24 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -40,6 +49,15 @@ import androidx.compose.ui.unit.sp
 import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 
+private enum class LibraryView(val label: String) {
+    Songs("歌曲"),
+    Albums("专辑"),
+    Artists("歌手"),
+    Folders("文件夹"),
+    Sources("来源"),
+    Playlists("播放列表"),
+}
+
 @Composable
 internal fun HomeScreen(
     draft: SessionDraft,
@@ -47,8 +65,17 @@ internal fun HomeScreen(
     lastSession: RestorableSession?,
     playback: PlaybackSnapshot,
     displayProfile: DisplayProfile,
+    library: MediaLibraryState,
     onPickMedia: () -> Unit,
     onPickSubtitle: () -> Unit,
+    onRequestLibraryAccess: () -> Unit,
+    onRefreshLibrary: () -> Unit,
+    onAddFolder: () -> Unit,
+    onPlayLibraryItems: (List<MediaSourceRef>, Int) -> Unit,
+    onCreatePlaylist: (String, MediaSourceRef?) -> Unit,
+    onAddToPlaylist: (String, MediaSourceRef) -> Unit,
+    onRemoveFromPlaylist: (String, MediaSourceRef) -> Unit,
+    onDeletePlaylist: (String) -> Unit,
     onRemoveSubtitle: () -> Unit,
     onClearDraft: () -> Unit,
     onApplyDraft: () -> Unit,
@@ -58,17 +85,27 @@ internal fun HomeScreen(
     modifier: Modifier = Modifier,
 ) {
     var settingsVisible by rememberSaveable { mutableStateOf(false) }
+    var libraryView by rememberSaveable { mutableStateOf(LibraryView.Songs) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var selectedGroupKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var playlistTarget by remember { mutableStateOf<MediaSourceRef?>(null) }
+    var createPlaylistVisible by rememberSaveable { mutableStateOf(false) }
+    var createPlaylistName by rememberSaveable { mutableStateOf("") }
+    var createPlaylistSeed by remember { mutableStateOf<MediaSourceRef?>(null) }
+
+    LaunchedEffect(libraryView, searchQuery) {
+        selectedGroupKey = null
+    }
 
     Column(
         modifier =
             modifier
                 .fillMaxSize()
                 .background(AppBackground)
-                .verticalScroll(rememberScrollState())
                 .statusBarsPadding()
                 .navigationBarsPadding()
                 .padding(horizontal = 22.dp, vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(26.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Header(
             settingsVisible = settingsVisible,
@@ -76,16 +113,31 @@ internal fun HomeScreen(
         )
 
         if (settingsVisible) {
-            DisplaySettings(
-                profile = displayProfile,
-                onProfileChanged = onDisplayProfileChanged,
-            )
+            Column(
+                modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(26.dp),
+            ) {
+                DisplaySettings(
+                    profile = displayProfile,
+                    onProfileChanged = onDisplayProfileChanged,
+                )
+            }
         } else {
-            HomeContent(
+            LibraryHome(
                 draft = draft,
                 activeSession = activeSession,
                 lastSession = lastSession,
                 playback = playback,
+                library = library,
+                libraryView = libraryView,
+                searchQuery = searchQuery,
+                selectedGroupKey = selectedGroupKey,
+                onLibraryViewChanged = { libraryView = it },
+                onSearchQueryChanged = { searchQuery = it },
+                onSelectedGroupChanged = { selectedGroupKey = it },
+                onRequestLibraryAccess = onRequestLibraryAccess,
+                onRefreshLibrary = onRefreshLibrary,
+                onAddFolder = onAddFolder,
                 onPickMedia = onPickMedia,
                 onPickSubtitle = onPickSubtitle,
                 onRemoveSubtitle = onRemoveSubtitle,
@@ -93,8 +145,50 @@ internal fun HomeScreen(
                 onApplyDraft = onApplyDraft,
                 onContinue = onContinue,
                 onPlayPause = onPlayPause,
+                onPlayLibraryItems = onPlayLibraryItems,
+                onChoosePlaylist = { playlistTarget = it },
+                onCreateEmptyPlaylist = {
+                    createPlaylistSeed = null
+                    createPlaylistName = ""
+                    createPlaylistVisible = true
+                },
+                onRemoveFromPlaylist = onRemoveFromPlaylist,
+                onDeletePlaylist = onDeletePlaylist,
+                modifier = Modifier.weight(1f),
             )
         }
+    }
+
+    playlistTarget?.let { item ->
+        PlaylistChooserDialog(
+            item = item,
+            playlists = library.config.playlists,
+            onDismiss = { playlistTarget = null },
+            onAdd = { playlistId ->
+                onAddToPlaylist(playlistId, item)
+                playlistTarget = null
+            },
+            onCreate = {
+                createPlaylistSeed = item
+                createPlaylistName = ""
+                playlistTarget = null
+                createPlaylistVisible = true
+            },
+        )
+    }
+
+    if (createPlaylistVisible) {
+        CreatePlaylistDialog(
+            name = createPlaylistName,
+            onNameChanged = { createPlaylistName = it },
+            onDismiss = { createPlaylistVisible = false },
+            onConfirm = {
+                onCreatePlaylist(createPlaylistName, createPlaylistSeed)
+                createPlaylistVisible = false
+                createPlaylistName = ""
+                createPlaylistSeed = null
+            },
+        )
     }
 }
 
@@ -122,20 +216,27 @@ private fun Header(
             )
         }
         TextButton(onClick = onToggleSettings) {
-            Text(
-                text = if (settingsVisible) "完成" else "设置",
-                color = AppSecondaryText,
-            )
+            Text(if (settingsVisible) "完成" else "设置", color = AppSecondaryText)
         }
     }
 }
 
 @Composable
-private fun HomeContent(
+private fun LibraryHome(
     draft: SessionDraft,
     activeSession: ActiveSession?,
     lastSession: RestorableSession?,
     playback: PlaybackSnapshot,
+    library: MediaLibraryState,
+    libraryView: LibraryView,
+    searchQuery: String,
+    selectedGroupKey: String?,
+    onLibraryViewChanged: (LibraryView) -> Unit,
+    onSearchQueryChanged: (String) -> Unit,
+    onSelectedGroupChanged: (String?) -> Unit,
+    onRequestLibraryAccess: () -> Unit,
+    onRefreshLibrary: () -> Unit,
+    onAddFolder: () -> Unit,
     onPickMedia: () -> Unit,
     onPickSubtitle: () -> Unit,
     onRemoveSubtitle: () -> Unit,
@@ -143,154 +244,501 @@ private fun HomeContent(
     onApplyDraft: () -> Unit,
     onContinue: () -> Unit,
     onPlayPause: () -> Unit,
+    onPlayLibraryItems: (List<MediaSourceRef>, Int) -> Unit,
+    onChoosePlaylist: (MediaSourceRef) -> Unit,
+    onCreateEmptyPlaylist: () -> Unit,
+    onRemoveFromPlaylist: (String, MediaSourceRef) -> Unit,
+    onDeletePlaylist: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val resumableSession = activeSession ?: lastSession?.session
+    val normalizedQuery = searchQuery.trim()
+    val filteredItems =
+        library.items.filter { media ->
+            normalizedQuery.isEmpty() ||
+                listOf(
+                    media.displayTitle,
+                    media.displayArtist,
+                    media.album,
+                    media.folder,
+                ).any { value -> value?.contains(normalizedQuery, ignoreCase = true) == true }
+        }
+    val groups = groupsFor(libraryView, filteredItems)
+    val selectedPlaylist =
+        if (libraryView == LibraryView.Playlists) {
+            library.config.playlists.firstOrNull { it.id == selectedGroupKey }
+        } else {
+            null
+        }
+    val selectedGroupItems =
+        when {
+            selectedPlaylist != null -> selectedPlaylist.items
+            selectedGroupKey != null -> groups.firstOrNull { it.first == selectedGroupKey }?.second.orEmpty()
+            else -> emptyList()
+        }
+
+    LazyColumn(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        resumableSession?.let { session ->
+            item(key = "now-playing") {
+                NowPlayingBlock(
+                    session = session,
+                    activeSession = activeSession,
+                    lastSession = lastSession,
+                    playback = playback,
+                    onContinue = onContinue,
+                    onPlayPause = onPlayPause,
+                )
+            }
+            item(key = "now-playing-divider") { Hairline() }
+        }
+
+        item(key = "library-heading") {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SectionHeading(
+                    title = "内容库",
+                    detail = "${library.items.size} 项",
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    QuietButton(
+                        label = if (library.hasSystemAccess) "刷新" else "扫描本机",
+                        onClick =
+                            if (library.hasSystemAccess) onRefreshLibrary else onRequestLibraryAccess,
+                        modifier = Modifier.weight(1f),
+                        emphasized = !library.hasSystemAccess,
+                    )
+                    QuietButton(
+                        label = "添加文件夹",
+                        onClick = onAddFolder,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (library.isLoading) StatusText("正在整理本地内容…")
+                library.errorMessage?.let { StatusText(it, AppError) }
+            }
+        }
+
+        if (library.items.isNotEmpty()) {
+            item(key = "search") {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = onSearchQueryChanged,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("搜索标题、歌手、专辑或文件夹", color = AppMutedText) },
+                    singleLine = true,
+                )
+            }
+        }
+
+        item(key = "library-tabs") {
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                LibraryView.entries.forEach { view ->
+                    TextButton(onClick = { onLibraryViewChanged(view) }) {
+                        Text(
+                            text = view.label,
+                            color = if (view == libraryView) AppAccent else AppMutedText,
+                            fontWeight = if (view == libraryView) FontWeight.Medium else FontWeight.Normal,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (
+            library.items.isEmpty() &&
+                library.config.playlists.isEmpty() &&
+                !library.isLoading
+        ) {
+            item(key = "library-empty") {
+                Text(
+                    text = "扫描本机音频，或添加一个文件夹开始建立内容库。",
+                    color = AppSecondaryText,
+                    fontSize = 14.sp,
+                    lineHeight = 21.sp,
+                )
+            }
+        } else if (selectedGroupKey != null) {
+            item(key = "selected-group-heading") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = { onSelectedGroupChanged(null) }) {
+                        Text("返回${libraryView.label}", color = AppSecondaryText)
+                    }
+                    if (selectedPlaylist != null) {
+                        TextButton(
+                            onClick = {
+                                onDeletePlaylist(selectedPlaylist.id)
+                                onSelectedGroupChanged(null)
+                            },
+                        ) {
+                            Text("删除列表", color = AppMutedText)
+                        }
+                    }
+                }
+            }
+            itemsIndexed(
+                items = selectedGroupItems,
+                key = { _, item -> "selected-${item.uri}" },
+            ) { index, media ->
+                TrackRow(
+                    media = media,
+                    onPlay = { onPlayLibraryItems(selectedGroupItems, index) },
+                    onChoosePlaylist = { onChoosePlaylist(media) },
+                    onRemove =
+                        selectedPlaylist?.let { playlist ->
+                            { onRemoveFromPlaylist(playlist.id, media) }
+                        },
+                )
+            }
+            if (selectedGroupItems.isEmpty()) {
+                item(key = "selected-empty") {
+                    StatusText("这里还没有内容")
+                }
+            }
+        } else {
+            when (libraryView) {
+                LibraryView.Songs ->
+                    itemsIndexed(
+                        items = filteredItems,
+                        key = { _, item -> "song-${item.uri}" },
+                    ) { index, media ->
+                        TrackRow(
+                            media = media,
+                            onPlay = { onPlayLibraryItems(filteredItems, index) },
+                            onChoosePlaylist = { onChoosePlaylist(media) },
+                        )
+                    }
+                LibraryView.Playlists -> {
+                    item(key = "new-playlist") {
+                        QuietButton(
+                            label = "新建播放列表",
+                            onClick = onCreateEmptyPlaylist,
+                            emphasized = true,
+                        )
+                    }
+                    items(
+                        items = library.config.playlists,
+                        key = { "playlist-${it.id}" },
+                    ) { playlist ->
+                        GroupRow(
+                            name = playlist.name,
+                            count = playlist.items.size,
+                            onOpen = { onSelectedGroupChanged(playlist.id) },
+                        )
+                    }
+                }
+                else ->
+                    items(
+                        items = groups,
+                        key = { "group-${libraryView.name}-${it.first}" },
+                    ) { group ->
+                        GroupRow(
+                            name = group.first,
+                            count = group.second.size,
+                            onOpen = { onSelectedGroupChanged(group.first) },
+                        )
+                    }
+            }
+        }
+
+        item(key = "add-divider") { Hairline() }
+        item(key = "add-content") {
+            AddContentBlock(
+                draft = draft,
+                activeSession = activeSession,
+                onPickMedia = onPickMedia,
+                onPickSubtitle = onPickSubtitle,
+                onRemoveSubtitle = onRemoveSubtitle,
+                onClearDraft = onClearDraft,
+                onApplyDraft = onApplyDraft,
+            )
+        }
+        item(key = "footer") {
+            Text(
+                text = "内容只在本机读取",
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                color = AppMutedText,
+                fontSize = 11.sp,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+@Composable
+private fun NowPlayingBlock(
+    session: ActiveSession,
+    activeSession: ActiveSession?,
+    lastSession: RestorableSession?,
+    playback: PlaybackSnapshot,
+    onContinue: () -> Unit,
+    onPlayPause: () -> Unit,
+) {
     val positionMs = if (activeSession != null) playback.positionMs else lastSession?.positionMs ?: 0L
     val durationMs = if (activeSession != null) playback.durationMs else lastSession?.durationMs ?: 0L
     val availability =
         if (activeSession != null) MediaAvailability.Ready else lastSession?.mediaAvailability
 
-    resumableSession?.let { session ->
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            SectionHeading(
-                title = if (activeSession == null) "继续上次" else "正在播放",
-                detail = if (playback.isPlaying && activeSession != null) "声音仍在继续" else null,
+    Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
+        SectionHeading(
+            title = if (activeSession == null) "继续上次" else "正在播放",
+            detail = if (playback.isPlaying && activeSession != null) "声音仍在继续" else null,
+        )
+        Text(
+            text = session.media.displayTitle,
+            color = AppPrimaryText,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        session.media.displayArtist?.let {
+            Text(it, color = AppSecondaryText, fontSize = 13.sp)
+        }
+        Text(
+            text =
+                "${formatTime(positionMs)} / ${formatTime(durationMs)}  ·  " +
+                    (session.subtitle?.source?.displayName ?: "无字幕"),
+            color = AppMutedText,
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        when (availability) {
+            MediaAvailability.Checking -> StatusText("正在验证播放文件…")
+            is MediaAvailability.Unavailable -> StatusText(availability.message, AppError)
+            else -> Unit
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            QuietButton(
+                label =
+                    when {
+                        activeSession != null -> "返回播放器"
+                        availability is MediaAvailability.Unavailable -> "重新定位"
+                        else -> "继续播放"
+                    },
+                onClick = onContinue,
+                enabled = availability != MediaAvailability.Checking,
+                modifier = Modifier.weight(1f),
+                emphasized = true,
             )
+            if (activeSession != null) {
+                QuietButton(
+                    label = if (playback.isPlaying) "暂停" else "播放",
+                    onClick = onPlayPause,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrackRow(
+    media: MediaSourceRef,
+    onPlay: () -> Unit,
+    onChoosePlaylist: () -> Unit,
+    onRemove: (() -> Unit)? = null,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onPlay)
+                .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
-                text = session.media.displayName,
+                text = media.displayTitle,
                 color = AppPrimaryText,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 2,
+                fontSize = 14.sp,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text =
-                    "${formatTime(positionMs)} / ${formatTime(durationMs)}  ·  " +
-                        (session.subtitle?.source?.displayName ?: "无字幕"),
-                color = AppSecondaryText,
-                fontSize = 12.sp,
+                    listOfNotNull(media.displayArtist, media.album, media.folder)
+                        .firstOrNull()
+                        ?: sourceLabel(media.origin),
+                color = AppMutedText,
+                fontSize = 11.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            when (availability) {
-                MediaAvailability.Checking -> StatusText("正在验证播放文件…")
-                is MediaAvailability.Unavailable -> StatusText(availability.message, AppError)
-                else -> Unit
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                QuietButton(
-                    label =
-                        when {
-                            activeSession != null -> "返回播放器"
-                            availability is MediaAvailability.Unavailable -> "重新定位"
-                            else -> "继续播放"
-                        },
-                    onClick = onContinue,
-                    enabled = availability != MediaAvailability.Checking,
-                    modifier = Modifier.weight(1f),
-                    emphasized = true,
-                )
-                if (activeSession != null) {
-                    QuietButton(
-                        label = if (playback.isPlaying) "暂停" else "播放",
-                        onClick = onPlayPause,
-                    )
-                }
-            }
         }
-        Hairline()
+        if (media.durationMs > 0L) {
+            Text(formatTime(media.durationMs), color = AppMutedText, fontSize = 11.sp)
+        }
+        TextButton(onClick = onRemove ?: onChoosePlaylist) {
+            Text(if (onRemove == null) "+列表" else "移除", color = AppMutedText, fontSize = 11.sp)
+        }
     }
+    Hairline()
+}
 
+@Composable
+private fun GroupRow(
+    name: String,
+    count: Int,
+    onOpen: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(name, color = AppPrimaryText, fontSize = 15.sp, maxLines = 1)
+            Text("$count 项", color = AppMutedText, fontSize = 11.sp)
+        }
+        Text("查看", color = AppMutedText, fontSize = 12.sp)
+    }
+    Hairline()
+}
+
+@Composable
+private fun AddContentBlock(
+    draft: SessionDraft,
+    activeSession: ActiveSession?,
+    onPickMedia: () -> Unit,
+    onPickSubtitle: () -> Unit,
+    onRemoveSubtitle: () -> Unit,
+    onClearDraft: () -> Unit,
+    onApplyDraft: () -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionHeading(title = "打开内容", detail = "媒体库建立前保留单文件入口")
-        Text(
-            text = "选择本地音频或视频音轨，并按需关联同步字幕。",
-            color = AppSecondaryText,
-            fontSize = 13.sp,
-            lineHeight = 19.sp,
-        )
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        val mediaValue =
-            when (val media = draft.media) {
-                DraftMedia.None -> "尚未选择"
-                is DraftMedia.Checking -> "正在验证 ${media.source.displayName}"
-                is DraftMedia.Ready -> media.source.displayName
-                is DraftMedia.Unavailable -> media.source.displayName
-            }
+        SectionHeading(title = "添加单个内容", detail = "可选字幕")
         SourceRow(
             label = "播放内容",
-            value = mediaValue,
+            value =
+                when (val media = draft.media) {
+                    DraftMedia.None -> "尚未选择"
+                    is DraftMedia.Checking -> "正在验证 ${media.source.displayName}"
+                    is DraftMedia.Ready -> media.source.displayTitle
+                    is DraftMedia.Unavailable -> media.source.displayName
+                },
             action = if (draft.media == DraftMedia.None) "选择" else "更换",
             onClick = onPickMedia,
         )
-        if (draft.media is DraftMedia.Unavailable) {
-            StatusText(draft.media.message, AppError)
-        }
-
+        if (draft.media is DraftMedia.Unavailable) StatusText(draft.media.message, AppError)
         Hairline()
-
-        val subtitleValue =
-            when (val subtitle = draft.subtitle) {
-                DraftSubtitle.None -> "可选 · SRT / LRC / VTT / ASS"
-                is DraftSubtitle.Loading -> "正在读取 ${subtitle.source.displayName}"
-                is DraftSubtitle.Ready -> subtitle.subtitle.source.displayName
-                is DraftSubtitle.Failed -> subtitle.source.displayName
-            }
         SourceRow(
             label = "同步字幕",
-            value = subtitleValue,
+            value =
+                when (val subtitle = draft.subtitle) {
+                    DraftSubtitle.None -> "可选 · SRT / LRC / VTT / ASS"
+                    is DraftSubtitle.Loading -> "正在读取 ${subtitle.source.displayName}"
+                    is DraftSubtitle.Ready -> subtitle.subtitle.source.displayName
+                    is DraftSubtitle.Failed -> subtitle.source.displayName
+                },
             action = if (draft.subtitle == DraftSubtitle.None) "选择" else "更换",
             onClick = onPickSubtitle,
         )
         when (val subtitle = draft.subtitle) {
             is DraftSubtitle.Failed -> StatusText(subtitle.message, AppError)
-            is DraftSubtitle.Ready ->
-                StatusText("已读取 ${subtitle.subtitle.timeline.cues.size} 条字幕")
+            is DraftSubtitle.Ready -> StatusText("已读取 ${subtitle.subtitle.timeline.cues.size} 条字幕")
             else -> Unit
         }
         if (draft.subtitle != DraftSubtitle.None) {
-            TextButton(onClick = onRemoveSubtitle) {
-                Text("移除字幕", color = AppMutedText)
+            TextButton(onClick = onRemoveSubtitle) { Text("移除字幕", color = AppMutedText) }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onClearDraft) { Text("清空", color = AppMutedText) }
+            QuietButton(
+                label =
+                    when {
+                        draft.media is DraftMedia.Checking -> "正在验证"
+                        draft.media is DraftMedia.Unavailable -> "需要重新定位"
+                        draft.subtitle is DraftSubtitle.Failed -> "忽略字幕并播放"
+                        activeSession == null -> "开始播放"
+                        else -> "应用并播放"
+                    },
+                onClick = onApplyDraft,
+                enabled = draft.media is DraftMedia.Ready && draft.subtitle !is DraftSubtitle.Loading,
+                modifier = Modifier.weight(1f),
+                emphasized = true,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlaylistChooserDialog(
+    item: MediaSourceRef,
+    playlists: List<LibraryPlaylist>,
+    onDismiss: () -> Unit,
+    onAdd: (String) -> Unit,
+    onCreate: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("添加到播放列表", color = AppPrimaryText) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    item.displayTitle,
+                    color = AppSecondaryText,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                playlists.forEach { playlist ->
+                    TextButton(onClick = { onAdd(playlist.id) }) {
+                        Text("${playlist.name} · ${playlist.items.size} 项", color = AppPrimaryText)
+                    }
+                }
+                if (playlists.isEmpty()) StatusText("还没有播放列表")
             }
-        }
-    }
+        },
+        confirmButton = {
+            TextButton(onClick = onCreate) { Text("新建播放列表", color = AppAccent) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消", color = AppSecondaryText) }
+        },
+        containerColor = AppSurfaceRaised,
+    )
+}
 
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TextButton(onClick = onClearDraft) {
-            Text("清空", color = AppMutedText)
-        }
-        QuietButton(
-            label =
-                when {
-                    draft.media is DraftMedia.Checking -> "正在验证"
-                    draft.media is DraftMedia.Unavailable -> "需要重新定位"
-                    draft.subtitle is DraftSubtitle.Failed -> "忽略字幕并播放"
-                    activeSession == null -> "开始播放"
-                    else -> "应用并播放"
-                },
-            onClick = onApplyDraft,
-            enabled = draft.media is DraftMedia.Ready && draft.subtitle !is DraftSubtitle.Loading,
-            modifier = Modifier.weight(1f),
-            emphasized = true,
-        )
-    }
-
-    Text(
-        text = "内容只在本机读取",
-        modifier = Modifier.fillMaxWidth(),
-        color = AppMutedText,
-        fontSize = 11.sp,
-        textAlign = TextAlign.Center,
+@Composable
+private fun CreatePlaylistDialog(
+    name: String,
+    onNameChanged: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("新建播放列表", color = AppPrimaryText) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = onNameChanged,
+                label = { Text("名称") },
+                singleLine = true,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm, enabled = name.isNotBlank()) {
+                Text("创建", color = if (name.isNotBlank()) AppAccent else AppMutedText)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消", color = AppSecondaryText) }
+        },
+        containerColor = AppSurfaceRaised,
     )
 }
 
@@ -300,13 +748,9 @@ private fun DisplaySettings(
     onProfileChanged: (DisplayProfile) -> Unit,
 ) {
     GlowPreview(profile)
-
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionHeading(title = "预设", detail = profile.name)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             DisplayProfile.Presets.forEach { preset ->
                 QuietButton(
                     label = preset.name,
@@ -317,9 +761,7 @@ private fun DisplaySettings(
             }
         }
     }
-
     Hairline()
-
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionHeading(title = "微光校准", detail = "窗口与发光强度")
         DisplaySettingSlider(
@@ -329,10 +771,7 @@ private fun DisplaySettings(
             valueRange = 0.01f..0.30f,
             onValueChange = {
                 onProfileChanged(
-                    profile.copy(
-                        name = DisplayProfile.CustomName,
-                        glowWindowBrightness = it,
-                    ),
+                    profile.copy(name = DisplayProfile.CustomName, glowWindowBrightness = it),
                 )
             },
         )
@@ -343,10 +782,7 @@ private fun DisplaySettings(
             valueRange = 4f..96f,
             onValueChange = {
                 onProfileChanged(
-                    profile.copy(
-                        name = DisplayProfile.CustomName,
-                        glowSubtitleLevel = it.roundToInt(),
-                    ),
+                    profile.copy(name = DisplayProfile.CustomName, glowSubtitleLevel = it.roundToInt()),
                 )
             },
         )
@@ -357,17 +793,12 @@ private fun DisplaySettings(
             valueRange = 24f..160f,
             onValueChange = {
                 onProfileChanged(
-                    profile.copy(
-                        name = DisplayProfile.CustomName,
-                        glowControlLevel = it.roundToInt(),
-                    ),
+                    profile.copy(name = DisplayProfile.CustomName, glowControlLevel = it.roundToInt()),
                 )
             },
         )
     }
-
     Hairline()
-
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionHeading(title = "字幕外观", detail = "独立于屏幕亮度")
         DisplaySettingSlider(
@@ -377,10 +808,7 @@ private fun DisplaySettings(
             valueRange = 18f..36f,
             onValueChange = {
                 onProfileChanged(
-                    profile.copy(
-                        name = DisplayProfile.CustomName,
-                        glowSubtitleSizeSp = it,
-                    ),
+                    profile.copy(name = DisplayProfile.CustomName, glowSubtitleSizeSp = it),
                 )
             },
         )
@@ -391,27 +819,19 @@ private fun DisplaySettings(
             valueRange = -0.60f..0.60f,
             onValueChange = {
                 onProfileChanged(
-                    profile.copy(
-                        name = DisplayProfile.CustomName,
-                        glowSubtitleVerticalBias = it,
-                    ),
+                    profile.copy(name = DisplayProfile.CustomName, glowSubtitleVerticalBias = it),
                 )
             },
         )
     }
+    Spacer(modifier = Modifier.height(8.dp))
 }
 
 @Composable
 private fun GlowPreview(profile: DisplayProfile) {
     val subtitleLevel = profile.glowSubtitleLevel.coerceIn(0, 255)
     val controlLevel = profile.glowControlLevel.coerceIn(0, 255)
-    Box(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .height(210.dp)
-                .background(Color.Black),
-    ) {
+    Box(modifier = Modifier.fillMaxWidth().height(210.dp).background(Color.Black)) {
         Text(
             text = "声音继续，画面退场",
             modifier =
@@ -448,15 +868,8 @@ private fun SectionHeading(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = title,
-            color = AppPrimaryText,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Medium,
-        )
-        detail?.let {
-            Text(text = it, color = AppMutedText, fontSize = 11.sp)
-        }
+        Text(title, color = AppPrimaryText, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        detail?.let { Text(it, color = AppMutedText, fontSize = 11.sp) }
     }
 }
 
@@ -468,23 +881,21 @@ private fun SourceRow(
     onClick: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(text = label, color = AppMutedText, fontSize = 11.sp)
+            Text(label, color = AppMutedText, fontSize = 11.sp)
             Text(
-                text = value,
+                value,
                 color = AppPrimaryText,
                 fontSize = 14.sp,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        TextButton(onClick = onClick) {
-            Text(action, color = AppSecondaryText)
-        }
+        TextButton(onClick = onClick) { Text(action, color = AppSecondaryText) }
     }
 }
 
@@ -524,10 +935,9 @@ private fun DisplaySettingSlider(
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(text = label, color = AppSecondaryText, fontSize = 12.sp)
-            Text(text = valueLabel, color = AppPrimaryText, fontSize = 12.sp)
+            Text(label, color = AppSecondaryText, fontSize = 12.sp)
+            Text(valueLabel, color = AppPrimaryText, fontSize = 12.sp)
         }
         Slider(
             value = value.coerceIn(valueRange),
@@ -554,8 +964,32 @@ private fun StatusText(
     text: String,
     color: Color = AppMutedText,
 ) {
-    Text(text = text, color = color, fontSize = 11.sp, lineHeight = 16.sp)
+    Text(text, color = color, fontSize = 11.sp, lineHeight = 16.sp)
 }
+
+private fun groupsFor(
+    view: LibraryView,
+    items: List<MediaSourceRef>,
+): List<Pair<String, List<MediaSourceRef>>> {
+    val grouped =
+        when (view) {
+            LibraryView.Albums -> items.groupBy { it.album ?: "未知专辑" }
+            LibraryView.Artists -> items.groupBy { it.displayArtist ?: "未知歌手" }
+            LibraryView.Folders -> items.groupBy { it.folder ?: "未分类文件夹" }
+            LibraryView.Sources -> items.groupBy { sourceLabel(it.origin) }
+            else -> emptyMap()
+        }
+    return grouped.entries
+        .sortedBy { it.key.lowercase() }
+        .map { entry -> entry.key to entry.value.sortedBy { media -> media.displayTitle } }
+}
+
+private fun sourceLabel(origin: MediaOrigin): String =
+    when (origin) {
+        MediaOrigin.MediaStore -> "设备媒体库"
+        MediaOrigin.OpenDocument -> "单独打开"
+        MediaOrigin.DocumentTree -> "授权文件夹"
+    }
 
 private fun windowBrightnessLabel(value: Float): String =
     when {

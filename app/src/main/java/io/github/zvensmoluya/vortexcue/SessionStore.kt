@@ -126,6 +126,15 @@ class SessionStore(context: Context) {
             uri = uri,
             displayName = this[keys.name] ?: uri.lastPathSegment ?: "未命名媒体",
             mimeType = this[keys.mime],
+            title = this[keys.title],
+            artist = this[keys.artist],
+            album = this[keys.album],
+            durationMs = (this[keys.duration] ?: 0L).coerceAtLeast(0L),
+            folder = this[keys.folder],
+            dateAddedSeconds = (this[keys.dateAdded] ?: 0L).coerceAtLeast(0L),
+            origin =
+                runCatching { MediaOrigin.valueOf(this[keys.origin].orEmpty()) }
+                    .getOrDefault(MediaOrigin.OpenDocument),
         )
     }
 
@@ -146,6 +155,13 @@ class SessionStore(context: Context) {
         writeOptional(keys.uri, source?.uri?.toString())
         writeOptional(keys.name, source?.displayName)
         writeOptional(keys.mime, source?.mimeType)
+        writeOptional(keys.title, source?.title)
+        writeOptional(keys.artist, source?.artist)
+        writeOptional(keys.album, source?.album)
+        writeOptional(keys.folder, source?.folder)
+        writeOptional(keys.origin, source?.origin?.name)
+        writeOptional(keys.duration, source?.durationMs)
+        writeOptional(keys.dateAdded, source?.dateAddedSeconds)
     }
 
     private fun MutablePreferences.writeSubtitleSource(
@@ -165,10 +181,24 @@ class SessionStore(context: Context) {
         if (value == null) remove(key) else this[key] = value
     }
 
+    private fun MutablePreferences.writeOptional(
+        key: Preferences.Key<Long>,
+        value: Long?,
+    ) {
+        if (value == null) remove(key) else this[key] = value
+    }
+
     private data class SourceKeys(
         val uri: Preferences.Key<String>,
         val name: Preferences.Key<String>,
         val mime: Preferences.Key<String>,
+        val title: Preferences.Key<String>,
+        val artist: Preferences.Key<String>,
+        val album: Preferences.Key<String>,
+        val duration: Preferences.Key<Long>,
+        val folder: Preferences.Key<String>,
+        val dateAdded: Preferences.Key<Long>,
+        val origin: Preferences.Key<String>,
     )
 
     private data class SubtitleKeys(
@@ -199,6 +229,13 @@ class SessionStore(context: Context) {
                 uri = stringPreferencesKey("${prefix}_uri"),
                 name = stringPreferencesKey("${prefix}_name"),
                 mime = stringPreferencesKey("${prefix}_mime"),
+                title = stringPreferencesKey("${prefix}_title"),
+                artist = stringPreferencesKey("${prefix}_artist"),
+                album = stringPreferencesKey("${prefix}_album"),
+                duration = longPreferencesKey("${prefix}_duration_ms"),
+                folder = stringPreferencesKey("${prefix}_folder"),
+                dateAdded = longPreferencesKey("${prefix}_date_added_seconds"),
+                origin = stringPreferencesKey("${prefix}_origin"),
             )
 
         private fun subtitleKeys(prefix: String) =

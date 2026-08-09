@@ -35,6 +35,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.util.UUID
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -65,6 +66,8 @@ fun VortexCueApp(
     val coroutineScope = rememberCoroutineScope()
     val playback = rememberPlaybackSnapshot(player)
     val sessionStore = remember(context) { SessionStore(context) }
+    val libraryStore = remember(context) { LibraryStore(context) }
+    val mediaScanner = remember(context) { LocalMediaScanner(context) }
     val subtitleCache = remember(context) { SubtitleCache(context) }
     val initialSession = remember(player) { player.currentMediaItem?.toActiveSession() }
 
@@ -87,6 +90,140 @@ fun VortexCueApp(
     var subtitleRequestId by remember { mutableLongStateOf(0L) }
     var notificationPermissionRequested by rememberSaveable { mutableStateOf(false) }
     var pendingAutoPlay by rememberSaveable { mutableStateOf(false) }
+    var libraryState by remember { mutableStateOf(MediaLibraryState()) }
+    var libraryScanJob by remember { mutableStateOf<Job?>(null) }
+    var libraryScanRequestId by remember { mutableLongStateOf(0L) }
+
+    fun scanLibrary(config: LibraryConfig = libraryState.config) {
+        libraryScanRequestId += 1L
+        val requestId = libraryScanRequestId
+        libraryScanJob?.cancel()
+        val hasSystemAccess = context.hasAudioLibraryPermission()
+        libraryState =
+            libraryState.copy(
+                config = config,
+                isLoading = true,
+                hasSystemAccess = hasSystemAccess,
+                errorMessage = null,
+            )
+        libraryScanJob =
+            coroutineScope.launch {
+                val errors = mutableListOf<String>()
+                val scanned = mutableListOf<MediaSourceRef>()
+                if (hasSystemAccess) {
+                    runCatching { mediaScanner.scanSystemAudio() }
+                        .onSuccess(scanned::addAll)
+                        .onFailure { errors += "无法读取系统媒体目录" }
+                }
+                config.folders.forEach { folder ->
+                    runCatching { mediaScanner.scanFolder(folder) }
+                        .onSuccess(scanned::addAll)
+                        .onFailure { errors += "无法读取文件夹：${folder.displayName}" }
+                }
+                scanned += config.manualItems
+                if (requestId != libraryScanRequestId) return@launch
+                libraryState =
+                    libraryState.copy(
+                        items =
+                            scanned
+                                .distinctBy { it.uri.toString() }
+                                .sortedBy { it.displayTitle.lowercase() },
+                        config = config,
+                        isLoading = false,
+                        hasSystemAccess = hasSystemAccess,
+                        errorMessage = errors.firstOrNull(),
+                    )
+            }
+    }
+
+    fun updateLibraryConfig(
+        config: LibraryConfig,
+        rescan: Boolean,
+    ) {
+        libraryState = libraryState.copy(config = config)
+        coroutineScope.launch { libraryStore.save(config) }
+        if (rescan) scanLibrary(config)
+    }
+
+    fun rememberManualMedia(source: MediaSourceRef) {
+        val config = libraryState.config
+        val updated =
+            config.copy(
+                manualItems =
+                    listOf(source) + config.manualItems.filterNot { it.uri == source.uri },
+            )
+        updateLibraryConfig(updated, rescan = true)
+    }
+
+    fun addLibraryFolder(uri: Uri) {
+        contentResolver.persistReadPermission(uri)
+        val folder = LibraryFolderRef(uri, contentResolver.displayName(uri))
+        val config = libraryState.config
+        val updated =
+            config.copy(
+                folders = listOf(folder) + config.folders.filterNot { it.uri == uri },
+            )
+        updateLibraryConfig(updated, rescan = true)
+    }
+
+    fun createPlaylist(
+        name: String,
+        initialItem: MediaSourceRef?,
+    ) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        val config = libraryState.config
+        val playlist =
+            LibraryPlaylist(
+                id = UUID.randomUUID().toString(),
+                name = trimmed,
+                items = initialItem?.let(::listOf).orEmpty(),
+            )
+        updateLibraryConfig(
+            config.copy(playlists = config.playlists + playlist),
+            rescan = false,
+        )
+    }
+
+    fun addToPlaylist(
+        playlistId: String,
+        item: MediaSourceRef,
+    ) {
+        val config = libraryState.config
+        val updated =
+            config.playlists.map { playlist ->
+                if (playlist.id != playlistId || playlist.items.any { it.uri == item.uri }) {
+                    playlist
+                } else {
+                    playlist.copy(items = playlist.items + item)
+                }
+            }
+        updateLibraryConfig(config.copy(playlists = updated), rescan = false)
+    }
+
+    fun removeFromPlaylist(
+        playlistId: String,
+        item: MediaSourceRef,
+    ) {
+        val config = libraryState.config
+        val updated =
+            config.playlists.map { playlist ->
+                if (playlist.id == playlistId) {
+                    playlist.copy(items = playlist.items.filterNot { it.uri == item.uri })
+                } else {
+                    playlist
+                }
+            }
+        updateLibraryConfig(config.copy(playlists = updated), rescan = false)
+    }
+
+    fun deletePlaylist(playlistId: String) {
+        val config = libraryState.config
+        updateLibraryConfig(
+            config.copy(playlists = config.playlists.filterNot { it.id == playlistId }),
+            rescan = false,
+        )
+    }
 
     fun startPlayer() {
         if (player.playbackState == Player.STATE_ENDED) player.seekTo(0L)
@@ -178,6 +315,7 @@ fun VortexCueApp(
                 uri = uri,
                 displayName = contentResolver.displayName(uri),
                 mimeType = contentResolver.safeMimeType(uri),
+                origin = MediaOrigin.OpenDocument,
             )
         val requestId = mediaRequestId
         val relinkedSession =
@@ -201,14 +339,19 @@ fun VortexCueApp(
             coroutineScope.launch {
                 try {
                     ensureMediaReadable(contentResolver, source)
+                    val readySource = mediaScanner.inspect(source)
                     if (requestId != mediaRequestId) return@launch
+                    rememberManualMedia(readySource)
                     when (target) {
                         MediaPickTarget.Draft ->
-                            draft = draft.copy(media = DraftMedia.Ready(source))
+                            draft = draft.copy(media = DraftMedia.Ready(readySource))
                         MediaPickTarget.LastSession ->
                             relinkedSession?.let { session ->
                                 val ready =
-                                    session.copy(mediaAvailability = MediaAvailability.Ready)
+                                    session.copy(
+                                        session = session.session.copy(media = readySource),
+                                        mediaAvailability = MediaAvailability.Ready,
+                                    )
                                 lastSession = ready
                                 sessionStore.saveLastSession(ready)
                                 resumeSession(ready)
@@ -282,6 +425,12 @@ fun VortexCueApp(
     }
 
     LaunchedEffect(Unit) {
+        val storedLibrary = runCatching { libraryStore.load() }.getOrDefault(LibraryConfig())
+        libraryState =
+            libraryState.copy(
+                config = storedLibrary,
+                hasSystemAccess = context.hasAudioLibraryPermission(),
+            )
         val stored =
             runCatching { sessionStore.load() }
                 .getOrElse {
@@ -378,6 +527,7 @@ fun VortexCueApp(
             }
         }
         restorationCompleted = true
+        scanLibrary(storedLibrary)
     }
 
     LaunchedEffect(restorationCompleted, draft) {
@@ -451,6 +601,14 @@ fun VortexCueApp(
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             uri?.let(::loadSubtitle)
         }
+    val folderPicker =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            uri?.let(::addLibraryFolder)
+        }
+    val libraryPermissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+            scanLibrary()
+        }
 
     val glowActive = destination == AppDestination.Player && playerSurface == PlayerSurface.Glow
 
@@ -467,6 +625,7 @@ fun VortexCueApp(
         onDispose {
             mediaLoadJob?.cancel()
             subtitleLoadJob?.cancel()
+            libraryScanJob?.cancel()
             onPlaybackActiveChanged(false)
             onImmersiveModeChanged(false)
             onWindowBrightnessChanged(null)
@@ -503,11 +662,50 @@ fun VortexCueApp(
                 lastSession = lastSession,
                 playback = playback,
                 displayProfile = displayProfile,
+                library = libraryState,
                 onPickMedia = {
                     mediaPickTarget = MediaPickTarget.Draft
                     mediaPicker.launch(arrayOf("audio/*", "video/*"))
                 },
                 onPickSubtitle = { subtitlePicker.launch(arrayOf("*/*")) },
+                onRequestLibraryAccess = {
+                    if (context.hasAudioLibraryPermission()) {
+                        scanLibrary()
+                    } else {
+                        libraryPermissionLauncher.launch(requiredAudioLibraryPermission())
+                    }
+                },
+                onRefreshLibrary = { scanLibrary() },
+                onAddFolder = { folderPicker.launch(null) },
+                onPlayLibraryItems = { items, index ->
+                    items.getOrNull(index)?.let { media ->
+                        player.setMediaItem(media.toMediaItem())
+                        player.prepare()
+                        val session =
+                            ActiveSession(
+                                media = media,
+                                subtitle =
+                                    activeSession
+                                        ?.takeIf { it.media.uri == media.uri }
+                                        ?.subtitle,
+                                subtitleOffsetMs =
+                                    activeSession
+                                        ?.takeIf { it.media.uri == media.uri }
+                                        ?.subtitleOffsetMs
+                                        ?: 0L,
+                            )
+                        activeSession = session
+                        draft = session.toDraft()
+                        playerSurface = PlayerSurface.Normal
+                        destination = AppDestination.Player
+                        playWithNotificationPermission()
+                        persistSession(session)
+                    }
+                },
+                onCreatePlaylist = ::createPlaylist,
+                onAddToPlaylist = ::addToPlaylist,
+                onRemoveFromPlaylist = ::removeFromPlaylist,
+                onDeletePlaylist = ::deletePlaylist,
                 onRemoveSubtitle = {
                     cancelSubtitleLoad()
                     draft = draft.copy(subtitle = DraftSubtitle.None)
@@ -656,8 +854,9 @@ private fun MediaSourceRef.toMediaItem(): MediaItem =
         .setUri(uri)
         .setMediaMetadata(
             MediaMetadata.Builder()
-                .setTitle(displayName)
-                .setArtist("VortexCue")
+                .setTitle(displayTitle)
+                .setArtist(displayArtist)
+                .setAlbumTitle(album)
                 .build(),
         )
         .build()
@@ -697,6 +896,9 @@ private fun MediaItem.toActiveSession(): ActiveSession? {
                 uri = uri,
                 displayName = displayName,
                 mimeType = localConfiguration?.mimeType,
+                title = mediaMetadata.title?.toString(),
+                artist = mediaMetadata.artist?.toString(),
+                album = mediaMetadata.albumTitle?.toString(),
             ),
         subtitle = null,
     )
