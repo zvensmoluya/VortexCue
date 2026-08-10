@@ -1286,10 +1286,11 @@ private fun NowPlayingBar(
     onPlayPause: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val availability =
-        if (activeSession != null) MediaAvailability.Ready else lastSession?.mediaAvailability
     val matchingLastSession =
         lastSession?.takeIf { it.session.media.uri == session.media.uri }
+    val availability =
+        matchingLastSession?.mediaAvailability
+            ?: if (activeSession != null) MediaAvailability.Ready else null
     val lastSurface = matchingLastSession?.lastSurface?.asLastSurface() ?: PlayerSurface.Normal
     val positionMs =
         if (activeSession != null) playback.positionMs else matchingLastSession?.positionMs ?: 0L
@@ -1321,11 +1322,17 @@ private fun NowPlayingBar(
                 )
             }
             TextButton(
-                onClick = if (activeSession == null) onContinue else onPlayPause,
+                onClick =
+                    if (activeSession == null || availability is MediaAvailability.Unavailable) {
+                        onContinue
+                    } else {
+                        onPlayPause
+                    },
                 enabled = availability != MediaAvailability.Checking,
             ) {
                 Text(
                     when {
+                        availability is MediaAvailability.Unavailable -> "重新定位"
                         activeSession == null && lastSurface == PlayerSurface.Glow -> "继续微光"
                         activeSession == null -> "继续"
                         playback.isPlaying -> "暂停"

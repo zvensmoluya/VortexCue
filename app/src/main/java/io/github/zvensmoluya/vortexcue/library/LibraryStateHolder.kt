@@ -571,6 +571,33 @@ internal class LibraryStateHolder(
         )
     }
 
+    fun updateEmbeddedTextTracks(
+        media: MediaSourceRef,
+        candidates: List<TimedTextTrackCandidate>,
+    ) {
+        val config = state.config
+        val updatedConfig = config.withEmbeddedTextCandidates(media, candidates)
+        if (updatedConfig != config) updateConfig(updatedConfig)
+    }
+
+    fun updateMediaAvailability(
+        media: MediaSourceRef,
+        availability: ContentAvailability,
+    ) {
+        val config = state.config
+        val updatedConfig = config.withMediaAvailability(media, availability)
+        if (updatedConfig != config) updateConfig(updatedConfig)
+    }
+
+    fun relinkMedia(
+        previous: MediaSourceRef,
+        replacement: MediaSourceRef,
+    ) {
+        val config = state.config
+        val updatedConfig = config.relinkMedia(previous, replacement)
+        if (updatedConfig != config) updateConfig(updatedConfig, repartition = true)
+    }
+
     private fun updateConfig(
         config: LibraryConfig,
         rescan: Boolean = false,

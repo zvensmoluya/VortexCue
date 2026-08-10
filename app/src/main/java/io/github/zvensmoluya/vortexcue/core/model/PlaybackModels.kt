@@ -132,6 +132,21 @@ data class RestorableSession(
     val lastSurface: PlayerSurface = PlayerSurface.Normal,
 )
 
+internal fun RestorableSession.relinkMedia(
+    replacement: MediaSourceRef,
+    availability: MediaAvailability,
+): RestorableSession {
+    val previousUri = session.media.uri
+    return copy(
+        session = session.copy(media = replacement),
+        mediaAvailability = availability,
+        queue =
+            queue.map { queued ->
+                if (queued.uri == previousUri) replacement else queued
+            },
+    )
+}
+
 sealed interface MediaAvailability {
     data object Checking : MediaAvailability
 

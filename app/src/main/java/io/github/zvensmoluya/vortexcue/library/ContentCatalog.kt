@@ -140,6 +140,7 @@ internal fun TextTrackCatalogState.mergeTracks(
                     ?.takeUnless { it == primaryTrackId },
             rejectedTrackIds = activeText.rejectedTrackIds.distinct(),
         )
+    selection = normalizeEmbeddedSelection(merged, selection, TextTrackSlot.Primary)
     if (
         selection.primaryMode == TextSelectionMode.Automatic &&
             selection.primaryTrackId == null
@@ -161,7 +162,7 @@ internal fun TextTrackCatalogState.selectManualTrack(
     track: TimedTextTrack?,
 ): TextTrackCatalogState {
     val merged = if (track == null) this else mergeTracks(listOf(track))
-    val selection =
+    val requestedSelection =
         when (slot) {
             TextTrackSlot.Primary ->
                 merged.activeText.copy(
@@ -179,10 +180,44 @@ internal fun TextTrackCatalogState.selectManualTrack(
                     secondaryMode = TextSelectionMode.Manual,
                 )
         }
+    val selection = normalizeEmbeddedSelection(merged.tracks, requestedSelection, slot)
     return merged.copy(
         tracks = sortTimedTextTracks(merged.tracks, selection),
         activeText = selection,
     )
+}
+
+internal fun TextTrackCatalogState.reconcileEmbeddedTracks(
+    incoming: List<TimedTextTrack>,
+): TextTrackCatalogState {
+    var reconciled = mergeTracks(incoming)
+    val discoveredIds = incoming.map(TimedTextTrack::stableId).toSet()
+    val unavailableIds =
+        reconciled.tracks
+            .filter {
+                it.origin == TimedTextOrigin.Embedded && it.stableId !in discoveredIds
+            }.map(TimedTextTrack::stableId)
+    unavailableIds.forEach { trackId ->
+        reconciled =
+            reconciled.withTrackReadiness(
+                trackId = trackId,
+                readiness = TimedTextReadiness.Unreadable,
+                failureMessage = "当前媒体未发现此内嵌文字轨",
+            )
+    }
+    incoming
+        .filter {
+            it.readiness in
+                setOf(TimedTextReadiness.Unreadable, TimedTextReadiness.ParseFailed)
+        }.forEach { track ->
+            reconciled =
+                reconciled.withTrackReadiness(
+                    trackId = track.stableId,
+                    readiness = track.readiness,
+                    failureMessage = track.failureMessage,
+                )
+        }
+    return reconciled
 }
 
 internal fun TextTrackCatalogState.restoreAutomaticTrack(
@@ -344,6 +379,90 @@ internal fun LibraryConfig.withMediaSnapshots(
             ),
     )
 
+internal fun LibraryConfig.withMediaAvailability(
+    media: MediaSourceRef,
+    availability: ContentAvailability,
+): LibraryConfig =
+    withMediaSnapshots(listOf(media), availability)
+
+internal fun LibraryConfig.relinkMedia(
+    previous: MediaSourceRef,
+    replacement: MediaSourceRef,
+): LibraryConfig {
+    if (previous.uri == replacement.uri) {
+        return withMediaSnapshots(listOf(replacement), ContentAvailability.Available)
+    }
+    val previousUriValue = previous.uri.toString()
+    val replacementUriValue = replacement.uri.toString()
+    val previousUnit = contentUnitFor(previous)
+    val replacementUnit = contentUnitFor(replacement)
+    val relocatedUnit =
+        when {
+            previousUnit != null -> {
+                val relocated = previousUnit.relinkTo(replacement)
+                replacementUnit?.let { existing ->
+                    relocated.withTextCatalogState(
+                        relocated.textCatalogState().mergeTracks(existing.timedTextTracks),
+                    )
+                } ?: relocated
+            }
+            replacementUnit != null ->
+                replacementUnit.copy(
+                    media = replacement,
+                    sourceId = replacement.sourceId,
+                    availability = ContentAvailability.Available,
+                )
+            else ->
+                PlayableContentUnit(
+                    stableId = stableContentId(replacementUriValue),
+                    media = replacement,
+                    availability = ContentAvailability.Available,
+                )
+        }
+    val wasIncluded = previousUriValue in includedUris
+    val wasIgnored = previousUriValue in ignoredUris
+    val updatedIncluded =
+        includedUris
+            .replaceUri(previousUriValue, replacementUriValue)
+            .let { values ->
+                if (wasIncluded) (values + replacementUriValue).distinct() else values
+            }
+    val updatedIgnored =
+        ignoredUris
+            .replaceUri(previousUriValue, replacementUriValue)
+            .let { values ->
+                when {
+                    wasIncluded -> values.filterNot { it == replacementUriValue }
+                    wasIgnored && replacementUriValue !in updatedIncluded ->
+                        (values + replacementUriValue).distinct()
+                    else -> values
+                }
+            }
+    return copy(
+        contentUnits =
+            contentUnits.filterNot {
+                it.media.uri == previous.uri || it.media.uri == replacement.uri
+            } + relocatedUnit,
+        catalogItems = catalogItems.replaceMedia(previous, replacement),
+        recentItems = recentItems.replaceMedia(previous, replacement),
+        playlists =
+            playlists.map { playlist ->
+                playlist.copy(items = playlist.items.replaceMedia(previous, replacement))
+            },
+        subtitleAssociations =
+            subtitleAssociations
+                .map { association ->
+                    if (association.mediaUri == previous.uri) {
+                        association.copy(mediaUri = replacement.uri)
+                    } else {
+                        association
+                    }
+                }.distinctBy { it.mediaUri.toString() to it.subtitle.uri.toString() },
+        includedUris = updatedIncluded,
+        ignoredUris = updatedIgnored,
+    )
+}
+
 internal fun LibraryConfig.withTimedTextCandidates(
     candidates: List<TimedTextTrackCandidate>,
 ): LibraryConfig {
@@ -355,6 +474,27 @@ internal fun LibraryConfig.withTimedTextCandidates(
                 val tracks = candidatesByMedia[unit.media.uri.toString()]?.map { it.track }
                     ?: return@map unit
                 unit.withTextCatalogState(unit.textCatalogState().mergeTracks(tracks))
+            },
+    )
+}
+
+internal fun LibraryConfig.withEmbeddedTextCandidates(
+    media: MediaSourceRef,
+    candidates: List<TimedTextTrackCandidate>,
+): LibraryConfig {
+    val withMedia = withMediaSnapshots(listOf(media), ContentAvailability.Available)
+    val embeddedTracks =
+        candidates
+            .filter { it.mediaUriValue == media.uri.toString() }
+            .map(TimedTextTrackCandidate::track)
+            .filter { it.origin == TimedTextOrigin.Embedded }
+    return withMedia.copy(
+        contentUnits =
+            withMedia.contentUnits.map { unit ->
+                if (unit.media.uri != media.uri) return@map unit
+                unit.withTextCatalogState(
+                    unit.textCatalogState().reconcileEmbeddedTracks(embeddedTracks),
+                )
             },
     )
 }
@@ -483,6 +623,46 @@ private fun PlayableContentUnit.withTextCatalogState(
 ): PlayableContentUnit =
     copy(timedTextTracks = state.tracks, activeText = state.activeText)
 
+private fun PlayableContentUnit.relinkTo(replacement: MediaSourceRef): PlayableContentUnit {
+    val replacementContentId = stableContentId(replacement.uri.toString())
+    val remappedCatalog = textCatalogState().rekeyForContent(replacementContentId)
+    return copy(
+        stableId = replacementContentId,
+        media = replacement,
+        sourceId = replacement.sourceId,
+        timedTextTracks = remappedCatalog.tracks,
+        activeText = remappedCatalog.activeText,
+        availability = ContentAvailability.Available,
+    )
+}
+
+internal fun TextTrackCatalogState.rekeyForContent(contentId: String): TextTrackCatalogState {
+    val remappedTracks =
+        tracks.map { track ->
+            track.copy(
+                stableId =
+                    stableTimedTextTrackId(
+                        contentId = contentId,
+                        origin = track.origin,
+                        locatorIdentity = track.locator.stableIdentity,
+                    ),
+            )
+        }
+    val remappedIds =
+        tracks.map(TimedTextTrack::stableId).zip(remappedTracks.map(TimedTextTrack::stableId)).toMap()
+    val remappedSelection =
+        activeText.copy(
+            primaryTrackId = activeText.primaryTrackId?.let(remappedIds::get),
+            secondaryTrackId = activeText.secondaryTrackId?.let(remappedIds::get),
+            rejectedTrackIds =
+                activeText.rejectedTrackIds.map { remappedIds[it] ?: it }.distinct(),
+        )
+    return TextTrackCatalogState(
+        tracks = sortTimedTextTracks(remappedTracks, remappedSelection),
+        activeText = remappedSelection,
+    )
+}
+
 private fun SubtitleSourceRef.toTimedTextLocator(): TimedTextLocator =
     TimedTextLocator(
         uriValue = uri.toString(),
@@ -534,10 +714,14 @@ private fun chooseAutomaticPrimary(
     tracks: List<TimedTextTrack>,
     selection: ActiveTextSelection,
 ): String? {
+    val secondaryIsEmbedded =
+        tracks.firstOrNull { it.stableId == selection.secondaryTrackId }?.origin ==
+            TimedTextOrigin.Embedded
     val usable =
         tracks.filter {
             it.stableId !in selection.rejectedTrackIds &&
                 it.stableId != selection.secondaryTrackId &&
+                (!secondaryIsEmbedded || it.origin != TimedTextOrigin.Embedded) &&
                 it.readiness !in
                 setOf(TimedTextReadiness.Unreadable, TimedTextReadiness.ParseFailed)
         }
@@ -548,6 +732,33 @@ private fun chooseAutomaticPrimary(
     if (embeddedDefaults.size == 1) return embeddedDefaults.single().stableId
     return usable.singleOrNull { it.matchBasis == TimedTextMatchBasis.ExactStem }?.stableId
         ?.takeIf { usable.size == 1 }
+}
+
+private fun normalizeEmbeddedSelection(
+    tracks: List<TimedTextTrack>,
+    selection: ActiveTextSelection,
+    preferredSlot: TextTrackSlot,
+): ActiveTextSelection {
+    val tracksById = tracks.associateBy(TimedTextTrack::stableId)
+    val primaryIsEmbedded =
+        tracksById[selection.primaryTrackId]?.origin == TimedTextOrigin.Embedded
+    val secondaryIsEmbedded =
+        tracksById[selection.secondaryTrackId]?.origin == TimedTextOrigin.Embedded
+    if (!primaryIsEmbedded || !secondaryIsEmbedded) return selection
+
+    return when (preferredSlot) {
+        TextTrackSlot.Primary -> selection.copy(secondaryTrackId = null)
+        TextTrackSlot.Secondary -> {
+            var normalized = selection.copy(primaryTrackId = null)
+            if (normalized.primaryMode == TextSelectionMode.Automatic) {
+                normalized =
+                    normalized.copy(
+                        primaryTrackId = chooseAutomaticPrimary(tracks, normalized),
+                    )
+            }
+            normalized
+        }
+    }
 }
 
 private fun sortTimedTextTracks(
@@ -595,3 +806,16 @@ private fun inferRolesFromDisplayName(displayName: String): List<TimedTextRole> 
         .split('.')
         .mapNotNull(::timedTextRole)
         .distinct()
+
+private fun List<MediaSourceRef>.replaceMedia(
+    previous: MediaSourceRef,
+    replacement: MediaSourceRef,
+): List<MediaSourceRef> =
+    map { source -> if (source.uri == previous.uri) replacement else source }
+        .distinctBy { it.uri.toString() }
+
+private fun List<String>.replaceUri(
+    previousUriValue: String,
+    replacementUriValue: String,
+): List<String> =
+    map { value -> if (value == previousUriValue) replacementUriValue else value }.distinct()

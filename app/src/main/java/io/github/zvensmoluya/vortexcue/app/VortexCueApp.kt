@@ -34,6 +34,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import io.github.zvensmoluya.vortexcue.core.model.*
@@ -81,6 +82,7 @@ fun VortexCueApp(
     val contentResolver = context.contentResolver
     val coroutineScope = rememberCoroutineScope()
     val playback = rememberPlaybackSnapshot(player)
+    val embeddedTextRuntime = rememberEmbeddedTextRuntimeState(player)
     var sleepTimerRevision by remember { mutableIntStateOf(0) }
     val sleepTimer = rememberSleepTimerState(player, sleepTimerRevision)
     val sessionStore = remember(context) { SessionStore(context) }
@@ -118,6 +120,13 @@ fun VortexCueApp(
     var pendingAutoPlay by rememberSaveable { mutableStateOf(false) }
     var openImportOnHome by rememberSaveable { mutableStateOf(false) }
     val libraryState = libraryStateHolder.state
+    val selectedEmbeddedTrackId =
+        activeSession?.media?.let { media ->
+            TextTrackSlot.entries
+                .mapNotNull { slot -> libraryState.config.activeTextTrack(media, slot) }
+                .singleOrNull { it.origin == TimedTextOrigin.Embedded }
+                ?.stableId
+        }
     fun startPlayer() {
         if (player.playbackState == Player.STATE_ENDED) player.seekTo(0L)
         if (player.playbackState == Player.STATE_IDLE && player.mediaItemCount > 0) {
@@ -231,14 +240,11 @@ fun VortexCueApp(
                 sourceId = LibrarySourceIds.LooseFiles,
             )
         val requestId = mediaRequestId
+        val relinkedFrom =
+            if (target == MediaPickTarget.LastSession) lastSession?.session?.media else null
         val relinkedSession =
             if (target == MediaPickTarget.LastSession) {
-                lastSession?.let { saved ->
-                    saved.copy(
-                        session = saved.session.copy(media = source),
-                        mediaAvailability = MediaAvailability.Checking,
-                    )
-                }
+                lastSession?.relinkMedia(source, MediaAvailability.Checking)
             } else {
                 null
             }
@@ -259,11 +265,11 @@ fun VortexCueApp(
                             draft = draft.copy(media = DraftMedia.Ready(readySource))
                         MediaPickTarget.LastSession ->
                             relinkedSession?.let { session ->
+                                relinkedFrom?.let { previous ->
+                                    libraryStateHolder.relinkMedia(previous, readySource)
+                                }
                                 val ready =
-                                    session.copy(
-                                        session = session.session.copy(media = readySource),
-                                        mediaAvailability = MediaAvailability.Ready,
-                                    )
+                                    session.relinkMedia(readySource, MediaAvailability.Ready)
                                 lastSession = ready
                                 sessionStore.saveLastSession(ready)
                                 libraryStateHolder.rememberRecentMedia(readySource)
@@ -399,37 +405,8 @@ fun VortexCueApp(
         }
     }
 
-    fun selectSessionTrack(
-        slot: TextTrackSlot,
-        trackId: String?,
-    ) {
-        val media = activeSession?.media ?: return
-        cancelTrackLoad(slot)
-        val track = libraryStateHolder.selectManualTextTrack(media, slot, trackId)
-        updateSessionTrack(media, slot, null)
-        if (
-            slot == TextTrackSlot.Primary &&
-                libraryStateHolder.state.config.activeTextTrack(
-                    media,
-                    TextTrackSlot.Secondary,
-                ) == null
-        ) {
-            cancelTrackLoad(TextTrackSlot.Secondary)
-            updateSessionTrack(media, TextTrackSlot.Secondary, null)
-        }
-        track?.let { loadSessionTrack(media, slot, it) }
-    }
-
-    fun restoreAutomaticSessionTrack(slot: TextTrackSlot) {
-        val media = activeSession?.media ?: return
-        cancelTrackLoad(slot)
-        val track = libraryStateHolder.restoreAutomaticTextTrack(media, slot)
-        updateSessionTrack(media, slot, null)
-        track?.let { loadSessionTrack(media, slot, it) }
-    }
-
     fun restoreAssociatedTextTracks(media: MediaSourceRef) {
-        val config = libraryStateHolder.state.config
+        var config = libraryStateHolder.state.config
         val primaryTrack =
             config.activeTextTrack(media, TextTrackSlot.Primary)
                 ?: config.activePrimarySubtitleSource(media)?.let { source ->
@@ -439,25 +416,48 @@ fun VortexCueApp(
                         subtitle = source,
                     )
                 }
+        if (primaryTrack != null) config = libraryStateHolder.state.config
         val secondaryTrack = config.activeTextTrack(media, TextTrackSlot.Secondary)
         listOf(
             TextTrackSlot.Primary to primaryTrack,
             TextTrackSlot.Secondary to secondaryTrack,
         ).forEach { (slot, track) ->
-            if (track == null) return@forEach
             val loaded =
                 when (slot) {
                     TextTrackSlot.Primary -> activeSession?.subtitle
                     TextTrackSlot.Secondary -> activeSession?.secondarySubtitle
                 }
+            val source = track?.toSubtitleSourceRef()
+            if (source == null) {
+                cancelTrackLoad(slot)
+                if (loaded != null) updateSessionTrack(media, slot, null)
+                return@forEach
+            }
             if (
-                loaded?.source?.uri?.toString() == track.locator.uriValue &&
+                loaded?.source?.uri == source.uri &&
                     track.readiness == TimedTextReadiness.Ready
             ) {
                 return@forEach
             }
             loadSessionTrack(media, slot, track)
         }
+    }
+
+    fun selectSessionTrack(
+        slot: TextTrackSlot,
+        trackId: String?,
+    ) {
+        val media = activeSession?.media ?: return
+        cancelTrackLoad(slot)
+        libraryStateHolder.selectManualTextTrack(media, slot, trackId)
+        restoreAssociatedTextTracks(media)
+    }
+
+    fun restoreAutomaticSessionTrack(slot: TextTrackSlot) {
+        val media = activeSession?.media ?: return
+        cancelTrackLoad(slot)
+        libraryStateHolder.restoreAutomaticTextTrack(media, slot)
+        restoreAssociatedTextTracks(media)
     }
 
     fun loadSubtitle(
@@ -485,18 +485,7 @@ fun VortexCueApp(
                     slot = slot,
                     subtitle = source,
                 )
-            updateSessionTrack(session.media, slot, null)
-            if (
-                slot == TextTrackSlot.Primary &&
-                    libraryStateHolder.state.config.activeTextTrack(
-                        session.media,
-                        TextTrackSlot.Secondary,
-                    ) == null
-            ) {
-                cancelTrackLoad(TextTrackSlot.Secondary)
-                updateSessionTrack(session.media, TextTrackSlot.Secondary, null)
-            }
-            track?.let { loadSessionTrack(session.media, slot, it) }
+            if (track != null) restoreAssociatedTextTracks(session.media)
             return
         }
         val requestId = subtitleRequestId
@@ -662,17 +651,31 @@ fun VortexCueApp(
                             MediaAvailability.Unavailable(mediaAccessMessage(it))
                         } ?: MediaAvailability.Ready,
                 )
+            libraryStateHolder.updateMediaAvailability(
+                storedLast.media,
+                if (mediaError == null) {
+                    ContentAvailability.Available
+                } else {
+                    ContentAvailability.Unavailable
+                },
+            )
             lastSession = restored
             if (initialSession?.media?.uri == storedLast.media.uri) {
-                activeSession =
-                    initialSession.copy(
-                        subtitle = loadedSubtitle,
-                        secondarySubtitle = loadedSecondarySubtitle,
-                        subtitleOffsetMs = storedLast.subtitleOffsetMs,
-                    )
-                player.setPlaybackSpeed(storedLast.playbackSpeed)
-                playerSurface =
-                    resolveResumeSurface(storedLast.lastSurface, glowCalibrationCompleted)
+                if (mediaError == null) {
+                    activeSession =
+                        initialSession.copy(
+                            subtitle = loadedSubtitle,
+                            secondarySubtitle = loadedSecondarySubtitle,
+                            subtitleOffsetMs = storedLast.subtitleOffsetMs,
+                        )
+                    player.setPlaybackSpeed(storedLast.playbackSpeed)
+                    playerSurface =
+                        resolveResumeSurface(storedLast.lastSurface, glowCalibrationCompleted)
+                } else {
+                    player.pause()
+                    activeSession = null
+                    destination = AppDestination.Home
+                }
             }
         }
 
@@ -732,6 +735,36 @@ fun VortexCueApp(
             activeSession?.media?.let(::restoreAssociatedTextTracks)
         }
     }
+    LaunchedEffect(
+        restorationCompleted,
+        playback.playbackState,
+        activeSession?.media?.uri,
+        embeddedTextRuntime.discoveryRevision,
+    ) {
+        if (
+            !restorationCompleted ||
+                playback.playbackState != Player.STATE_READY ||
+                !embeddedTextRuntime.isDiscoveryComplete
+        ) {
+            return@LaunchedEffect
+        }
+        val media = activeSession?.media ?: return@LaunchedEffect
+        if (embeddedTextRuntime.mediaUriValue != media.uri.toString()) return@LaunchedEffect
+        libraryStateHolder.updateEmbeddedTextTracks(media, embeddedTextRuntime.candidates)
+    }
+    LaunchedEffect(
+        activeSession?.media?.uri,
+        embeddedTextRuntime.mediaUriValue,
+        embeddedTextRuntime.discoveryRevision,
+        selectedEmbeddedTrackId,
+    ) {
+        val media = activeSession?.media ?: return@LaunchedEffect
+        if (embeddedTextRuntime.mediaUriValue != media.uri.toString()) return@LaunchedEffect
+        player.applyEmbeddedTextTrackSelection(
+            tracks = embeddedTextRuntime.tracks,
+            selectedTrackId = selectedEmbeddedTrackId,
+        )
+    }
     LaunchedEffect(restorationCompleted, displayProfile) {
         if (restorationCompleted) {
             delay(300L)
@@ -774,6 +807,28 @@ fun VortexCueApp(
                     ) {
                         persistSession(session)
                     }
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    val failedSession = session ?: return
+                    if (!isMediaAccessErrorCode(error.errorCode)) return
+                    if (
+                        player.currentMediaItem?.localConfiguration?.uri !=
+                            failedSession.media.uri
+                    ) {
+                        return
+                    }
+                    val message = "媒体文件不可访问，请重新选择"
+                    libraryStateHolder.updateMediaAvailability(
+                        failedSession.media,
+                        ContentAvailability.Unavailable,
+                    )
+                    val unavailable =
+                        currentRestorableSession(failedSession).copy(
+                            mediaAvailability = MediaAvailability.Unavailable(message),
+                        )
+                    lastSession = unavailable
+                    coroutineScope.launch { sessionStore.saveLastSession(unavailable) }
                 }
 
                 override fun onMediaItemTransition(
@@ -1041,9 +1096,17 @@ fun VortexCueApp(
                 },
                 onContinue = {
                     val currentSession = activeSession
-                    if (currentSession != null) {
+                    val saved = lastSession
+                    if (
+                        saved?.mediaAvailability is MediaAvailability.Unavailable &&
+                            (currentSession == null ||
+                                currentSession.media.uri == saved.session.media.uri)
+                    ) {
+                        mediaPickTarget = MediaPickTarget.LastSession
+                        mediaPicker.launch(arrayOf("audio/*", "video/*"))
+                    } else if (currentSession != null) {
                         val lastSurface =
-                            lastSession
+                            saved
                                 ?.takeIf { it.session.media.uri == currentSession.media.uri }
                                 ?.lastSurface
                                 ?: PlayerSurface.Normal
@@ -1051,9 +1114,9 @@ fun VortexCueApp(
                             resolveResumeSurface(lastSurface, glowCalibrationCompleted)
                         destination = AppDestination.Player
                     } else {
-                        lastSession?.let { saved ->
-                            when (saved.mediaAvailability) {
-                                MediaAvailability.Ready -> resumeSession(saved)
+                        saved?.let { restorable ->
+                            when (restorable.mediaAvailability) {
+                                MediaAvailability.Ready -> resumeSession(restorable)
                                 MediaAvailability.Checking -> Unit
                                 is MediaAvailability.Unavailable -> {
                                     mediaPickTarget = MediaPickTarget.LastSession
@@ -1082,6 +1145,8 @@ fun VortexCueApp(
                     showGestureHint = !glowGestureHintSeen,
                     isCollected = libraryState.config.isCollected(session.media),
                     contentUnit = libraryState.config.contentUnitFor(session.media),
+                    embeddedCueTrackId = embeddedTextRuntime.cueTrackId,
+                    embeddedCueText = embeddedTextRuntime.cueText,
                     onPlayPause = ::togglePlayback,
                     onSurfaceChanged = { requested ->
                         playerSurface =
@@ -1123,6 +1188,11 @@ fun VortexCueApp(
                     onOpenSources = {
                         homeSection = HomeSection.Manage
                         destination = AppDestination.Home
+                    },
+                    onRelinkMedia = {
+                        activeSession?.let(::persistSession)
+                        mediaPickTarget = MediaPickTarget.LastSession
+                        mediaPicker.launch(arrayOf("audio/*", "video/*"))
                     },
                     onToggleCollected = {
                         if (libraryState.config.isCollected(session.media)) {
@@ -1330,6 +1400,14 @@ internal fun resolveRestorableDuration(
     currentDurationMs.takeIf { it > 0L }
         ?: previousDurationMs?.coerceAtLeast(0L)
         ?: 0L
+
+internal fun isMediaAccessErrorCode(errorCode: Int): Boolean =
+    errorCode in
+        setOf(
+            PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
+            PlaybackException.ERROR_CODE_IO_NO_PERMISSION,
+        )
 
 internal fun resolveResumeSurface(
     lastSurface: PlayerSurface,

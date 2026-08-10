@@ -77,10 +77,13 @@ internal fun PlayerScreen(
     showGestureHint: Boolean,
     isCollected: Boolean,
     contentUnit: PlayableContentUnit?,
+    embeddedCueTrackId: String?,
+    embeddedCueText: String?,
     onPlayPause: () -> Unit,
     onSurfaceChanged: (PlayerSurface) -> Unit,
     onBackToLibrary: () -> Unit,
     onOpenSources: () -> Unit,
+    onRelinkMedia: () -> Unit,
     onToggleCollected: () -> Unit,
     onSelectTextTrack: (TextTrackSlot, String?) -> Unit,
     onRestoreAutomaticTextTrack: (TextTrackSlot) -> Unit,
@@ -117,6 +120,26 @@ internal fun PlayerScreen(
         } else {
             null
         }
+    val selectedPrimaryTrack = contentUnit?.selectedTrack(TextTrackSlot.Primary)
+    val selectedSecondaryTrack = contentUnit?.selectedTrack(TextTrackSlot.Secondary)
+    val primaryEmbeddedTrack =
+        selectedPrimaryTrack?.takeIf { it.origin == TimedTextOrigin.Embedded }
+    val secondaryEmbeddedTrack =
+        selectedSecondaryTrack?.takeIf { it.origin == TimedTextOrigin.Embedded }
+    val hasPrimaryText = session.subtitle != null || primaryEmbeddedTrack != null
+    val hasSecondaryText = session.secondarySubtitle != null || secondaryEmbeddedTrack != null
+    val primaryText =
+        if (primaryEmbeddedTrack != null) {
+            embeddedCueText.takeIf { embeddedCueTrackId == primaryEmbeddedTrack.stableId }
+        } else {
+            currentCue?.text
+        }
+    val secondaryText =
+        if (secondaryEmbeddedTrack != null) {
+            embeddedCueText.takeIf { embeddedCueTrackId == secondaryEmbeddedTrack.stableId }
+        } else {
+            secondaryCue?.text
+        }
 
     when (surface) {
         PlayerSurface.Normal ->
@@ -126,12 +149,16 @@ internal fun PlayerScreen(
                 playback = playback,
                 cuePositionMs = cuePositionMs,
                 currentCue = currentCue,
-                secondaryCue = secondaryCue,
+                primaryText = primaryText,
+                secondaryText = secondaryText,
+                hasPrimaryText = hasPrimaryText,
+                hasSecondaryText = hasSecondaryText,
                 sleepTimer = sleepTimer,
                 isCollected = isCollected,
                 onPlayPause = onPlayPause,
                 onBackToLibrary = onBackToLibrary,
                 onOpenSources = onOpenSources,
+                onRelinkMedia = onRelinkMedia,
                 onToggleCollected = onToggleCollected,
                 onManageTextTracks = { textTracksVisible = true },
                 onEnterGlow = { onSurfaceChanged(PlayerSurface.Glow) },
@@ -155,13 +182,16 @@ internal fun PlayerScreen(
                 player = player,
                 session = session,
                 playback = playback,
-                currentCue = currentCue,
-                secondaryCue = secondaryCue,
+                primaryText = primaryText,
+                secondaryText = secondaryText,
+                hasPrimaryText = hasPrimaryText,
+                hasSecondaryText = hasSecondaryText,
                 displayProfile = displayProfile,
                 sleepTimer = sleepTimer,
                 showGestureHint = showGestureHint,
                 onPlayPause = onPlayPause,
                 onExitGlow = { onSurfaceChanged(PlayerSurface.Normal) },
+                onRelinkMedia = onRelinkMedia,
                 onManageTextTracks = { textTracksVisible = true },
                 onSubtitleOffsetChanged = onSubtitleOffsetChanged,
                 onGestureHintSeen = onGestureHintSeen,
@@ -328,12 +358,16 @@ private fun NormalPlayer(
     playback: PlaybackSnapshot,
     cuePositionMs: Long,
     currentCue: SubtitleCue?,
-    secondaryCue: SubtitleCue?,
+    primaryText: String?,
+    secondaryText: String?,
+    hasPrimaryText: Boolean,
+    hasSecondaryText: Boolean,
     sleepTimer: SleepTimerState,
     isCollected: Boolean,
     onPlayPause: () -> Unit,
     onBackToLibrary: () -> Unit,
     onOpenSources: () -> Unit,
+    onRelinkMedia: () -> Unit,
     onToggleCollected: () -> Unit,
     onManageTextTracks: () -> Unit,
     onEnterGlow: () -> Unit,
@@ -396,9 +430,9 @@ private fun NormalPlayer(
                 Text(
                     text =
                         when {
-                            session.subtitle != null && session.secondarySubtitle != null ->
+                            hasPrimaryText && hasSecondaryText ->
                                 "字幕 · 主 / 次"
-                            session.subtitle != null || session.secondarySubtitle != null ->
+                            hasPrimaryText || hasSecondaryText ->
                                 "字幕 · 1 轨"
                             else -> "字幕"
                         },
@@ -427,7 +461,7 @@ private fun NormalPlayer(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            if (session.subtitle == null && session.secondarySubtitle == null) {
+            if (!hasPrimaryText && !hasSecondaryText) {
                 Text(
                     text = "当前会话没有字幕",
                     color = AppSecondaryText,
@@ -441,7 +475,7 @@ private fun NormalPlayer(
                 TextButton(onClick = onManageTextTracks) {
                     Text("添加或选择字幕", color = AppSecondaryText)
                 }
-            } else if (session.subtitle != null) {
+            } else if (hasPrimaryText) {
                 CueText(
                     text = context.previous?.text.orEmpty(),
                     color = AppMutedText,
@@ -450,15 +484,15 @@ private fun NormalPlayer(
                 )
                 Spacer(modifier = Modifier.height(24.dp))
                 CueText(
-                    text = currentCue?.text.orEmpty(),
+                    text = primaryText.orEmpty(),
                     color = AppPrimaryText,
                     fontSize = 26,
                     maxLines = 6,
                 )
-                if (session.secondarySubtitle != null) {
+                if (hasSecondaryText) {
                     Spacer(modifier = Modifier.height(10.dp))
                     CueText(
-                        text = secondaryCue?.text.orEmpty(),
+                        text = secondaryText.orEmpty(),
                         color = AppSecondaryText,
                         fontSize = 17,
                         maxLines = 4,
@@ -473,7 +507,7 @@ private fun NormalPlayer(
                 )
             } else {
                 CueText(
-                    text = secondaryCue?.text.orEmpty(),
+                    text = secondaryText.orEmpty(),
                     color = AppPrimaryText,
                     fontSize = 24,
                     maxLines = 6,
@@ -482,13 +516,20 @@ private fun NormalPlayer(
         }
 
         playback.errorMessage?.let { message ->
-            Text(
-                text = message,
+            Column(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                color = AppError,
-                fontSize = 12.sp,
-                textAlign = TextAlign.Center,
-            )
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = message,
+                    color = AppError,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                )
+                TextButton(onClick = onRelinkMedia) {
+                    Text("重新选择媒体", color = AppSecondaryText, fontSize = 11.sp)
+                }
+            }
         }
 
         PlaybackControls(
@@ -530,7 +571,7 @@ private fun NormalPlayer(
             ) {
                 Text(
                     text =
-                        if (session.subtitle == null && session.secondarySubtitle == null) {
+                        if (!hasPrimaryText && !hasSecondaryText) {
                             "无字幕 · 进入微光"
                         } else {
                             "进入微光"
@@ -606,6 +647,20 @@ private fun TextTrackDialog(
                     onRestoreAutomatic = onRestoreAutomatic,
                     onAddTrack = onAddTrack,
                 )
+                if (tracks.any { it.origin == TimedTextOrigin.Embedded }) {
+                    Text(
+                        "同一时间可启用一条内嵌文字轨；它可以与一条外挂字幕组成主次轨。",
+                        color = AppMutedText,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp,
+                    )
+                    Text(
+                        "内嵌轨由媒体时间直接驱动；字幕偏移仅作用于外挂轨。",
+                        color = AppMutedText,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp,
+                    )
+                }
                 Spacer(modifier = Modifier.fillMaxWidth().height(1.dp).background(AppHairline))
                 if (tracks.isEmpty()) {
                     Text(
@@ -765,6 +820,15 @@ private fun textTrackLabel(track: TimedTextTrack): String =
         ?: track.language?.takeIf(String::isNotBlank)
         ?: track.locator.displayName
 
+private fun PlayableContentUnit.selectedTrack(slot: TextTrackSlot): TimedTextTrack? {
+    val trackId =
+        when (slot) {
+            TextTrackSlot.Primary -> activeText.primaryTrackId
+            TextTrackSlot.Secondary -> activeText.secondaryTrackId
+        }
+    return timedTextTracks.firstOrNull { it.stableId == trackId }
+}
+
 private fun textTrackDetail(track: TimedTextTrack): String =
     listOfNotNull(
         when (track.origin) {
@@ -791,13 +855,16 @@ private fun GlowPlayer(
     player: Player,
     session: ActiveSession,
     playback: PlaybackSnapshot,
-    currentCue: SubtitleCue?,
-    secondaryCue: SubtitleCue?,
+    primaryText: String?,
+    secondaryText: String?,
+    hasPrimaryText: Boolean,
+    hasSecondaryText: Boolean,
     displayProfile: DisplayProfile,
     sleepTimer: SleepTimerState,
     showGestureHint: Boolean,
     onPlayPause: () -> Unit,
     onExitGlow: () -> Unit,
+    onRelinkMedia: () -> Unit,
     onManageTextTracks: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
     onGestureHintSeen: () -> Unit,
@@ -901,7 +968,7 @@ private fun GlowPlayer(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                text = currentCue?.text.orEmpty(),
+                text = primaryText.orEmpty(),
                 modifier = Modifier.fillMaxWidth(),
                 color = subtitleColor,
                 fontSize = displayProfile.glowSubtitleSizeSp.coerceIn(18f, 36f).sp,
@@ -910,9 +977,9 @@ private fun GlowPlayer(
                     (displayProfile.glowSubtitleSizeSp.coerceIn(18f, 36f) * 1.4f).sp,
                 textAlign = TextAlign.Center,
             )
-            if (session.secondarySubtitle != null) {
+            if (hasSecondaryText) {
                 Text(
-                    text = secondaryCue?.text.orEmpty(),
+                    text = secondaryText.orEmpty(),
                     modifier = Modifier.fillMaxWidth(),
                     color = subtitleColor.copy(alpha = 0.68f),
                     fontSize =
@@ -1021,6 +1088,9 @@ private fun GlowPlayer(
                         fontSize = 12.sp,
                         textAlign = TextAlign.Center,
                     )
+                    TextButton(onClick = onRelinkMedia) {
+                        Text("重新选择媒体", color = controlColor, fontSize = 11.sp)
+                    }
                 }
                 PlaybackControls(
                     player = player,

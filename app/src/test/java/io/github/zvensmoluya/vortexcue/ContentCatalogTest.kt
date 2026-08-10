@@ -148,6 +148,49 @@ class ContentCatalogTest {
     }
 
     @Test
+    fun `newly selected embedded track replaces an embedded track in the other slot`() {
+        val chinese =
+            track(
+                id = "embedded-zh",
+                matchBasis = TimedTextMatchBasis.EmbeddedMetadata,
+                origin = TimedTextOrigin.Embedded,
+            )
+        val english =
+            track(
+                id = "embedded-en",
+                matchBasis = TimedTextMatchBasis.EmbeddedMetadata,
+                origin = TimedTextOrigin.Embedded,
+            )
+        val catalog =
+            TextTrackCatalogState()
+                .mergeTracks(listOf(chinese, english))
+                .selectManualTrack(TextTrackSlot.Primary, chinese)
+                .selectManualTrack(TextTrackSlot.Secondary, english)
+
+        assertNull(catalog.activeText.primaryTrackId)
+        assertEquals(english.stableId, catalog.activeText.secondaryTrackId)
+    }
+
+    @Test
+    fun `one embedded and one sidecar can remain selected together`() {
+        val embedded =
+            track(
+                id = "embedded",
+                matchBasis = TimedTextMatchBasis.EmbeddedMetadata,
+                origin = TimedTextOrigin.Embedded,
+            )
+        val sidecar = track("sidecar", TimedTextMatchBasis.LanguageSuffix)
+        val catalog =
+            TextTrackCatalogState()
+                .mergeTracks(listOf(embedded, sidecar))
+                .selectManualTrack(TextTrackSlot.Primary, embedded)
+                .selectManualTrack(TextTrackSlot.Secondary, sidecar)
+
+        assertEquals(embedded.stableId, catalog.activeText.primaryTrackId)
+        assertEquals(sidecar.stableId, catalog.activeText.secondaryTrackId)
+    }
+
+    @Test
     fun `merging normalizes a duplicated stored primary and secondary`() {
         val shared = track("shared", TimedTextMatchBasis.ExactStem)
         val catalog =
@@ -280,6 +323,52 @@ class ContentCatalogTest {
         assertEquals(manual.stableId, failed.activeText.primaryTrackId)
         assertEquals(TextSelectionMode.Manual, failed.activeText.primaryMode)
         assertEquals("字幕文件不可用", failed.tracks.single().failureMessage)
+    }
+
+    @Test
+    fun `embedded discovery marks a missing automatic track unavailable`() {
+        val embedded =
+            track(
+                id = "embedded",
+                matchBasis = TimedTextMatchBasis.EmbeddedMetadata,
+                origin = TimedTextOrigin.Embedded,
+                roles = listOf(TimedTextRole.Default),
+            )
+        val selected = TextTrackCatalogState().mergeTracks(listOf(embedded))
+
+        val missing = selected.reconcileEmbeddedTracks(emptyList())
+
+        assertNull(missing.activeText.primaryTrackId)
+        assertEquals(TimedTextReadiness.Unreadable, missing.tracks.single().readiness)
+        assertEquals("当前媒体未发现此内嵌文字轨", missing.tracks.single().failureMessage)
+    }
+
+    @Test
+    fun `relinking content rekeys tracks and keeps primary secondary and rejection decisions`() {
+        val primary = track("primary", TimedTextMatchBasis.UserSelected)
+        val secondary = track("secondary", TimedTextMatchBasis.LanguageSuffix)
+        val rejected = track("rejected", TimedTextMatchBasis.LanguageSuffix)
+        val catalog =
+            TextTrackCatalogState(
+                tracks = listOf(primary, secondary, rejected),
+                activeText =
+                    ActiveTextSelection(
+                        primaryTrackId = primary.stableId,
+                        secondaryTrackId = secondary.stableId,
+                        primaryMode = TextSelectionMode.Manual,
+                        secondaryMode = TextSelectionMode.Manual,
+                        rejectedTrackIds = listOf(rejected.stableId),
+                    ),
+            )
+
+        val rekeyed = catalog.rekeyForContent("content-relinked")
+
+        assertFalse(rekeyed.tracks.map(TimedTextTrack::stableId).contains(primary.stableId))
+        assertEquals(rekeyed.tracks[0].stableId, rekeyed.activeText.primaryTrackId)
+        assertEquals(rekeyed.tracks[1].stableId, rekeyed.activeText.secondaryTrackId)
+        assertTrue(rekeyed.activeText.rejectedTrackIds.single() in rekeyed.tracks.map { it.stableId })
+        assertEquals(TextSelectionMode.Manual, rekeyed.activeText.primaryMode)
+        assertEquals(TextSelectionMode.Manual, rekeyed.activeText.secondaryMode)
     }
 
     @Test
