@@ -11,6 +11,10 @@ import io.github.zvensmoluya.vortexcue.core.model.ContentAvailability
 import io.github.zvensmoluya.vortexcue.core.model.MediaOrigin
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
 import io.github.zvensmoluya.vortexcue.core.model.SubtitleSourceRef
+import io.github.zvensmoluya.vortexcue.core.model.TextSelectionMode
+import io.github.zvensmoluya.vortexcue.core.model.TextTrackSlot
+import io.github.zvensmoluya.vortexcue.core.model.TimedTextReadiness
+import io.github.zvensmoluya.vortexcue.core.model.TimedTextTrack
 import io.github.zvensmoluya.vortexcue.core.model.displayTitle
 import io.github.zvensmoluya.vortexcue.core.storage.displayName
 import io.github.zvensmoluya.vortexcue.core.storage.persistReadPermission
@@ -470,31 +474,100 @@ internal class LibraryStateHolder(
         media: MediaSourceRef,
         subtitle: SubtitleSourceRef?,
     ) {
-        val config = state.config
-        val associations =
-            config.subtitleAssociations.filterNot { it.mediaUri == media.uri } +
-                listOfNotNull(subtitle?.let { SubtitleAssociation(media.uri, it) })
-        updateConfig(
-            config.copy(subtitleAssociations = associations)
-                .withManualPrimaryText(media, subtitle),
-        )
+        updateManualTextSource(media, TextTrackSlot.Primary, subtitle)
     }
 
-    fun updateResolvedSubtitle(
+    fun updateManualTextSource(
         media: MediaSourceRef,
-        subtitle: SubtitleSourceRef,
+        slot: TextTrackSlot,
+        subtitle: SubtitleSourceRef?,
+    ): TimedTextTrack? {
+        val config = state.config
+        var updatedConfig = config.withManualTextSource(media, slot, subtitle)
+        if (slot == TextTrackSlot.Primary) {
+            updatedConfig =
+                updatedConfig.copy(
+                    subtitleAssociations =
+                        config.subtitleAssociations.filterNot { it.mediaUri == media.uri } +
+                            listOfNotNull(
+                                subtitle?.let { SubtitleAssociation(media.uri, it) },
+                            ),
+                )
+        }
+        updateConfig(updatedConfig)
+        return updatedConfig.activeTextTrack(media, slot)
+    }
+
+    fun selectManualTextTrack(
+        media: MediaSourceRef,
+        slot: TextTrackSlot,
+        trackId: String?,
+    ): TimedTextTrack? {
+        val config = state.config
+        var updatedConfig = config.withManualTextTrack(media, slot, trackId)
+        if (updatedConfig === config) return null
+        if (slot == TextTrackSlot.Primary) {
+            val source = updatedConfig.activeTextTrack(media, slot)?.toSubtitleSourceRef()
+            updatedConfig =
+                updatedConfig.copy(
+                    subtitleAssociations =
+                        config.subtitleAssociations.filterNot { it.mediaUri == media.uri } +
+                            listOfNotNull(source?.let { SubtitleAssociation(media.uri, it) }),
+                )
+        }
+        updateConfig(updatedConfig)
+        return updatedConfig.activeTextTrack(media, slot)
+    }
+
+    fun restoreAutomaticTextTrack(
+        media: MediaSourceRef,
+        slot: TextTrackSlot,
+    ): TimedTextTrack? {
+        val config = state.config
+        var updatedConfig = config.withAutomaticTextTrack(media, slot)
+        if (slot == TextTrackSlot.Primary) {
+            updatedConfig =
+                updatedConfig.copy(
+                    subtitleAssociations =
+                        config.subtitleAssociations.filterNot { it.mediaUri == media.uri },
+                )
+        }
+        updateConfig(updatedConfig)
+        return updatedConfig.activeTextTrack(media, slot)
+    }
+
+    fun updateTextTrackReadiness(
+        media: MediaSourceRef,
+        trackId: String,
+        readiness: TimedTextReadiness,
+        failureMessage: String? = null,
+        resolvedSource: SubtitleSourceRef? = null,
     ) {
         val config = state.config
-        val associations =
-            if (config.subtitleAssociations.any { it.mediaUri == media.uri }) {
-                config.subtitleAssociations.filterNot { it.mediaUri == media.uri } +
-                    SubtitleAssociation(media.uri, subtitle)
-            } else {
-                config.subtitleAssociations
-            }
+        var updatedConfig =
+            config.withTextTrackReadiness(
+                media = media,
+                trackId = trackId,
+                readiness = readiness,
+                failureMessage = failureMessage,
+                resolvedSource = resolvedSource,
+            )
+        val selectedPrimary = updatedConfig.activeTextTrack(media, TextTrackSlot.Primary)
+        if (
+            resolvedSource != null &&
+                selectedPrimary?.stableId == trackId &&
+                updatedConfig.contentUnitFor(media)?.activeText?.primaryMode ==
+                    TextSelectionMode.Manual
+        ) {
+            updatedConfig =
+                updatedConfig.copy(
+                    subtitleAssociations =
+                        config.subtitleAssociations.filterNot { it.mediaUri == media.uri } +
+                            SubtitleAssociation(media.uri, resolvedSource),
+                )
+        }
         updateConfig(
-            config.copy(subtitleAssociations = associations)
-                .withResolvedPrimaryText(media, subtitle),
+            updatedConfig,
         )
     }
 

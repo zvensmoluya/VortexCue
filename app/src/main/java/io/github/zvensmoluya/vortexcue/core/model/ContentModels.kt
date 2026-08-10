@@ -42,6 +42,11 @@ enum class TextSelectionMode {
     Manual,
 }
 
+enum class TextTrackSlot {
+    Primary,
+    Secondary,
+}
+
 data class TimedTextLocator(
     val uriValue: String? = null,
     val embeddedTrackId: String? = null,
@@ -67,6 +72,7 @@ data class TimedTextTrack(
     val roles: List<TimedTextRole> = emptyList(),
     val matchBasis: TimedTextMatchBasis,
     val readiness: TimedTextReadiness = TimedTextReadiness.Unknown,
+    val failureMessage: String? = null,
 )
 
 data class ActiveTextSelection(

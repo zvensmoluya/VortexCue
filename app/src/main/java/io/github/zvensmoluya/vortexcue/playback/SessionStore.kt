@@ -34,6 +34,7 @@ data class StoredDraft(
 data class StoredLastSession(
     val media: MediaSourceRef,
     val subtitle: SubtitleSourceRef?,
+    val secondarySubtitle: SubtitleSourceRef?,
     val positionMs: Long,
     val durationMs: Long,
     val playbackSpeed: Float,
@@ -56,6 +57,8 @@ class SessionStore(context: Context) {
                 StoredLastSession(
                     media = media,
                     subtitle = preferences.readSubtitleSource(Keys.LastSubtitle),
+                    secondarySubtitle =
+                        preferences.readSubtitleSource(Keys.LastSecondarySubtitle),
                     positionMs = preferences[Keys.LastPosition] ?: 0L,
                     durationMs = preferences[Keys.LastDuration] ?: 0L,
                     playbackSpeed =
@@ -112,6 +115,10 @@ class SessionStore(context: Context) {
         dataStore.edit { preferences ->
             preferences.writeMediaSource(Keys.LastMedia, session.session.media)
             preferences.writeSubtitleSource(Keys.LastSubtitle, session.session.subtitle?.source)
+            preferences.writeSubtitleSource(
+                Keys.LastSecondarySubtitle,
+                session.session.secondarySubtitle?.source,
+            )
             preferences[Keys.LastPosition] = session.positionMs.coerceAtLeast(0L)
             preferences[Keys.LastDuration] = session.durationMs.coerceAtLeast(0L)
             preferences[Keys.LastSpeed] =
@@ -279,6 +286,7 @@ class SessionStore(context: Context) {
         val DraftSubtitle = subtitleKeys("draft_subtitle")
         val LastMedia = sourceKeys("last_media")
         val LastSubtitle = subtitleKeys("last_subtitle")
+        val LastSecondarySubtitle = subtitleKeys("last_secondary_subtitle")
         val LastPosition = longPreferencesKey("last_position_ms")
         val LastDuration = longPreferencesKey("last_duration_ms")
         val LastSpeed = floatPreferencesKey("last_speed")

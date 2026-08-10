@@ -118,6 +118,52 @@ class ContentCatalogTest {
     }
 
     @Test
+    fun `primary and secondary selections remain distinct and ordered`() {
+        val primary = track("primary", TimedTextMatchBasis.LanguageSuffix, language = "zh")
+        val secondary = track("secondary", TimedTextMatchBasis.LanguageSuffix, language = "en")
+        val catalog =
+            TextTrackCatalogState()
+                .mergeTracks(listOf(secondary, primary))
+                .selectManualTrack(TextTrackSlot.Primary, primary)
+                .selectManualTrack(TextTrackSlot.Secondary, secondary)
+
+        assertEquals(primary.stableId, catalog.activeText.primaryTrackId)
+        assertEquals(secondary.stableId, catalog.activeText.secondaryTrackId)
+        assertEquals(
+            listOf(primary.stableId, secondary.stableId),
+            catalog.tracks.take(2).map(TimedTextTrack::stableId),
+        )
+    }
+
+    @Test
+    fun `one track cannot be selected as both primary and secondary`() {
+        val track = track("shared", TimedTextMatchBasis.ExactStem)
+        val catalog =
+            TextTrackCatalogState()
+                .selectManualTrack(TextTrackSlot.Primary, track)
+                .selectManualTrack(TextTrackSlot.Secondary, track)
+
+        assertEquals(track.stableId, catalog.activeText.primaryTrackId)
+        assertNull(catalog.activeText.secondaryTrackId)
+    }
+
+    @Test
+    fun `merging normalizes a duplicated stored primary and secondary`() {
+        val shared = track("shared", TimedTextMatchBasis.ExactStem)
+        val catalog =
+            TextTrackCatalogState(
+                activeText =
+                    ActiveTextSelection(
+                        primaryTrackId = shared.stableId,
+                        secondaryTrackId = shared.stableId,
+                    ),
+            ).mergeTracks(listOf(shared))
+
+        assertEquals(shared.stableId, catalog.activeText.primaryTrackId)
+        assertNull(catalog.activeText.secondaryTrackId)
+    }
+
+    @Test
     fun `manual removal prevents a later automatic candidate from reappearing`() {
         val removed = TextTrackCatalogState().selectManualPrimary(null)
         val exact = track("exact", TimedTextMatchBasis.ExactStem)
@@ -126,6 +172,35 @@ class ContentCatalogTest {
 
         assertNull(merged.activeText.primaryTrackId)
         assertEquals(TextSelectionMode.Manual, merged.activeText.primaryMode)
+    }
+
+    @Test
+    fun `restoring automatic selection chooses the usable exact track`() {
+        val exact = track("exact", TimedTextMatchBasis.ExactStem)
+        val manualOff =
+            TextTrackCatalogState()
+                .mergeTracks(listOf(exact))
+                .selectManualTrack(TextTrackSlot.Primary, null)
+
+        val restored = manualOff.restoreAutomaticTrack(TextTrackSlot.Primary)
+
+        assertEquals(exact.stableId, restored.activeText.primaryTrackId)
+        assertEquals(TextSelectionMode.Automatic, restored.activeText.primaryMode)
+    }
+
+    @Test
+    fun `automatic primary never duplicates the selected secondary`() {
+        val exact = track("exact", TimedTextMatchBasis.ExactStem)
+        val secondaryOnly =
+            TextTrackCatalogState()
+                .mergeTracks(listOf(exact))
+                .selectManualTrack(TextTrackSlot.Primary, null)
+                .selectManualTrack(TextTrackSlot.Secondary, exact)
+
+        val restored = secondaryOnly.restoreAutomaticTrack(TextTrackSlot.Primary)
+
+        assertNull(restored.activeText.primaryTrackId)
+        assertEquals(exact.stableId, restored.activeText.secondaryTrackId)
     }
 
     @Test
@@ -171,6 +246,40 @@ class ContentCatalogTest {
 
         assertEquals(listOf(exact.stableId), rediscovered.activeText.rejectedTrackIds)
         assertNull(rediscovered.activeText.primaryTrackId)
+    }
+
+    @Test
+    fun `failed automatic track is deselected and exposes a repair state`() {
+        val exact = track("exact", TimedTextMatchBasis.ExactStem)
+        val selected = TextTrackCatalogState().mergeTracks(listOf(exact))
+
+        val failed =
+            selected.withTrackReadiness(
+                trackId = exact.stableId,
+                readiness = TimedTextReadiness.ParseFailed,
+                failureMessage = "无法解析字幕",
+            )
+
+        assertNull(failed.activeText.primaryTrackId)
+        assertEquals(TimedTextReadiness.ParseFailed, failed.tracks.single().readiness)
+        assertEquals("无法解析字幕", failed.tracks.single().failureMessage)
+    }
+
+    @Test
+    fun `failed manual track remains selected for explicit repair`() {
+        val manual = track("manual", TimedTextMatchBasis.UserSelected)
+        val selected = TextTrackCatalogState().selectManualPrimary(manual)
+
+        val failed =
+            selected.withTrackReadiness(
+                trackId = manual.stableId,
+                readiness = TimedTextReadiness.Unreadable,
+                failureMessage = "字幕文件不可用",
+            )
+
+        assertEquals(manual.stableId, failed.activeText.primaryTrackId)
+        assertEquals(TextSelectionMode.Manual, failed.activeText.primaryMode)
+        assertEquals("字幕文件不可用", failed.tracks.single().failureMessage)
     }
 
     @Test

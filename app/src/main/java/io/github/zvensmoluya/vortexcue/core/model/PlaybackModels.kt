@@ -115,6 +115,7 @@ data class SessionDraft(
 data class ActiveSession(
     val media: MediaSourceRef,
     val subtitle: LoadedSubtitle?,
+    val secondarySubtitle: LoadedSubtitle? = null,
     val subtitleOffsetMs: Long = 0L,
 )
 

@@ -67,6 +67,7 @@ internal object ContentUnitJson {
             .put("roles", JSONArray(track.roles.map(TimedTextRole::name)))
             .put("matchBasis", track.matchBasis.name)
             .put("readiness", track.readiness.name)
+            .putNullable("failureMessage", track.failureMessage)
 
     private fun decodeTrack(
         json: JSONObject,
@@ -110,6 +111,7 @@ internal object ContentUnitJson {
                     json.optString("readiness"),
                     TimedTextReadiness.Unknown,
                 ),
+            failureMessage = json.nullableString("failureMessage"),
         )
     }
 

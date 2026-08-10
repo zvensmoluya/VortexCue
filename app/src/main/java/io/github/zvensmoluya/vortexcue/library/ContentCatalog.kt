@@ -130,10 +130,14 @@ internal fun TextTrackCatalogState.mergeTracks(
     }
     val merged = tracksById.values.toList()
     val validIds = merged.map(TimedTextTrack::stableId).toSet()
+    val primaryTrackId = activeText.primaryTrackId?.takeIf(validIds::contains)
     var selection =
         activeText.copy(
-            primaryTrackId = activeText.primaryTrackId?.takeIf(validIds::contains),
-            secondaryTrackId = activeText.secondaryTrackId?.takeIf(validIds::contains),
+            primaryTrackId = primaryTrackId,
+            secondaryTrackId =
+                activeText.secondaryTrackId
+                    ?.takeIf(validIds::contains)
+                    ?.takeUnless { it == primaryTrackId },
             rejectedTrackIds = activeText.rejectedTrackIds.distinct(),
         )
     if (
@@ -150,15 +154,111 @@ internal fun TextTrackCatalogState.mergeTracks(
 
 internal fun TextTrackCatalogState.selectManualPrimary(
     track: TimedTextTrack?,
+): TextTrackCatalogState = selectManualTrack(TextTrackSlot.Primary, track)
+
+internal fun TextTrackCatalogState.selectManualTrack(
+    slot: TextTrackSlot,
+    track: TimedTextTrack?,
 ): TextTrackCatalogState {
     val merged = if (track == null) this else mergeTracks(listOf(track))
     val selection =
-        merged.activeText.copy(
-            primaryTrackId = track?.stableId,
-            primaryMode = TextSelectionMode.Manual,
-        )
+        when (slot) {
+            TextTrackSlot.Primary ->
+                merged.activeText.copy(
+                    primaryTrackId = track?.stableId,
+                    primaryMode = TextSelectionMode.Manual,
+                    secondaryTrackId =
+                        merged.activeText.secondaryTrackId
+                            ?.takeUnless { it == track?.stableId },
+                )
+            TextTrackSlot.Secondary ->
+                merged.activeText.copy(
+                    secondaryTrackId =
+                        track?.stableId
+                            ?.takeUnless { it == merged.activeText.primaryTrackId },
+                    secondaryMode = TextSelectionMode.Manual,
+                )
+        }
     return merged.copy(
         tracks = sortTimedTextTracks(merged.tracks, selection),
+        activeText = selection,
+    )
+}
+
+internal fun TextTrackCatalogState.restoreAutomaticTrack(
+    slot: TextTrackSlot,
+): TextTrackCatalogState {
+    val selection =
+        when (slot) {
+            TextTrackSlot.Primary -> {
+                val automatic =
+                    activeText.copy(
+                        primaryTrackId = null,
+                        primaryMode = TextSelectionMode.Automatic,
+                    )
+                automatic.copy(primaryTrackId = chooseAutomaticPrimary(tracks, automatic))
+            }
+            TextTrackSlot.Secondary ->
+                activeText.copy(
+                    secondaryTrackId = null,
+                    secondaryMode = TextSelectionMode.Automatic,
+                )
+        }
+    return copy(
+        tracks = sortTimedTextTracks(tracks, selection),
+        activeText = selection,
+    )
+}
+
+internal fun TextTrackCatalogState.withTrackReadiness(
+    trackId: String,
+    readiness: TimedTextReadiness,
+    failureMessage: String? = null,
+    resolvedSource: SubtitleSourceRef? = null,
+): TextTrackCatalogState {
+    if (tracks.none { it.stableId == trackId }) return this
+    val updatedTracks =
+        tracks.map { track ->
+            if (track.stableId != trackId) return@map track
+            track.copy(
+                locator =
+                    resolvedSource?.let { source ->
+                        track.locator.copy(
+                            uriValue = source.uri.toString(),
+                            displayName = source.displayName,
+                            mimeType = source.mimeType,
+                            cachedFileName = source.cachedFileName,
+                        )
+                    } ?: track.locator,
+                readiness = readiness,
+                failureMessage =
+                    failureMessage?.takeIf {
+                        readiness in
+                            setOf(
+                                TimedTextReadiness.Unreadable,
+                                TimedTextReadiness.ParseFailed,
+                            )
+                    },
+            )
+        }
+    var selection = activeText
+    if (
+        selection.primaryTrackId == trackId &&
+            selection.primaryMode == TextSelectionMode.Automatic &&
+            readiness in setOf(TimedTextReadiness.Unreadable, TimedTextReadiness.ParseFailed)
+    ) {
+        selection = selection.copy(primaryTrackId = null)
+        selection = selection.copy(primaryTrackId = chooseAutomaticPrimary(updatedTracks, selection))
+    }
+    if (
+        selection.secondaryTrackId == trackId &&
+            selection.secondaryMode == TextSelectionMode.Automatic &&
+            readiness in setOf(TimedTextReadiness.Unreadable, TimedTextReadiness.ParseFailed)
+    ) {
+        selection = selection.copy(secondaryTrackId = null)
+    }
+    return TextTrackCatalogState(
+        tracks = sortTimedTextTracks(updatedTracks, selection),
         activeText = selection,
     )
 }
@@ -259,8 +359,9 @@ internal fun LibraryConfig.withTimedTextCandidates(
     )
 }
 
-internal fun LibraryConfig.withManualPrimaryText(
+internal fun LibraryConfig.withManualTextSource(
     media: MediaSourceRef,
+    slot: TextTrackSlot,
     subtitle: SubtitleSourceRef?,
 ): LibraryConfig {
     val withMedia = withMediaSnapshots(listOf(media), ContentAvailability.Available)
@@ -270,50 +371,68 @@ internal fun LibraryConfig.withManualPrimaryText(
             withMedia.contentUnits.map { unit ->
                 if (unit.stableId != contentId) return@map unit
                 val track = subtitle?.let { manualTimedTextTrack(contentId, it) }
-                unit.withTextCatalogState(unit.textCatalogState().selectManualPrimary(track))
+                unit.withTextCatalogState(
+                    unit.textCatalogState().selectManualTrack(slot, track),
+                )
             },
     )
 }
 
-internal fun LibraryConfig.withResolvedPrimaryText(
+internal fun LibraryConfig.withManualTextTrack(
     media: MediaSourceRef,
-    subtitle: SubtitleSourceRef,
+    slot: TextTrackSlot,
+    trackId: String?,
 ): LibraryConfig {
-    val withMedia = withMediaSnapshots(listOf(media), ContentAvailability.Available)
-    val contentId = stableContentId(media.uri.toString())
-    return withMedia.copy(
+    val unit = contentUnitFor(media) ?: return this
+    val track = trackId?.let { id -> unit.timedTextTracks.firstOrNull { it.stableId == id } }
+    if (trackId != null && track == null) return this
+    return copy(
         contentUnits =
-            withMedia.contentUnits.map { unit ->
-                if (unit.stableId != contentId) return@map unit
-                val existing =
-                    unit.timedTextTracks.firstOrNull {
-                        it.locator.uriValue == subtitle.uri.toString()
-                    }
-                val resolved =
-                    if (existing == null) {
-                        legacyTimedTextTrack(
-                            contentId = contentId,
-                            uriValue = subtitle.uri.toString(),
-                            displayName = subtitle.displayName,
-                            mimeType = subtitle.mimeType,
-                            cachedFileName = subtitle.cachedFileName,
-                        ).copy(readiness = TimedTextReadiness.Ready)
-                    } else {
-                        existing.copy(
-                            locator =
-                                existing.locator.copy(
-                                    displayName = subtitle.displayName,
-                                    mimeType = subtitle.mimeType,
-                                    cachedFileName = subtitle.cachedFileName,
-                                ),
-                            readiness = TimedTextReadiness.Ready,
-                        )
-                    }
-                var state = unit.textCatalogState().mergeTracks(listOf(resolved))
-                if (existing == null && state.activeText.primaryTrackId == null) {
-                    state = state.selectManualPrimary(resolved)
-                }
-                unit.withTextCatalogState(state)
+            contentUnits.map { current ->
+                if (current.stableId != unit.stableId) return@map current
+                current.withTextCatalogState(
+                    current.textCatalogState().selectManualTrack(slot, track),
+                )
+            },
+    )
+}
+
+internal fun LibraryConfig.withAutomaticTextTrack(
+    media: MediaSourceRef,
+    slot: TextTrackSlot,
+): LibraryConfig {
+    val unit = contentUnitFor(media) ?: return this
+    return copy(
+        contentUnits =
+            contentUnits.map { current ->
+                if (current.stableId != unit.stableId) return@map current
+                current.withTextCatalogState(
+                    current.textCatalogState().restoreAutomaticTrack(slot),
+                )
+            },
+    )
+}
+
+internal fun LibraryConfig.withTextTrackReadiness(
+    media: MediaSourceRef,
+    trackId: String,
+    readiness: TimedTextReadiness,
+    failureMessage: String? = null,
+    resolvedSource: SubtitleSourceRef? = null,
+): LibraryConfig {
+    val unit = contentUnitFor(media) ?: return this
+    return copy(
+        contentUnits =
+            contentUnits.map { current ->
+                if (current.stableId != unit.stableId) return@map current
+                current.withTextCatalogState(
+                    current.textCatalogState().withTrackReadiness(
+                        trackId = trackId,
+                        readiness = readiness,
+                        failureMessage = failureMessage,
+                        resolvedSource = resolvedSource,
+                    ),
+                )
             },
     )
 }
@@ -324,16 +443,30 @@ internal fun LibraryConfig.withoutContentUris(uriValues: Set<String>): LibraryCo
 internal fun LibraryConfig.activePrimarySubtitleSource(
     media: MediaSourceRef,
 ): SubtitleSourceRef? {
-    val unit = contentUnits.firstOrNull { it.media.uri == media.uri }
+    val unit = contentUnitFor(media)
     if (unit != null) {
-        val selected =
-            unit.timedTextTracks.firstOrNull {
-                it.stableId == unit.activeText.primaryTrackId
-            }
-        selected?.locator?.toSubtitleSourceRef()?.let { return it }
+        if (unit.activeText.primaryTrackId != null) {
+            return activeTextTrack(media, TextTrackSlot.Primary)?.toSubtitleSourceRef()
+        }
         if (unit.activeText.primaryMode == TextSelectionMode.Manual) return null
     }
     return subtitleAssociations.firstOrNull { it.mediaUri == media.uri }?.subtitle
+}
+
+internal fun LibraryConfig.contentUnitFor(media: MediaSourceRef): PlayableContentUnit? =
+    contentUnits.firstOrNull { it.media.uri == media.uri }
+
+internal fun LibraryConfig.activeTextTrack(
+    media: MediaSourceRef,
+    slot: TextTrackSlot,
+): TimedTextTrack? {
+    val unit = contentUnitFor(media) ?: return null
+    val trackId =
+        when (slot) {
+            TextTrackSlot.Primary -> unit.activeText.primaryTrackId
+            TextTrackSlot.Secondary -> unit.activeText.secondaryTrackId
+        }
+    return unit.timedTextTracks.firstOrNull { it.stableId == trackId }
 }
 
 internal fun LibraryConfig.hasTimedTextTracks(media: MediaSourceRef): Boolean =
@@ -357,6 +490,9 @@ private fun SubtitleSourceRef.toTimedTextLocator(): TimedTextLocator =
         mimeType = mimeType,
         cachedFileName = cachedFileName,
     )
+
+internal fun TimedTextTrack.toSubtitleSourceRef(): SubtitleSourceRef? =
+    locator.toSubtitleSourceRef()
 
 private fun TimedTextLocator.toSubtitleSourceRef(): SubtitleSourceRef? =
     uriValue?.let { value ->
@@ -386,6 +522,12 @@ private fun TimedTextTrack.mergeMetadata(incoming: TimedTextTrack): TimedTextTra
             },
         readiness =
             if (incoming.readiness == TimedTextReadiness.Unknown) readiness else incoming.readiness,
+        failureMessage =
+            if (incoming.readiness == TimedTextReadiness.Unknown) {
+                failureMessage
+            } else {
+                incoming.failureMessage
+            },
     )
 
 private fun chooseAutomaticPrimary(
@@ -395,6 +537,7 @@ private fun chooseAutomaticPrimary(
     val usable =
         tracks.filter {
             it.stableId !in selection.rejectedTrackIds &&
+                it.stableId != selection.secondaryTrackId &&
                 it.readiness !in
                 setOf(TimedTextReadiness.Unreadable, TimedTextReadiness.ParseFailed)
         }
@@ -413,7 +556,13 @@ private fun sortTimedTextTracks(
 ): List<TimedTextTrack> =
     tracks.sortedWith(
         compareBy<TimedTextTrack>(
-            { if (it.stableId == selection.primaryTrackId) 0 else 1 },
+            {
+                when (it.stableId) {
+                    selection.primaryTrackId -> 0
+                    selection.secondaryTrackId -> 1
+                    else -> 2
+                }
+            },
             ::timedTextTrackRank,
             { it.language.orEmpty() },
             { it.label.orEmpty() },
