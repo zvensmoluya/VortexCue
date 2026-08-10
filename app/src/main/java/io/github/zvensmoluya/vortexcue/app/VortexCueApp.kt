@@ -788,6 +788,7 @@ fun VortexCueApp(
                     displayProfile = displayProfile,
                     sleepTimer = sleepTimer,
                     showGestureHint = !glowGestureHintSeen,
+                    isCollected = libraryState.config.isCollected(session.media),
                     onPlayPause = ::togglePlayback,
                     onSurfaceChanged = { requested ->
                         playerSurface =
@@ -829,6 +830,13 @@ fun VortexCueApp(
                     onOpenSources = {
                         homeSection = HomeSection.Manage
                         destination = AppDestination.Home
+                    },
+                    onToggleCollected = {
+                        if (libraryState.config.isCollected(session.media)) {
+                            libraryStateHolder.uncollectMedia(session.media)
+                        } else {
+                            libraryStateHolder.collectMedia(session.media)
+                        }
                     },
                     onAddSubtitle = {
                         draft = session.toDraft()

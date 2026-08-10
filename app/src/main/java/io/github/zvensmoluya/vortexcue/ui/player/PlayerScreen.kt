@@ -75,10 +75,12 @@ internal fun PlayerScreen(
     displayProfile: DisplayProfile,
     sleepTimer: SleepTimerState,
     showGestureHint: Boolean,
+    isCollected: Boolean,
     onPlayPause: () -> Unit,
     onSurfaceChanged: (PlayerSurface) -> Unit,
     onBackToLibrary: () -> Unit,
     onOpenSources: () -> Unit,
+    onToggleCollected: () -> Unit,
     onAddSubtitle: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
     onDisplayProfileChanged: (DisplayProfile) -> Unit,
@@ -111,9 +113,11 @@ internal fun PlayerScreen(
                 cuePositionMs = cuePositionMs,
                 currentCue = currentCue,
                 sleepTimer = sleepTimer,
+                isCollected = isCollected,
                 onPlayPause = onPlayPause,
                 onBackToLibrary = onBackToLibrary,
                 onOpenSources = onOpenSources,
+                onToggleCollected = onToggleCollected,
                 onAddSubtitle = onAddSubtitle,
                 onEnterGlow = { onSurfaceChanged(PlayerSurface.Glow) },
                 onEnterCalibration = { onSurfaceChanged(PlayerSurface.Calibration) },
@@ -295,9 +299,11 @@ private fun NormalPlayer(
     cuePositionMs: Long,
     currentCue: SubtitleCue?,
     sleepTimer: SleepTimerState,
+    isCollected: Boolean,
     onPlayPause: () -> Unit,
     onBackToLibrary: () -> Unit,
     onOpenSources: () -> Unit,
+    onToggleCollected: () -> Unit,
     onAddSubtitle: () -> Unit,
     onEnterGlow: () -> Unit,
     onEnterCalibration: () -> Unit,
@@ -340,6 +346,19 @@ private fun NormalPlayer(
             )
             TextButton(onClick = onOpenSources) {
                 Text("来源", color = AppSecondaryText)
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            TextButton(onClick = onToggleCollected) {
+                Text(
+                    text = if (isCollected) "移出我的内容" else "加入我的内容",
+                    color = if (isCollected) AppMutedText else AppSecondaryText,
+                    fontSize = 12.sp,
+                )
             }
         }
 

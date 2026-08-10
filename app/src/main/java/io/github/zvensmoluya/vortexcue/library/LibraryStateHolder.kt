@@ -190,11 +190,21 @@ internal class LibraryStateHolder(
             } else {
                 source
             }
+        val membership =
+            LibraryMembershipState(
+                recentUriValues = config.recentItems.map { it.uri.toString() },
+                includedUriValues = config.includedUris,
+                ignoredUriValues = config.ignoredUris,
+            ).recordOpenedUri(
+                uriValue = recentSource.uri.toString(),
+                maxRecentItems = MaxRecentItems,
+            )
+        val recentSourcesByUri =
+            (config.recentItems + recentSource).associateBy { it.uri.toString() }
         val updatedConfig =
             config.copy(
                 recentItems =
-                    (listOf(recentSource) + config.recentItems.filterNot { it.uri == source.uri })
-                        .take(MaxRecentItems),
+                    membership.recentUriValues.mapNotNull(recentSourcesByUri::get),
             )
         state = state.copy(config = updatedConfig)
         coroutineScope.launch { store.save(updatedConfig) }
@@ -209,6 +219,12 @@ internal class LibraryStateHolder(
             }
         val uriValue = collected.uri.toString()
         val config = state.config
+        val membership =
+            LibraryMembershipState(
+                recentUriValues = config.recentItems.map { it.uri.toString() },
+                includedUriValues = config.includedUris,
+                ignoredUriValues = config.ignoredUris,
+            ).collectUri(uriValue)
         updateConfig(
             config.copy(
                 catalogItems =
@@ -216,8 +232,8 @@ internal class LibraryStateHolder(
                         preferred = listOf(collected),
                         fallback = config.catalogItems,
                     ),
-                includedUris = (config.includedUris + uriValue).distinct(),
-                ignoredUris = config.ignoredUris - uriValue,
+                includedUris = membership.includedUriValues,
+                ignoredUris = membership.ignoredUriValues,
                 homeShortcuts =
                     if (collected.sourceId == LibrarySourceIds.LooseFiles) {
                         (config.homeShortcuts + collected.toFolderShortcut()).distinct()
@@ -341,9 +357,15 @@ internal class LibraryStateHolder(
     fun removeIncluded(uriValues: Set<String>) {
         if (uriValues.isEmpty()) return
         val config = state.config
+        val membership =
+            LibraryMembershipState(
+                recentUriValues = config.recentItems.map { it.uri.toString() },
+                includedUriValues = config.includedUris,
+                ignoredUriValues = config.ignoredUris,
+            ).uncollectUris(uriValues)
         updateConfig(
             config.copy(
-                includedUris = config.includedUris.filterNot(uriValues::contains),
+                includedUris = membership.includedUriValues,
                 playlists = config.playlists.withoutItems(uriValues),
             ),
             repartition = true,

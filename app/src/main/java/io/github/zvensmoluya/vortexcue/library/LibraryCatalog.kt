@@ -14,6 +14,46 @@ internal enum class LibraryDecision {
     Ignored,
 }
 
+internal data class LibraryMembershipState(
+    val recentUriValues: List<String> = emptyList(),
+    val includedUriValues: List<String> = emptyList(),
+    val ignoredUriValues: List<String> = emptyList(),
+)
+
+internal fun LibraryMembershipState.recordOpenedUri(
+    uriValue: String,
+    maxRecentItems: Int,
+): LibraryMembershipState {
+    require(uriValue.isNotBlank())
+    require(maxRecentItems > 0)
+    return copy(
+        recentUriValues =
+            (listOf(uriValue) + recentUriValues.filterNot { it == uriValue })
+                .take(maxRecentItems),
+    )
+}
+
+internal fun LibraryMembershipState.collectUri(uriValue: String): LibraryMembershipState {
+    require(uriValue.isNotBlank())
+    return copy(
+        includedUriValues = (includedUriValues + uriValue).distinct(),
+        ignoredUriValues = ignoredUriValues.filterNot { it == uriValue },
+    )
+}
+
+internal fun LibraryMembershipState.uncollectUris(
+    uriValues: Set<String>,
+): LibraryMembershipState =
+    copy(includedUriValues = includedUriValues.filterNot(uriValues::contains))
+
+internal fun resolveCollectedUriValues(
+    includedUriValues: List<String>,
+    playlistUriValues: List<String>,
+): Set<String> =
+    (includedUriValues + playlistUriValues)
+        .filter(String::isNotBlank)
+        .toSet()
+
 internal fun decideLibraryUri(
     uriValue: String,
     includedUris: Set<String>,
@@ -30,12 +70,13 @@ internal fun partitionLibrary(
     config: LibraryConfig,
 ): LibraryPartition {
     val explicitUris =
-        (
-            config.includedUris +
+        resolveCollectedUriValues(
+            includedUriValues = config.includedUris,
+            playlistUriValues =
                 config.playlists.flatMap { playlist ->
                     playlist.items.map { it.uri.toString() }
-                }
-        ).toSet()
+                },
+        )
     val ignoredUris = config.ignoredUris.toSet()
     return LibraryPartition(
         included =
@@ -55,6 +96,13 @@ internal fun partitionLibrary(
             },
     )
 }
+
+internal fun LibraryConfig.isCollected(media: MediaSourceRef): Boolean =
+    media.uri.toString() in
+        resolveCollectedUriValues(
+            includedUriValues = includedUris,
+            playlistUriValues = playlists.flatMap { it.items }.map { it.uri.toString() },
+        )
 
 internal fun restoreCachedLibraryState(
     config: LibraryConfig,
