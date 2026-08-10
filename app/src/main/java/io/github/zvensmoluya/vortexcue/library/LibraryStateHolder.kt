@@ -37,7 +37,7 @@ internal class LibraryStateHolder(
     suspend fun restoreConfig(): LibraryConfig {
         val config = runCatching { store.load() }.getOrDefault(LibraryConfig())
         state =
-            state.copy(
+            restoreCachedLibraryState(
                 config = config,
                 hasAudioAccess = appContext.hasAudioLibraryPermission(),
                 videoAccess = appContext.videoLibraryAccess(),
@@ -48,7 +48,10 @@ internal class LibraryStateHolder(
     suspend fun inspectMedia(source: MediaSourceRef): MediaSourceRef = scanner.inspect(source)
 
     fun cancelScan() {
+        scanRequestId += 1L
         scanJob?.cancel()
+        scanJob = null
+        if (state.isLoading) state = state.copy(isLoading = false)
     }
 
     fun scan(config: LibraryConfig = state.config) {
@@ -161,22 +164,43 @@ internal class LibraryStateHolder(
     }
 
     fun rememberManualMedia(source: MediaSourceRef) {
+        cancelScan()
         val config = state.config
         val looseSource =
             source.copy(
                 origin = MediaOrigin.OpenDocument,
                 sourceId = LibrarySourceIds.LooseFiles,
             )
-        updateConfig(
+        val updatedConfig =
             config.copy(
                 manualItems = listOf(looseSource) + config.manualItems.filterNot { it.uri == source.uri },
                 includedUris = (config.includedUris + looseSource.uri.toString()).distinct(),
                 ignoredUris = config.ignoredUris - looseSource.uri.toString(),
                 homeShortcuts =
                     (config.homeShortcuts + looseSource.toFolderShortcut()).distinct(),
-            ),
-            rescan = true,
-        )
+            )
+        val discovered =
+            (listOf(looseSource) + state.allDiscoveredItems())
+                .distinctBy { it.uri.toString() }
+        val partition = partitionLibrary(discovered, updatedConfig)
+        val looseSourceState =
+            LibrarySourceState(
+                id = LibrarySourceIds.LooseFiles,
+                kind = LibrarySourceKind.LooseFiles,
+                displayName = "单独打开",
+                itemCount = updatedConfig.manualItems.size,
+            )
+        state =
+            state.copy(
+                items = partition.included,
+                candidates = partition.candidates,
+                ignoredItems = partition.ignored,
+                config = updatedConfig,
+                sources =
+                    state.sources.filterNot { it.id == LibrarySourceIds.LooseFiles } +
+                        looseSourceState,
+            )
+        coroutineScope.launch { store.save(updatedConfig) }
     }
 
     fun addFolder(uri: Uri) {

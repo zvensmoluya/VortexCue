@@ -153,7 +153,10 @@ internal fun HomeScreen(
     }
 
     val resumableSession = activeSession ?: lastSession?.session
-    val miniPlayerSession = resumableSession?.takeIf { section == HomeSection.Library }
+    val miniPlayerSession =
+        resumableSession?.takeIf {
+            section == HomeSection.Library && (searchVisible || selectedShortcut != null)
+        }
     val showMiniPlayer = miniPlayerSession != null
     val selectedCollection =
         selectedShortcut?.let { shortcut -> resolveCollection(shortcut, library) }
@@ -245,19 +248,24 @@ internal fun HomeScreen(
                         else ->
                             LibraryLanding(
                                 library = library,
+                                resumableSession = resumableSession,
+                                activeSession = activeSession,
+                                lastSession = lastSession,
+                                playback = playback,
                                 onOpenCollection = { selectedShortcut = it },
                                 onPlayLibraryItems = onPlayLibraryItems,
                                 onOpenManage = { page ->
                                     managerPage = page
                                     onSectionChanged(HomeSection.Manage)
                                 },
-                                onRequestLibraryAccess = onRequestLibraryAccess,
                                 onAddFolder = onAddFolder,
                                 onOpenFile = {
                                     importVisible = true
                                     onPickMedia()
                                 },
-                                bottomPadding = if (showMiniPlayer) 88.dp else 8.dp,
+                                onContinue = onContinue,
+                                onPlayPause = onPlayPause,
+                                bottomPadding = 8.dp,
                                 modifier = Modifier.fillMaxSize(),
                             )
                     }
@@ -525,7 +533,7 @@ private fun HomeHeader(
                     Text("搜索", color = AppSecondaryText, fontSize = 12.sp)
                 }
                 TextButton(onClick = onManage) {
-                    Text("管理", color = AppSecondaryText, fontSize = 12.sp)
+                    Text("更多来源", color = AppSecondaryText, fontSize = 12.sp)
                 }
             }
             section == HomeSection.Manage && managerPage == ManagerPage.Overview ->
@@ -539,12 +547,17 @@ private fun HomeHeader(
 @Composable
 private fun LibraryLanding(
     library: MediaLibraryState,
+    resumableSession: ActiveSession?,
+    activeSession: ActiveSession?,
+    lastSession: RestorableSession?,
+    playback: PlaybackSnapshot,
     onOpenCollection: (LibraryShortcut) -> Unit,
     onPlayLibraryItems: (List<MediaSourceRef>, Int) -> Unit,
     onOpenManage: (ManagerPage) -> Unit,
-    onRequestLibraryAccess: () -> Unit,
     onAddFolder: () -> Unit,
     onOpenFile: () -> Unit,
+    onContinue: () -> Unit,
+    onPlayPause: () -> Unit,
     bottomPadding: Dp,
     modifier: Modifier = Modifier,
 ) {
@@ -554,128 +567,69 @@ private fun LibraryLanding(
         contentPadding = PaddingValues(bottom = bottomPadding),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        if (library.isLoading) item(key = "loading") { StatusText("正在发现本机内容…") }
+        resumableSession?.let { session ->
+            item(key = "continue") {
+                ContinueSection(
+                    session = session,
+                    activeSession = activeSession,
+                    lastSession = lastSession,
+                    playback = playback,
+                    onContinue = onContinue,
+                    onPlayPause = onPlayPause,
+                )
+            }
+        }
+        item(key = "intent-actions") {
+            HomeIntentActions(
+                onOpenFile = onOpenFile,
+                onAddFolder = onAddFolder,
+                onOpenMoreSources = { onOpenManage(ManagerPage.Overview) },
+            )
+        }
+        if (library.isLoading) item(key = "loading") { StatusText("更多来源正在扫描…") }
         library.errorMessage?.let { message ->
             item(key = "error") { StatusText(message, AppError) }
         }
-        when {
-            collections.isNotEmpty() -> {
-                items(collections, key = { "home-${it.shortcut.type}-${it.shortcut.key}" }) {
-                    collection ->
-                    CollectionRow(
-                        collection = collection,
-                        onOpen = { onOpenCollection(collection.shortcut) },
-                        onPlay = {
-                            if (collection.items.isNotEmpty()) {
-                                onPlayLibraryItems(collection.items, 0)
-                            }
-                        },
-                    )
-                }
-                item(key = "manage-content") {
-                    TextButton(
-                        onClick = {
-                            onOpenManage(
-                                if (library.candidates.isNotEmpty()) ManagerPage.Review
-                                else ManagerPage.Overview,
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            if (library.candidates.isNotEmpty()) {
-                                "${library.candidates.size} 项待整理"
-                            } else {
-                                "添加或整理内容"
-                            },
-                            color =
-                                if (library.candidates.isNotEmpty()) AppSecondaryText
-                                else AppMutedText,
-                            fontSize = 12.sp,
-                        )
-                    }
-                }
+        if (collections.isNotEmpty()) {
+            item(key = "collections-heading") { SectionHeading("已整理内容") }
+            items(collections, key = { "home-${it.shortcut.type}-${it.shortcut.key}" }) {
+                collection ->
+                CollectionRow(
+                    collection = collection,
+                    onOpen = { onOpenCollection(collection.shortcut) },
+                    onPlay = {
+                        if (collection.items.isNotEmpty()) {
+                            onPlayLibraryItems(collection.items, 0)
+                        }
+                    },
+                )
             }
-            library.items.isNotEmpty() ->
-                item(key = "choose-home") {
-                    EmptyHomeSelection(onManage = { onOpenManage(ManagerPage.Overview) })
-                }
-            library.candidates.isNotEmpty() ->
-                item(key = "discovered") {
-                    DiscoveredContentPrompt(
-                        candidates = library.candidates,
-                        onReview = { onOpenManage(ManagerPage.Review) },
-                        onRefresh = onRequestLibraryAccess,
-                    )
-                }
-            !library.isLoading ->
-                item(key = "start") {
-                    StartDiscovery(
-                        onScanDevice = onRequestLibraryAccess,
-                        onAddFolder = onAddFolder,
-                        onOpenFile = onOpenFile,
-                    )
-                }
+        }
+        if (library.candidates.isNotEmpty()) {
+            item(key = "pending") {
+                ManagerEntry(
+                    title = "待整理",
+                    detail = "${library.candidates.size} 项来自扫描或文件夹的内容",
+                    action = "查看",
+                    onClick = { onOpenManage(ManagerPage.Review) },
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun StartDiscovery(
-    onScanDevice: () -> Unit,
-    onAddFolder: () -> Unit,
+private fun HomeIntentActions(
     onOpenFile: () -> Unit,
+    onAddFolder: () -> Unit,
+    onOpenMoreSources: () -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(13.dp)) {
-        Text(
-            "先发现，再决定留下什么。",
-            color = AppSecondaryText,
-            fontSize = 13.sp,
-            lineHeight = 20.sp,
-        )
-        QuietButton("扫描本机", onScanDevice, Modifier.fillMaxWidth(), emphasized = true)
+    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        QuietButton("打开内容", onOpenFile, Modifier.fillMaxWidth(), emphasized = true)
         QuietButton("选择文件夹", onAddFolder, Modifier.fillMaxWidth())
-        TextButton(onClick = onOpenFile, modifier = Modifier.fillMaxWidth()) {
-            Text("打开单个文件", color = AppSecondaryText)
+        TextButton(onClick = onOpenMoreSources, modifier = Modifier.fillMaxWidth()) {
+            Text("更多来源", color = AppSecondaryText)
         }
-    }
-}
-
-@Composable
-private fun DiscoveredContentPrompt(
-    candidates: List<MediaSourceRef>,
-    onReview: () -> Unit,
-    onRefresh: () -> Unit,
-) {
-    val audioCount = candidates.count { it.kind == MediaKind.Audio }
-    val videoCount = candidates.size - audioCount
-    Column(verticalArrangement = Arrangement.spacedBy(13.dp)) {
-        Text("发现 ${candidates.size} 项待整理内容", color = AppPrimaryText, fontSize = 18.sp)
-        Text(
-            listOfNotNull(
-                "$audioCount 项音频".takeIf { audioCount > 0 },
-                "$videoCount 项视频".takeIf { videoCount > 0 },
-            ).joinToString(" · "),
-            color = AppSecondaryText,
-            fontSize = 12.sp,
-        )
-        QuietButton("选择收录内容", onReview, Modifier.fillMaxWidth(), emphasized = true)
-        TextButton(onClick = onRefresh, modifier = Modifier.fillMaxWidth()) {
-            Text("重新扫描", color = AppMutedText)
-        }
-    }
-}
-
-@Composable
-private fun EmptyHomeSelection(onManage: () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("首页还没有内容", color = AppPrimaryText, fontSize = 18.sp)
-        Text(
-            "从已收录的文件夹或播放列表中选择快捷入口。",
-            color = AppSecondaryText,
-            fontSize = 12.sp,
-        )
-        QuietButton("选择首页内容", onManage, Modifier.fillMaxWidth(), emphasized = true)
     }
 }
 
@@ -1270,6 +1224,7 @@ private fun LibrarySourceRow(
                         isLoading -> "正在扫描"
                         !source.hasAccess -> "需要授权"
                         source.errorMessage != null -> "暂时不可用"
+                        !source.isScanned -> "等待手动刷新"
                         else -> "发现 ${source.itemCount} 项"
                     },
                     color = if (!source.hasAccess || source.errorMessage != null) AppError else AppMutedText,
@@ -1291,6 +1246,37 @@ private fun LibrarySourceRow(
 }
 
 @Composable
+private fun ContinueSection(
+    session: ActiveSession,
+    activeSession: ActiveSession?,
+    lastSession: RestorableSession?,
+    playback: PlaybackSnapshot,
+    onContinue: () -> Unit,
+    onPlayPause: () -> Unit,
+) {
+    val lastSurface =
+        lastSession
+            ?.takeIf { it.session.media.uri == session.media.uri }
+            ?.lastSurface
+            ?.asLastSurface()
+            ?: PlayerSurface.Normal
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        SectionHeading(
+            title = "继续上次",
+            detail = if (lastSurface == PlayerSurface.Glow) "微光" else null,
+        )
+        NowPlayingBar(
+            session = session,
+            activeSession = activeSession,
+            lastSession = lastSession,
+            playback = playback,
+            onContinue = onContinue,
+            onPlayPause = onPlayPause,
+        )
+    }
+}
+
+@Composable
 private fun NowPlayingBar(
     session: ActiveSession,
     activeSession: ActiveSession?,
@@ -1302,6 +1288,17 @@ private fun NowPlayingBar(
 ) {
     val availability =
         if (activeSession != null) MediaAvailability.Ready else lastSession?.mediaAvailability
+    val matchingLastSession =
+        lastSession?.takeIf { it.session.media.uri == session.media.uri }
+    val lastSurface = matchingLastSession?.lastSurface?.asLastSurface() ?: PlayerSurface.Normal
+    val positionMs =
+        if (activeSession != null) playback.positionMs else matchingLastSession?.positionMs ?: 0L
+    val sessionDetail =
+        listOf(
+            formatTime(positionMs),
+            if (session.subtitle == null) "无字幕" else "有字幕",
+            "微光".takeIf { lastSurface == PlayerSurface.Glow },
+        ).filterNotNull().joinToString(" · ")
     Column(modifier = modifier.fillMaxWidth().background(Color.Black)) {
         Hairline()
         Row(
@@ -1315,7 +1312,7 @@ private fun NowPlayingBar(
                     when (availability) {
                         MediaAvailability.Checking -> "正在验证"
                         is MediaAvailability.Unavailable -> "需要重新定位"
-                        else -> session.media.displayArtist ?: if (activeSession == null) "继续播放" else formatTime(playback.positionMs)
+                        else -> sessionDetail
                     },
                     color = if (availability is MediaAvailability.Unavailable) AppError else AppMutedText,
                     fontSize = 11.sp,
@@ -1329,6 +1326,7 @@ private fun NowPlayingBar(
             ) {
                 Text(
                     when {
+                        activeSession == null && lastSurface == PlayerSurface.Glow -> "继续微光"
                         activeSession == null -> "继续"
                         playback.isPlaying -> "暂停"
                         else -> "播放"
@@ -1388,7 +1386,7 @@ private fun ImportContentDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("打开单个内容", color = AppPrimaryText) },
+        title = { Text("打开内容", color = AppPrimaryText) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SourceRow(

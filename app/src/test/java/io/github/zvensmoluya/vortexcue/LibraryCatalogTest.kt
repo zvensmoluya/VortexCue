@@ -1,6 +1,8 @@
 package io.github.zvensmoluya.vortexcue.library
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LibraryCatalogTest {
@@ -38,5 +40,22 @@ class LibraryCatalogTest {
                 ignoredUris = emptySet(),
             ),
         )
+    }
+
+    @Test
+    fun `cold start restores cached configuration without scanning`() {
+        val restored =
+            restoreCachedLibraryState(
+                config = LibraryConfig(),
+                hasAudioAccess = false,
+                videoAccess = VideoLibraryAccess.None,
+            )
+
+        assertFalse(restored.isLoading)
+        assertTrue(restored.items.isEmpty())
+        assertTrue(restored.candidates.isEmpty())
+        assertTrue(restored.ignoredItems.isEmpty())
+        assertEquals(1, restored.sources.size)
+        assertFalse(restored.sources.single().isScanned)
     }
 }

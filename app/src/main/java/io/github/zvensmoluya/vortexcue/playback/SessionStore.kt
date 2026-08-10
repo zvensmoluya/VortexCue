@@ -42,6 +42,7 @@ data class StoredLastSession(
     val currentIndex: Int,
     val shuffleEnabled: Boolean,
     val repeatMode: Int,
+    val lastSurface: PlayerSurface,
 )
 
 class SessionStore(context: Context) {
@@ -67,6 +68,8 @@ class SessionStore(context: Context) {
                     currentIndex = (preferences[Keys.LastQueueIndex] ?: 0).coerceAtLeast(0),
                     shuffleEnabled = preferences[Keys.LastShuffle] ?: false,
                     repeatMode = (preferences[Keys.LastRepeatMode] ?: 0).coerceIn(0, 2),
+                    lastSurface =
+                        PlayerSurface.restoreLastSurface(preferences[Keys.LastSurface]),
                 )
             }
         return StoredAppState(
@@ -124,6 +127,7 @@ class SessionStore(context: Context) {
             preferences[Keys.LastQueueIndex] = session.currentIndex.coerceAtLeast(0)
             preferences[Keys.LastShuffle] = session.shuffleEnabled
             preferences[Keys.LastRepeatMode] = session.repeatMode.coerceIn(0, 2)
+            preferences[Keys.LastSurface] = session.lastSurface.asLastSurface().name
         }
     }
 
@@ -283,6 +287,7 @@ class SessionStore(context: Context) {
         val LastQueueIndex = intPreferencesKey("last_queue_index")
         val LastShuffle = booleanPreferencesKey("last_shuffle")
         val LastRepeatMode = intPreferencesKey("last_repeat_mode")
+        val LastSurface = stringPreferencesKey("last_surface")
         val DisplayProfile = stringPreferencesKey("display_profile")
         val DisplayWindowBrightness = floatPreferencesKey("display_window_brightness")
         val DisplaySubtitleLevel = intPreferencesKey("display_subtitle_level")

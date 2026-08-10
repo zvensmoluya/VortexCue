@@ -22,6 +22,7 @@ data class LibrarySourceState(
     val itemCount: Int = 0,
     val hasAccess: Boolean = true,
     val errorMessage: String? = null,
+    val isScanned: Boolean = true,
 )
 
 enum class LibraryShortcutType {

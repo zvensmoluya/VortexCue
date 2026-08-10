@@ -128,6 +128,7 @@ data class RestorableSession(
     val currentIndex: Int = 0,
     val shuffleEnabled: Boolean = false,
     val repeatMode: Int = 0,
+    val lastSurface: PlayerSurface = PlayerSurface.Normal,
 )
 
 sealed interface MediaAvailability {
@@ -223,4 +224,13 @@ enum class PlayerSurface {
     Normal,
     Calibration,
     Glow,
+    ;
+
+    fun asLastSurface(): PlayerSurface =
+        if (this == Glow) Glow else Normal
+
+    companion object {
+        fun restoreLastSurface(value: String?): PlayerSurface =
+            if (value == Glow.name) Glow else Normal
+    }
 }

@@ -174,6 +174,7 @@ fun VortexCueApp(
             currentIndex = player.currentMediaItemIndex.coerceAtLeast(0),
             shuffleEnabled = player.shuffleModeEnabled,
             repeatMode = player.repeatMode,
+            lastSurface = playerSurface.asLastSurface(),
         )
     }
 
@@ -216,7 +217,7 @@ fun VortexCueApp(
         activeSession = saved.session
         lastSession = saved.copy(mediaAvailability = MediaAvailability.Ready)
         draft = saved.session.toDraft()
-        playerSurface = PlayerSurface.Normal
+        playerSurface = resolveResumeSurface(saved.lastSurface, glowCalibrationCompleted)
         destination = AppDestination.Player
         playWithNotificationPermission()
     }
@@ -348,7 +349,7 @@ fun VortexCueApp(
     }
 
     LaunchedEffect(Unit) {
-        val storedLibrary = libraryStateHolder.restoreConfig()
+        libraryStateHolder.restoreConfig()
         val stored =
             runCatching { sessionStore.load() }
                 .getOrElse {
@@ -390,6 +391,7 @@ fun VortexCueApp(
                         storedLast.currentIndex.coerceIn(storedLast.queue.indices),
                     shuffleEnabled = storedLast.shuffleEnabled,
                     repeatMode = storedLast.repeatMode,
+                    lastSurface = storedLast.lastSurface,
                     mediaAvailability =
                         mediaError?.let {
                             MediaAvailability.Unavailable(mediaAccessMessage(it))
@@ -403,6 +405,8 @@ fun VortexCueApp(
                         subtitleOffsetMs = storedLast.subtitleOffsetMs,
                     )
                 player.setPlaybackSpeed(storedLast.playbackSpeed)
+                playerSurface =
+                    resolveResumeSurface(storedLast.lastSurface, glowCalibrationCompleted)
             }
         }
 
@@ -452,7 +456,6 @@ fun VortexCueApp(
             }
         }
         restorationCompleted = true
-        libraryStateHolder.scan(storedLibrary)
     }
 
     LaunchedEffect(restorationCompleted, draft) {
@@ -478,6 +481,9 @@ fun VortexCueApp(
         }
     }
     LaunchedEffect(restorationCompleted, playback.speed) {
+        if (restorationCompleted) activeSession?.let(::persistSession)
+    }
+    LaunchedEffect(restorationCompleted, playerSurface) {
         if (restorationCompleted) activeSession?.let(::persistSession)
     }
 
@@ -740,7 +746,13 @@ fun VortexCueApp(
                 onContinue = {
                     val currentSession = activeSession
                     if (currentSession != null) {
-                        playerSurface = PlayerSurface.Normal
+                        val lastSurface =
+                            lastSession
+                                ?.takeIf { it.session.media.uri == currentSession.media.uri }
+                                ?.lastSurface
+                                ?: PlayerSurface.Normal
+                        playerSurface =
+                            resolveResumeSurface(lastSurface, glowCalibrationCompleted)
                         destination = AppDestination.Player
                     } else {
                         lastSession?.let { saved ->
@@ -980,6 +992,16 @@ internal fun resolveRestorableDuration(
     currentDurationMs.takeIf { it > 0L }
         ?: previousDurationMs?.coerceAtLeast(0L)
         ?: 0L
+
+internal fun resolveResumeSurface(
+    lastSurface: PlayerSurface,
+    glowCalibrationCompleted: Boolean,
+): PlayerSurface =
+    when {
+        lastSurface.asLastSurface() != PlayerSurface.Glow -> PlayerSurface.Normal
+        glowCalibrationCompleted -> PlayerSurface.Glow
+        else -> PlayerSurface.Calibration
+    }
 
 private fun MediaItem.toActiveSession(): ActiveSession? {
     val source = toMediaSourceRef() ?: return null
