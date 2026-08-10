@@ -62,7 +62,7 @@ internal fun rememberEmbeddedTextRuntimeState(player: Player): EmbeddedTextRunti
                         player.embeddedTextRuntimeState(
                             isDiscoveryComplete = player.playbackState == Player.STATE_READY,
                             discoveryRevision = state.discoveryRevision + 1,
-                        )
+                        ).retainCueFrom(state)
                 }
 
                 override fun onPlaybackStateChanged(playbackState: Int) {
@@ -71,13 +71,14 @@ internal fun rememberEmbeddedTextRuntimeState(player: Player): EmbeddedTextRunti
                             player.embeddedTextRuntimeState(
                                 isDiscoveryComplete = true,
                                 discoveryRevision = state.discoveryRevision + 1,
-                            )
+                            ).retainCueFrom(state)
                     }
                 }
 
                 override fun onCues(cueGroup: CueGroup) {
                     val selectedTrackId =
-                        state.tracks.singleOrNull(EmbeddedTextTrackRuntime::isSelected)
+                        player.currentEmbeddedTextTracks()
+                            .singleOrNull(EmbeddedTextTrackRuntime::isSelected)
                             ?.candidate
                             ?.track
                             ?.stableId
@@ -94,6 +95,23 @@ internal fun rememberEmbeddedTextRuntimeState(player: Player): EmbeddedTextRunti
 
     return state
 }
+
+internal fun EmbeddedTextRuntimeState.retainCueFrom(
+    previous: EmbeddedTextRuntimeState,
+    selectedTrackId: String? = selectedEmbeddedTrackId(),
+): EmbeddedTextRuntimeState =
+    if (
+        mediaUriValue == previous.mediaUriValue &&
+            selectedTrackId != null &&
+            selectedTrackId == previous.cueTrackId
+    ) {
+        copy(
+            cueTrackId = selectedTrackId,
+            cueText = previous.cueText,
+        )
+    } else {
+        this
+    }
 
 internal fun Player.applyEmbeddedTextTrackSelection(
     tracks: List<EmbeddedTextTrackRuntime>,
@@ -127,8 +145,7 @@ private fun Player.embeddedTextRuntimeState(
     discoveryRevision: Int = 0,
 ): EmbeddedTextRuntimeState {
     val mediaUriValue = currentMediaItem?.localConfiguration?.uri?.toString()
-    val runtimeTracks =
-        mediaUriValue?.let { discoverEmbeddedTextTracks(it, currentTracks) }.orEmpty()
+    val runtimeTracks = currentEmbeddedTextTracks()
     return EmbeddedTextRuntimeState(
         mediaUriValue = mediaUriValue,
         tracks = runtimeTracks,
@@ -136,6 +153,17 @@ private fun Player.embeddedTextRuntimeState(
         discoveryRevision = discoveryRevision,
     )
 }
+
+private fun Player.currentEmbeddedTextTracks(): List<EmbeddedTextTrackRuntime> {
+    val mediaUriValue = currentMediaItem?.localConfiguration?.uri?.toString() ?: return emptyList()
+    return discoverEmbeddedTextTracks(mediaUriValue, currentTracks)
+}
+
+private fun EmbeddedTextRuntimeState.selectedEmbeddedTrackId(): String? =
+    tracks.singleOrNull(EmbeddedTextTrackRuntime::isSelected)
+        ?.candidate
+        ?.track
+        ?.stableId
 
 private fun discoverEmbeddedTextTracks(
     mediaUriValue: String,

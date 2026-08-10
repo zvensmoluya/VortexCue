@@ -1083,10 +1083,14 @@ fun VortexCueApp(
                             )
                         libraryStateHolder.rememberRecentMedia(media)
                         activeSession = applied
-                        libraryStateHolder.updateSubtitleAssociation(
-                            media,
-                            loadedSubtitle?.source,
-                        )
+                        if (loadedSubtitle != null) {
+                            libraryStateHolder.updateSubtitleAssociation(
+                                media,
+                                loadedSubtitle.source,
+                            )
+                        } else {
+                            restoreAssociatedTextTracks(media)
+                        }
                         draft = applied.toDraft()
                         playerSurface = PlayerSurface.Normal
                         destination = AppDestination.Player
