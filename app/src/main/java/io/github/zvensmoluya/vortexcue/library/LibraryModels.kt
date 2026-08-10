@@ -47,7 +47,8 @@ data class SubtitleAssociation(
 )
 
 data class LibraryConfig(
-    val manualItems: List<MediaSourceRef> = emptyList(),
+    val catalogItems: List<MediaSourceRef> = emptyList(),
+    val recentItems: List<MediaSourceRef> = emptyList(),
     val folders: List<LibraryFolderRef> = emptyList(),
     val playlists: List<LibraryPlaylist> = emptyList(),
     val subtitleAssociations: List<SubtitleAssociation> = emptyList(),

@@ -32,7 +32,6 @@ internal fun partitionLibrary(
     val explicitUris =
         (
             config.includedUris +
-                config.manualItems.map { it.uri.toString() } +
                 config.playlists.flatMap { playlist ->
                     playlist.items.map { it.uri.toString() }
                 }
@@ -63,10 +62,13 @@ internal fun restoreCachedLibraryState(
     videoAccess: VideoLibraryAccess,
 ): MediaLibraryState {
     val cachedItems =
-        (config.manualItems + config.playlists.flatMap(LibraryPlaylist::items))
-            .distinctBy { it.uri.toString() }
+        mergeCatalogItems(
+            preferred = config.catalogItems,
+            fallback = config.playlists.flatMap(LibraryPlaylist::items),
+        )
     val partition = partitionLibrary(cachedItems, config)
     val hasSystemAccess = hasAudioAccess || videoAccess != VideoLibraryAccess.None
+    val systemItemCount = cachedItems.count { it.sourceId == LibrarySourceIds.SystemLibrary }
     val sources =
         buildList {
             add(
@@ -74,6 +76,7 @@ internal fun restoreCachedLibraryState(
                     id = LibrarySourceIds.SystemLibrary,
                     kind = LibrarySourceKind.SystemLibrary,
                     displayName = "设备媒体库",
+                    itemCount = systemItemCount,
                     hasAccess = hasSystemAccess,
                     isScanned = false,
                 ),
@@ -84,17 +87,19 @@ internal fun restoreCachedLibraryState(
                         id = folder.id,
                         kind = LibrarySourceKind.Folder,
                         displayName = folder.displayName,
+                        itemCount = cachedItems.count { it.sourceId == folder.id },
                         isScanned = false,
                     ),
                 )
             }
-            if (config.manualItems.isNotEmpty()) {
+            val looseItemCount = cachedItems.count { it.sourceId == LibrarySourceIds.LooseFiles }
+            if (looseItemCount > 0) {
                 add(
                     LibrarySourceState(
                         id = LibrarySourceIds.LooseFiles,
                         kind = LibrarySourceKind.LooseFiles,
                         displayName = "单独打开",
-                        itemCount = config.manualItems.size,
+                        itemCount = looseItemCount,
                     ),
                 )
             }
@@ -112,6 +117,12 @@ internal fun restoreCachedLibraryState(
 
 internal fun MediaLibraryState.allDiscoveredItems(): List<MediaSourceRef> =
     (items + candidates + ignoredItems).distinctBy { it.uri.toString() }
+
+internal fun mergeCatalogItems(
+    preferred: List<MediaSourceRef>,
+    fallback: List<MediaSourceRef>,
+): List<MediaSourceRef> =
+    (preferred + fallback).distinctBy { it.uri.toString() }
 
 internal fun List<LibraryPlaylist>.withoutItems(
     uriValues: Set<String>,

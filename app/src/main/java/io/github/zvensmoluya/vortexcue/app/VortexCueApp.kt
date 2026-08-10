@@ -265,7 +265,6 @@ fun VortexCueApp(
                     ensureMediaReadable(contentResolver, source)
                     val readySource = libraryStateHolder.inspectMedia(source)
                     if (requestId != mediaRequestId) return@launch
-                    libraryStateHolder.rememberManualMedia(readySource)
                     when (target) {
                         MediaPickTarget.Draft ->
                             draft = draft.copy(media = DraftMedia.Ready(readySource))
@@ -278,6 +277,7 @@ fun VortexCueApp(
                                     )
                                 lastSession = ready
                                 sessionStore.saveLastSession(ready)
+                                libraryStateHolder.rememberRecentMedia(readySource)
                                 resumeSession(ready)
                             }
                     }
@@ -522,7 +522,10 @@ fun VortexCueApp(
                         }
                     activeSession = updated
                     draft = updated.toDraft()
-                    if (restorationCompleted) persistSession(updated)
+                    if (restorationCompleted) {
+                        libraryStateHolder.rememberRecentMedia(media)
+                        persistSession(updated)
+                    }
                     if (updated.subtitle == null) restoreAssociatedSubtitle(media)
                 }
             }
@@ -731,6 +734,7 @@ fun VortexCueApp(
                                 subtitle = loadedSubtitle,
                                 subtitleOffsetMs = preservedOffsetMs,
                             )
+                        libraryStateHolder.rememberRecentMedia(media)
                         activeSession = applied
                         libraryStateHolder.updateSubtitleAssociation(
                             media.uri,

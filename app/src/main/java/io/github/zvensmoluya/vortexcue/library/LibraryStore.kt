@@ -18,7 +18,10 @@ class LibraryStore(context: Context) {
 
     suspend fun load(): LibraryConfig {
         val encoded = dataStore.data.first()[StateKey] ?: return LibraryConfig()
-        return runCatching { decodeConfig(JSONObject(encoded)) }.getOrDefault(LibraryConfig())
+        val json = runCatching { JSONObject(encoded) }.getOrNull() ?: return LibraryConfig()
+        val config = runCatching { decodeConfig(json) }.getOrNull() ?: return LibraryConfig()
+        if (json.optInt("version") < CurrentVersion) save(config)
+        return config
     }
 
     suspend fun save(config: LibraryConfig) {
@@ -29,8 +32,9 @@ class LibraryStore(context: Context) {
 
     private fun encodeConfig(config: LibraryConfig): JSONObject =
         JSONObject()
-            .put("version", 3)
-            .put("manualItems", MediaSourceJson.encodeList(config.manualItems))
+            .put("version", CurrentVersion)
+            .put("catalogItems", MediaSourceJson.encodeList(config.catalogItems))
+            .put("recentItems", MediaSourceJson.encodeList(config.recentItems))
             .put("folders", JSONArray().apply { config.folders.forEach { put(it.toJson()) } })
             .put("playlists", JSONArray().apply { config.playlists.forEach { put(it.toJson()) } })
             .put("includedUris", JSONArray(config.includedUris))
@@ -44,18 +48,33 @@ class LibraryStore(context: Context) {
                 JSONArray().apply { config.subtitleAssociations.forEach { put(it.toJson()) } },
             )
 
-    private fun decodeConfig(json: JSONObject): LibraryConfig =
-        LibraryConfig(
-            manualItems = MediaSourceJson.decodeList(json.optJSONArray("manualItems")),
+    private fun decodeConfig(json: JSONObject): LibraryConfig {
+        val catalogItems = MediaSourceJson.decodeList(json.optJSONArray("catalogItems"))
+        val recentItems = MediaSourceJson.decodeList(json.optJSONArray("recentItems"))
+        val legacyManualItems = MediaSourceJson.decodeList(json.optJSONArray("manualItems"))
+        val migration =
+            resolveLibraryMigration(
+                catalogUriValues = catalogItems.map { it.uri.toString() },
+                recentUriValues = recentItems.map { it.uri.toString() },
+                includedUriValues = json.optJSONArray("includedUris").stringValues(),
+                legacyManualUriValues = legacyManualItems.map { it.uri.toString() },
+            )
+        val sourcesByUri =
+            (legacyManualItems + catalogItems + recentItems)
+                .associateBy { it.uri.toString() }
+        return LibraryConfig(
+            catalogItems = migration.catalogUriValues.mapNotNull(sourcesByUri::get),
+            recentItems = migration.recentUriValues.mapNotNull(sourcesByUri::get),
             folders = json.optJSONArray("folders").mapObjects(::folderFromJson),
             playlists = json.optJSONArray("playlists").mapObjects(::playlistFromJson),
             subtitleAssociations =
                 json.optJSONArray("subtitleAssociations").mapObjects(::subtitleAssociationFromJson),
-            includedUris = json.optJSONArray("includedUris").stringValues().distinct(),
+            includedUris = migration.includedUriValues,
             ignoredUris = json.optJSONArray("ignoredUris").stringValues().distinct(),
             homeShortcuts =
                 json.optJSONArray("homeShortcuts").mapObjects(::shortcutFromJson).distinct(),
         )
+    }
 
     private fun LibraryFolderRef.toJson(): JSONObject =
         JSONObject()
@@ -125,9 +144,31 @@ class LibraryStore(context: Context) {
     }
 
     private companion object {
+        const val CurrentVersion = 4
         val StateKey = stringPreferencesKey("state_json")
     }
 }
+
+internal data class LibraryMigration(
+    val catalogUriValues: List<String>,
+    val recentUriValues: List<String>,
+    val includedUriValues: List<String>,
+)
+
+internal fun resolveLibraryMigration(
+    catalogUriValues: List<String>,
+    recentUriValues: List<String>,
+    includedUriValues: List<String>,
+    legacyManualUriValues: List<String>,
+): LibraryMigration =
+    LibraryMigration(
+        catalogUriValues = (catalogUriValues + legacyManualUriValues).nonBlankDistinct(),
+        recentUriValues = (recentUriValues + legacyManualUriValues).nonBlankDistinct(),
+        includedUriValues = (includedUriValues + legacyManualUriValues).nonBlankDistinct(),
+    )
+
+private fun List<String>.nonBlankDistinct(): List<String> =
+    filter(String::isNotBlank).distinct()
 
 private fun JSONArray?.stringValues(): List<String> {
     if (this == null) return emptyList()

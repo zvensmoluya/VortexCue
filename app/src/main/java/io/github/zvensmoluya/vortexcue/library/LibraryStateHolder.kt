@@ -126,33 +126,51 @@ internal class LibraryStateHolder(
                 }
 
                 val looseItems =
-                    config.manualItems.map { item ->
-                        item.copy(
-                            origin = MediaOrigin.OpenDocument,
-                            sourceId = LibrarySourceIds.LooseFiles,
-                        )
-                    }
+                    config.catalogItems
+                        .filter { it.sourceId == LibrarySourceIds.LooseFiles }
+                        .map { item ->
+                            item.copy(
+                                origin = MediaOrigin.OpenDocument,
+                                sourceId = LibrarySourceIds.LooseFiles,
+                            )
+                        }
                 scanned += looseItems
-                sources +=
-                    LibrarySourceState(
-                        id = LibrarySourceIds.LooseFiles,
-                        kind = LibrarySourceKind.LooseFiles,
-                        displayName = "单独打开",
-                        itemCount = looseItems.size,
-                    )
+                if (looseItems.isNotEmpty()) {
+                    sources +=
+                        LibrarySourceState(
+                            id = LibrarySourceIds.LooseFiles,
+                            kind = LibrarySourceKind.LooseFiles,
+                            displayName = "单独打开",
+                            itemCount = looseItems.size,
+                        )
+                }
 
                 if (requestId != scanRequestId) return@launch
-                val discovered =
+                val freshItems =
                     scanned
                         .distinctBy { it.uri.toString() }
                         .sortedBy { it.displayTitle.lowercase() }
-                val partition = partitionLibrary(discovered, config)
+                val latestConfig = state.config
+                val updatedConfig =
+                    latestConfig.copy(
+                        catalogItems =
+                            mergeCatalogItems(
+                                preferred = freshItems,
+                                fallback = latestConfig.catalogItems,
+                            ),
+                    )
+                val catalogItems =
+                    mergeCatalogItems(
+                        preferred = updatedConfig.catalogItems,
+                        fallback = updatedConfig.playlists.flatMap(LibraryPlaylist::items),
+                    )
+                val partition = partitionLibrary(catalogItems, updatedConfig)
                 state =
                     state.copy(
                         items = partition.included,
                         candidates = partition.candidates,
                         ignoredItems = partition.ignored,
-                        config = config,
+                        config = updatedConfig,
                         sources = sources,
                         suggestedSubtitleAssociations = subtitleSuggestions,
                         isLoading = false,
@@ -160,47 +178,59 @@ internal class LibraryStateHolder(
                         videoAccess = videoAccess,
                         errorMessage = sources.firstNotNullOfOrNull { it.errorMessage },
                     )
+                store.save(updatedConfig)
             }
     }
 
-    fun rememberManualMedia(source: MediaSourceRef) {
-        cancelScan()
+    fun rememberRecentMedia(source: MediaSourceRef) {
         val config = state.config
-        val looseSource =
-            source.copy(
-                origin = MediaOrigin.OpenDocument,
-                sourceId = LibrarySourceIds.LooseFiles,
-            )
+        val recentSource =
+            if (source.origin == MediaOrigin.OpenDocument) {
+                source.copy(sourceId = LibrarySourceIds.LooseFiles)
+            } else {
+                source
+            }
         val updatedConfig =
             config.copy(
-                manualItems = listOf(looseSource) + config.manualItems.filterNot { it.uri == source.uri },
-                includedUris = (config.includedUris + looseSource.uri.toString()).distinct(),
-                ignoredUris = config.ignoredUris - looseSource.uri.toString(),
-                homeShortcuts =
-                    (config.homeShortcuts + looseSource.toFolderShortcut()).distinct(),
+                recentItems =
+                    (listOf(recentSource) + config.recentItems.filterNot { it.uri == source.uri })
+                        .take(MaxRecentItems),
             )
-        val discovered =
-            (listOf(looseSource) + state.allDiscoveredItems())
-                .distinctBy { it.uri.toString() }
-        val partition = partitionLibrary(discovered, updatedConfig)
-        val looseSourceState =
-            LibrarySourceState(
-                id = LibrarySourceIds.LooseFiles,
-                kind = LibrarySourceKind.LooseFiles,
-                displayName = "单独打开",
-                itemCount = updatedConfig.manualItems.size,
-            )
-        state =
-            state.copy(
-                items = partition.included,
-                candidates = partition.candidates,
-                ignoredItems = partition.ignored,
-                config = updatedConfig,
-                sources =
-                    state.sources.filterNot { it.id == LibrarySourceIds.LooseFiles } +
-                        looseSourceState,
-            )
+        state = state.copy(config = updatedConfig)
         coroutineScope.launch { store.save(updatedConfig) }
+    }
+
+    fun collectMedia(source: MediaSourceRef) {
+        val collected =
+            if (source.origin == MediaOrigin.OpenDocument) {
+                source.copy(sourceId = LibrarySourceIds.LooseFiles)
+            } else {
+                source
+            }
+        val uriValue = collected.uri.toString()
+        val config = state.config
+        updateConfig(
+            config.copy(
+                catalogItems =
+                    mergeCatalogItems(
+                        preferred = listOf(collected),
+                        fallback = config.catalogItems,
+                    ),
+                includedUris = (config.includedUris + uriValue).distinct(),
+                ignoredUris = config.ignoredUris - uriValue,
+                homeShortcuts =
+                    if (collected.sourceId == LibrarySourceIds.LooseFiles) {
+                        (config.homeShortcuts + collected.toFolderShortcut()).distinct()
+                    } else {
+                        config.homeShortcuts
+                    },
+            ),
+            repartition = true,
+        )
+    }
+
+    fun uncollectMedia(source: MediaSourceRef) {
+        removeIncluded(setOf(source.uri.toString()))
     }
 
     fun addFolder(uri: Uri) {
@@ -222,11 +252,16 @@ internal class LibraryStateHolder(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
         }
-        val removedItems = state.allDiscoveredItems().filter { it.sourceId == folderId }
+        val removedItems =
+            (config.catalogItems + state.allDiscoveredItems())
+                .distinctBy { it.uri.toString() }
+                .filter { it.sourceId == folderId }
         val removedUris = removedItems.map { it.uri.toString() }.toSet()
         updateConfig(
             config.copy(
                 folders = config.folders.filterNot { it.id == folderId },
+                catalogItems = config.catalogItems.filterNot { it.sourceId == folderId },
+                recentItems = config.recentItems.filterNot { it.sourceId == folderId },
                 includedUris = config.includedUris.filterNot(removedUris::contains),
                 ignoredUris = config.ignoredUris.filterNot(removedUris::contains),
                 homeShortcuts =
@@ -244,10 +279,21 @@ internal class LibraryStateHolder(
 
     fun clearLooseFiles() {
         val config = state.config
-        val looseUris = config.manualItems.map { it.uri.toString() }.toSet()
+        val looseUris =
+            (config.catalogItems + config.recentItems)
+                .filter { it.sourceId == LibrarySourceIds.LooseFiles }
+                .map { it.uri.toString() }
+                .toSet()
         updateConfig(
             config.copy(
-                manualItems = emptyList(),
+                catalogItems =
+                    config.catalogItems.filterNot {
+                        it.sourceId == LibrarySourceIds.LooseFiles
+                    },
+                recentItems =
+                    config.recentItems.filterNot {
+                        it.sourceId == LibrarySourceIds.LooseFiles
+                    },
                 includedUris = config.includedUris.filterNot(looseUris::contains),
                 ignoredUris = config.ignoredUris.filterNot(looseUris::contains),
                 homeShortcuts =
@@ -297,11 +343,7 @@ internal class LibraryStateHolder(
         val config = state.config
         updateConfig(
             config.copy(
-                manualItems = config.manualItems.filterNot { it.uri.toString() in uriValues },
                 includedUris = config.includedUris.filterNot(uriValues::contains),
-                ignoredUris = (config.ignoredUris + uriValues).distinct(),
-                subtitleAssociations =
-                    config.subtitleAssociations.filterNot { it.mediaUri.toString() in uriValues },
                 playlists = config.playlists.withoutItems(uriValues),
             ),
             repartition = true,
@@ -414,7 +456,12 @@ internal class LibraryStateHolder(
     ) {
         state =
             if (repartition) {
-                val partition = partitionLibrary(state.allDiscoveredItems(), config)
+                val catalogItems =
+                    mergeCatalogItems(
+                        preferred = config.catalogItems,
+                        fallback = config.playlists.flatMap(LibraryPlaylist::items),
+                    )
+                val partition = partitionLibrary(catalogItems, config)
                 state.copy(
                     items = partition.included,
                     candidates = partition.candidates,
@@ -426,5 +473,9 @@ internal class LibraryStateHolder(
             }
         coroutineScope.launch { store.save(config) }
         if (rescan) scan(config)
+    }
+
+    private companion object {
+        const val MaxRecentItems = 50
     }
 }
