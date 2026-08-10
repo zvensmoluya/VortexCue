@@ -6,7 +6,7 @@
 >
 > 长期背景：[`DOMAIN_CONTEXT.md`](DOMAIN_CONTEXT.md)
 >
-> 更新时间：2026-08-10
+> 更新时间：2026-08-11
 
 本文定义当前要实现和验收的产品行为。`DOMAIN_CONTEXT.md` 解释荧荧为什么存在，但不自动产生实现要求；研究报告用于提供证据和假设，也不直接覆盖本文。
 
@@ -619,6 +619,20 @@ ui        首次体验、Home、Player 和主题
 6. 当前播放器通过兼容层继续消费一个外挂 primary，不在本切片提前声称已经支持内嵌轨播放、secondary 显示、失效修复或完整轨道选择 UI。
 
 状态：已完成代码、自动化检查与 Android 13 的 v4→v5 原位升级真机验证。253 个旧媒体快照全部生成唯一稳定 ID，Recent、Collection 决定和旧字幕关联均未丢失；第二次冷启动状态保持不变且未触发扫描。M3.2 尚未整体完成，内嵌文字轨、primary / secondary 播放界面和失效重定位仍属于后续切片。详见 [`records/M3_CONTENT_UNIT_VALIDATION.md`](records/M3_CONTENT_UNIT_VALIDATION.md)。
+
+#### M3.2c 第三实现切片
+
+本切片让 M3.2b 的文字轨目录进入真实播放和恢复路径：
+
+1. 从 Media3 运行时发现可用于 Glow 的内嵌文本轨，保存语言、名称、default / forced / SDH / CC 角色和设备可用状态；
+2. Normal Player 与 Glow 按当前选择显示 primary / secondary，并提供轨道查看、手动切换、关闭、添加文件和恢复自动选择；
+3. 同一时间只启用一条内嵌文本轨；它可以和一条应用时间轴驱动的外挂字幕组成主次轨，不能把两条内嵌轨误报为同时可用；
+4. 新打开媒体且没有手动选择外挂字幕时保留自动规则，不把“未选择文件”写成手动关闭 primary；
+5. 冷启动恢复媒体、位置、内嵌主轨、外挂副轨、offset 和最后表面，不依赖重新扫描；
+6. 当前媒体 URI 失效时显示可恢复状态；重新定位到等价媒体后重建内嵌轨，并保留内容关系、外挂轨和主次选择；
+7. Media3 在 seek、轨道刷新和 `STATE_READY` 之间发生事件重排时，同媒体同轨的当前 cue 不得被后到的状态刷新清空。
+
+状态：已完成代码、自动化检查与 Android 13 真机验收。30 秒合成媒体覆盖两条内嵌 SRT、一个外挂 SRT、Normal / Glow 双轨、内嵌轨互斥、冷启动恢复、URI 失效与等价文件重定位；原有 253 个目录项、95 条收录决定和 2 条旧字幕关联保持不变。详见 [`records/M3_TEXT_TRACK_VALIDATION.md`](records/M3_TEXT_TRACK_VALIDATION.md)。这不是 Golden Session，也不替代 Android 14+、真实长内容、后台系统控制和夜间连续使用验证。
 
 ### M3.3 建立我的内容与来源
 
