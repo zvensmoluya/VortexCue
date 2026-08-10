@@ -159,11 +159,25 @@ class PlaybackService : MediaSessionService() {
     }
 
     private inner class SessionCallback : MediaSession.Callback {
+        @UnstableApi
         override fun onConnect(
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
         ): MediaSession.ConnectionResult {
+            val access =
+                resolveControllerAccess(
+                    appPackageName = packageName,
+                    appUid = applicationInfo.uid,
+                    controllerPackageName = controller.packageName,
+                    controllerUid = controller.uid,
+                    isPackageNameVerified = controller.isPackageNameVerified,
+                    isTrusted = controller.isTrusted,
+                )
+            if (access == ControllerAccess.Rejected) {
+                return MediaSession.ConnectionResult.reject()
+            }
             val base = super.onConnect(session, controller)
+            if (access != ControllerAccess.OwnApp) return base
             val commands =
                 base.availableSessionCommands
                     .buildUpon()
