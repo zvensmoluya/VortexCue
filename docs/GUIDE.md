@@ -593,7 +593,7 @@ ui        首次体验、Home、Player 和主题
 
 #### M3.2a 第一实现切片
 
-下一次代码改动只建立“可以安全继续演进的目录事实”，不同时重做 Home、Folder、Tonight 和全部字幕 UI：
+本切片只建立“可以安全继续演进的目录事实”，不同时重做 Home、Folder、Tonight 和全部字幕 UI：
 
 1. 增加版本化的内容目录快照，保存已知 `MediaSourceRef`、来源和收录决定；
 2. 将 Recent 与 Collection 分开持久化，新打开内容只进入 Recent；
@@ -604,6 +604,8 @@ ui        首次体验、Home、Player 和主题
 7. 不在该切片引入 Room、收藏、标签、命名 Playlist、后台常驻扫描或新导航结构。
 
 这个切片完成后，代码中不再使用“单独打开列表”同时表达最近、收录和来源三个概念。
+
+状态：已完成代码、自动化检查与 Android 13 的 v3→v4 原位升级真机验证。单文件进入 Recent、明确加入 / 移出“我的内容”、冷启动无扫描恢复和旧 `includedUris` 决定补全目录均已走通；真机基线没有旧 `manualItems` 和 Playlist，这两条迁移继续由单元测试覆盖。详见 [`records/M3_CATALOG_VALIDATION.md`](records/M3_CATALOG_VALIDATION.md)。
 
 ### M3.3 建立我的内容与来源
 
