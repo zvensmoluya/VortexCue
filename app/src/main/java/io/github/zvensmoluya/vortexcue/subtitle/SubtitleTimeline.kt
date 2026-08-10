@@ -1,4 +1,4 @@
-package io.github.zvensmoluya.vortexcue
+package io.github.zvensmoluya.vortexcue.subtitle
 
 class SubtitleTimeline(cues: List<SubtitleCue>) {
     val cues: List<SubtitleCue> =

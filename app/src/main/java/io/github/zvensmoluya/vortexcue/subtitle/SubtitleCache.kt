@@ -1,4 +1,4 @@
-package io.github.zvensmoluya.vortexcue
+package io.github.zvensmoluya.vortexcue.subtitle
 
 import android.content.Context
 import android.net.Uri

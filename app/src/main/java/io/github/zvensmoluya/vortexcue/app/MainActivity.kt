@@ -1,4 +1,4 @@
-package io.github.zvensmoluya.vortexcue
+package io.github.zvensmoluya.vortexcue.app
 
 import android.content.ComponentName
 import android.os.Build
@@ -22,6 +22,8 @@ import androidx.core.content.ContextCompat
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
+import io.github.zvensmoluya.vortexcue.playback.PlaybackService
+import io.github.zvensmoluya.vortexcue.ui.theme.VortexCueTheme
 
 class MainActivity : ComponentActivity() {
     private val controllerState = mutableStateOf<MediaController?>(null)

@@ -1,4 +1,4 @@
-package io.github.zvensmoluya.vortexcue
+package io.github.zvensmoluya.vortexcue.playback
 
 import android.app.PendingIntent
 import android.content.Intent
@@ -17,6 +17,7 @@ import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import io.github.zvensmoluya.vortexcue.app.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job

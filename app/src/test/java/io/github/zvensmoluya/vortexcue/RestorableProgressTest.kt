@@ -1,5 +1,7 @@
 package io.github.zvensmoluya.vortexcue
 
+import io.github.zvensmoluya.vortexcue.app.resolveRestorableDuration
+import io.github.zvensmoluya.vortexcue.app.resolveRestorablePosition
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

@@ -1,4 +1,4 @@
-package io.github.zvensmoluya.vortexcue
+package io.github.zvensmoluya.vortexcue.ui.player
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -57,6 +57,11 @@ import androidx.media3.common.Player
 import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import io.github.zvensmoluya.vortexcue.core.model.*
+import io.github.zvensmoluya.vortexcue.playback.*
+import io.github.zvensmoluya.vortexcue.subtitle.SubtitleCue
+import io.github.zvensmoluya.vortexcue.subtitle.SubtitleTimeline
+import io.github.zvensmoluya.vortexcue.ui.theme.*
 
 private val GlowTrackColor = Color(0xFF242424)
 private val PlaybackSpeeds = listOf(0.75f, 1f, 1.25f, 1.5f, 2f)

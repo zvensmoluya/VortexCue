@@ -137,3 +137,22 @@
 4. 设计并实现正常播放器中的视频画面，再决定视频进入微光时的具体表现。
 
 现有工程继续保持单一 `app` 模块、Kotlin、Compose 和 Media3。播放器以后台 Player / MediaSession 为唯一播放真相；媒体文件不复制到应用目录，只有可重建索引、用户选择和小型字幕缓存可以持久化。
+
+## 工程边界
+
+工程保持单一 `app` 模块，不为目录整齐提前拆分 Gradle 模块。Kotlin 包按职责组织：
+
+```text
+app       Activity、应用组合根与跨功能导航
+core      共享模型与存储格式
+library   媒体发现、内容决策、播放列表与持久化
+playback  MediaSessionService、会话恢复与睡眠定时
+subtitle  字幕读取、解析、时间轴与缓存
+ui        首页、播放器和主题
+```
+
+- `PlaybackService` 内的 Player / MediaSession 是播放状态的唯一真相；
+- `app` 负责连接系统入口和功能状态，不重新实现内容库或播放规则；
+- 内容库状态由独立 state holder 持有，扫描和配置变更不放回 Composable；
+- 可独立判断的内容决策保持为纯函数并使用 JVM 单元测试覆盖；
+- 包边界用于约束依赖方向，只有出现真实构建或复用需求时才增加 Gradle 模块。

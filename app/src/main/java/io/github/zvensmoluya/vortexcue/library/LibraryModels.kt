@@ -1,6 +1,7 @@
-package io.github.zvensmoluya.vortexcue
+package io.github.zvensmoluya.vortexcue.library
 
 import android.net.Uri
+import io.github.zvensmoluya.vortexcue.core.model.*
 
 data class LibraryFolderRef(
     val uri: Uri,

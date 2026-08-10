@@ -1,5 +1,6 @@
 package io.github.zvensmoluya.vortexcue
 
+import io.github.zvensmoluya.vortexcue.core.model.DisplayProfile
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

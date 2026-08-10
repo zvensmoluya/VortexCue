@@ -1,4 +1,4 @@
-package io.github.zvensmoluya.vortexcue
+package io.github.zvensmoluya.vortexcue.playback
 
 import android.os.Bundle
 import androidx.compose.runtime.Composable

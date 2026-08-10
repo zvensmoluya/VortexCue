@@ -1,4 +1,4 @@
-package io.github.zvensmoluya.vortexcue
+package io.github.zvensmoluya.vortexcue.ui.home
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -50,6 +50,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
+import io.github.zvensmoluya.vortexcue.core.model.*
+import io.github.zvensmoluya.vortexcue.library.*
+import io.github.zvensmoluya.vortexcue.ui.player.PlaybackSnapshot
+import io.github.zvensmoluya.vortexcue.ui.player.formatTime
+import io.github.zvensmoluya.vortexcue.ui.theme.*
 
 internal enum class HomeSection {
     Library,

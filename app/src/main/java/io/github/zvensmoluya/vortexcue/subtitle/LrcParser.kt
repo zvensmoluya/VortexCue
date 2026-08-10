@@ -1,4 +1,4 @@
-package io.github.zvensmoluya.vortexcue
+package io.github.zvensmoluya.vortexcue.subtitle
 
 class LrcParseException(message: String) : IllegalArgumentException(message)
 

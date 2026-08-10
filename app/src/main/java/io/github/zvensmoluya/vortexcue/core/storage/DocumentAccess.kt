@@ -1,4 +1,4 @@
-package io.github.zvensmoluya.vortexcue
+package io.github.zvensmoluya.vortexcue.core.storage
 
 import android.content.ContentResolver
 import android.content.Intent

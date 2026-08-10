@@ -1,4 +1,4 @@
-package io.github.zvensmoluya.vortexcue
+package io.github.zvensmoluya.vortexcue.subtitle
 
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException

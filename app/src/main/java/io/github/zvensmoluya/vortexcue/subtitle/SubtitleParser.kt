@@ -1,4 +1,4 @@
-package io.github.zvensmoluya.vortexcue
+package io.github.zvensmoluya.vortexcue.subtitle
 
 object SubtitleParser {
     private val lrcTimestamp = Regex("""\[\d{1,3}:[0-5]\d(?:[.:]\d{1,3})?]""")

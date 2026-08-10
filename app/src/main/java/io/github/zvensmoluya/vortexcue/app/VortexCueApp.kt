@@ -1,8 +1,7 @@
-package io.github.zvensmoluya.vortexcue
+package io.github.zvensmoluya.vortexcue.app
 
 import android.Manifest
 import android.content.ContentResolver
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -37,9 +36,16 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
+import io.github.zvensmoluya.vortexcue.core.model.*
+import io.github.zvensmoluya.vortexcue.core.storage.*
+import io.github.zvensmoluya.vortexcue.library.*
+import io.github.zvensmoluya.vortexcue.playback.*
+import io.github.zvensmoluya.vortexcue.subtitle.*
+import io.github.zvensmoluya.vortexcue.ui.home.*
+import io.github.zvensmoluya.vortexcue.ui.player.*
+import io.github.zvensmoluya.vortexcue.ui.theme.*
 import java.io.FileNotFoundException
 import java.io.IOException
-import java.util.UUID
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -72,8 +78,8 @@ fun VortexCueApp(
     var sleepTimerRevision by remember { mutableIntStateOf(0) }
     val sleepTimer = rememberSleepTimerState(player, sleepTimerRevision)
     val sessionStore = remember(context) { SessionStore(context) }
-    val libraryStore = remember(context) { LibraryStore(context) }
-    val mediaScanner = remember(context) { LocalMediaScanner(context) }
+    val libraryStateHolder =
+        remember(context, coroutineScope) { LibraryStateHolder(context, coroutineScope) }
     val subtitleCache = remember(context) { SubtitleCache(context) }
     val initialSession = remember(player) { player.currentMediaItem?.toActiveSession() }
 
@@ -100,376 +106,7 @@ fun VortexCueApp(
     var notificationPermissionRequested by rememberSaveable { mutableStateOf(false) }
     var pendingAutoPlay by rememberSaveable { mutableStateOf(false) }
     var openImportOnHome by rememberSaveable { mutableStateOf(false) }
-    var libraryState by remember { mutableStateOf(MediaLibraryState()) }
-    var libraryScanJob by remember { mutableStateOf<Job?>(null) }
-    var libraryScanRequestId by remember { mutableLongStateOf(0L) }
-
-    fun scanLibrary(config: LibraryConfig = libraryState.config) {
-        libraryScanRequestId += 1L
-        val requestId = libraryScanRequestId
-        libraryScanJob?.cancel()
-        val hasAudioAccess = context.hasAudioLibraryPermission()
-        val hasVideoAccess = context.hasVideoLibraryPermission()
-        val hasSystemAccess = hasAudioAccess || hasVideoAccess
-        libraryState =
-            libraryState.copy(
-                config = config,
-                isLoading = true,
-                hasAudioAccess = hasAudioAccess,
-                hasVideoAccess = hasVideoAccess,
-                errorMessage = null,
-            )
-        libraryScanJob =
-            coroutineScope.launch {
-                val scanned = mutableListOf<MediaSourceRef>()
-                val sources = mutableListOf<LibrarySourceState>()
-                if (hasSystemAccess) {
-                    val audioResult =
-                        if (hasAudioAccess) runCatching { mediaScanner.scanSystemAudio() }
-                        else Result.success(emptyList())
-                    val videoResult =
-                        if (hasVideoAccess) runCatching { mediaScanner.scanSystemVideo() }
-                        else Result.success(emptyList())
-                    val audioItems = audioResult.getOrDefault(emptyList())
-                    val videoItems = videoResult.getOrDefault(emptyList())
-                    scanned += audioItems
-                    scanned += videoItems
-                    sources +=
-                        LibrarySourceState(
-                            id = LibrarySourceIds.SystemLibrary,
-                            kind = LibrarySourceKind.SystemLibrary,
-                            displayName = "设备媒体库",
-                            itemCount = audioItems.size + videoItems.size,
-                            errorMessage =
-                                (audioResult.exceptionOrNull() ?: videoResult.exceptionOrNull())
-                                    ?.let { "无法完整读取系统媒体目录" },
-                        )
-                } else {
-                    sources +=
-                        LibrarySourceState(
-                            id = LibrarySourceIds.SystemLibrary,
-                            kind = LibrarySourceKind.SystemLibrary,
-                            displayName = "设备媒体库",
-                            hasAccess = false,
-                        )
-                }
-                val subtitleSuggestions = mutableListOf<SubtitleAssociation>()
-                config.folders.forEach { folder ->
-                    val result = runCatching { mediaScanner.scanFolder(folder) }
-                    val batch = result.getOrDefault(LibraryScanBatch())
-                    scanned += batch.media
-                    subtitleSuggestions += batch.subtitleSuggestions
-                    sources +=
-                        LibrarySourceState(
-                            id = folder.id,
-                            kind = LibrarySourceKind.Folder,
-                            displayName = folder.displayName,
-                            itemCount = batch.media.size,
-                            hasAccess = result.isSuccess,
-                            errorMessage =
-                                result.exceptionOrNull()?.let {
-                                    "文件夹授权已失效或暂时不可用"
-                                },
-                        )
-                }
-                val looseItems =
-                    config.manualItems.map { item ->
-                        item.copy(
-                            origin = MediaOrigin.OpenDocument,
-                            sourceId = LibrarySourceIds.LooseFiles,
-                        )
-                    }
-                scanned += looseItems
-                sources +=
-                    LibrarySourceState(
-                        id = LibrarySourceIds.LooseFiles,
-                        kind = LibrarySourceKind.LooseFiles,
-                        displayName = "单独打开",
-                        itemCount = looseItems.size,
-                    )
-                if (requestId != libraryScanRequestId) return@launch
-                val discovered =
-                    scanned
-                        .distinctBy { it.uri.toString() }
-                        .sortedBy { it.displayTitle.lowercase() }
-                val partition = partitionLibrary(discovered, config)
-                libraryState =
-                    libraryState.copy(
-                        items = partition.included,
-                        candidates = partition.candidates,
-                        ignoredItems = partition.ignored,
-                        config = config,
-                        sources = sources,
-                        suggestedSubtitleAssociations = subtitleSuggestions,
-                        isLoading = false,
-                        hasAudioAccess = hasAudioAccess,
-                        hasVideoAccess = hasVideoAccess,
-                        errorMessage = sources.firstNotNullOfOrNull { it.errorMessage },
-                    )
-            }
-    }
-
-    fun updateLibraryConfig(
-        config: LibraryConfig,
-        rescan: Boolean,
-        repartition: Boolean = false,
-    ) {
-        libraryState =
-            if (repartition) {
-                val discovered = libraryState.allDiscoveredItems()
-                val partition = partitionLibrary(discovered, config)
-                libraryState.copy(
-                    items = partition.included,
-                    candidates = partition.candidates,
-                    ignoredItems = partition.ignored,
-                    config = config,
-                )
-            } else {
-                libraryState.copy(config = config)
-            }
-        coroutineScope.launch { libraryStore.save(config) }
-        if (rescan) scanLibrary(config)
-    }
-
-    fun rememberManualMedia(source: MediaSourceRef) {
-        val config = libraryState.config
-        val looseSource =
-            source.copy(
-                origin = MediaOrigin.OpenDocument,
-                sourceId = LibrarySourceIds.LooseFiles,
-            )
-        val updated =
-            config.copy(
-                manualItems =
-                    listOf(looseSource) + config.manualItems.filterNot { it.uri == source.uri },
-                includedUris =
-                    (config.includedUris + looseSource.uri.toString()).distinct(),
-                ignoredUris = config.ignoredUris - looseSource.uri.toString(),
-                homeShortcuts =
-                    (config.homeShortcuts + looseSource.toFolderShortcut()).distinct(),
-            )
-        updateLibraryConfig(updated, rescan = true)
-    }
-
-    fun addLibraryFolder(uri: Uri) {
-        contentResolver.persistReadPermission(uri)
-        val folder = LibraryFolderRef(uri, contentResolver.displayName(uri))
-        val config = libraryState.config
-        val updated =
-            config.copy(
-                folders = listOf(folder) + config.folders.filterNot { it.uri == uri },
-            )
-        updateLibraryConfig(updated, rescan = true)
-    }
-
-    fun removeLibraryFolder(folderId: String) {
-        val config = libraryState.config
-        val folder = config.folders.firstOrNull { it.id == folderId } ?: return
-        runCatching {
-            contentResolver.releasePersistableUriPermission(
-                folder.uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION,
-            )
-        }
-        val removedItems = libraryState.allDiscoveredItems().filter { it.sourceId == folderId }
-        val removedUris = removedItems.map { it.uri.toString() }.toSet()
-        updateLibraryConfig(
-            config.copy(
-                folders = config.folders.filterNot { it.id == folderId },
-                includedUris = config.includedUris.filterNot(removedUris::contains),
-                ignoredUris = config.ignoredUris.filterNot(removedUris::contains),
-                homeShortcuts =
-                    config.homeShortcuts.filterNot { shortcut ->
-                        shortcut.type == LibraryShortcutType.Folder &&
-                            shortcut.key.startsWith("$folderId|")
-                    },
-                subtitleAssociations =
-                    config.subtitleAssociations.filterNot { it.mediaUri.toString() in removedUris },
-                playlists = config.playlists.withoutItems(removedUris),
-            ),
-            rescan = true,
-        )
-    }
-
-    fun clearLooseFiles() {
-        val config = libraryState.config
-        val looseUris = config.manualItems.map { it.uri.toString() }.toSet()
-        updateLibraryConfig(
-            config.copy(
-                manualItems = emptyList(),
-                includedUris = config.includedUris.filterNot(looseUris::contains),
-                ignoredUris = config.ignoredUris.filterNot(looseUris::contains),
-                homeShortcuts =
-                    config.homeShortcuts.filterNot { shortcut ->
-                        shortcut.type == LibraryShortcutType.Folder &&
-                            shortcut.key.startsWith("${LibrarySourceIds.LooseFiles}|")
-                    },
-                playlists = config.playlists.withoutItems(looseUris),
-            ),
-            rescan = true,
-        )
-    }
-
-    fun acceptLibraryCandidates(uriValues: Set<String>) {
-        if (uriValues.isEmpty()) return
-        val config = libraryState.config
-        val suggestions =
-            libraryState.suggestedSubtitleAssociations.filter {
-                it.mediaUri.toString() in uriValues
-            }
-        val updatedAssociations =
-            (config.subtitleAssociations.filterNot { existing ->
-                suggestions.any { it.mediaUri == existing.mediaUri }
-            } + suggestions).distinctBy { it.mediaUri }
-        updateLibraryConfig(
-            config.copy(
-                includedUris = (config.includedUris + uriValues).distinct(),
-                ignoredUris = config.ignoredUris.filterNot(uriValues::contains),
-                subtitleAssociations = updatedAssociations,
-            ),
-            rescan = false,
-            repartition = true,
-        )
-    }
-
-    fun ignoreLibraryCandidates(uriValues: Set<String>) {
-        if (uriValues.isEmpty()) return
-        val config = libraryState.config
-        updateLibraryConfig(
-            config.copy(
-                includedUris = config.includedUris.filterNot(uriValues::contains),
-                ignoredUris = (config.ignoredUris + uriValues).distinct(),
-            ),
-            rescan = false,
-            repartition = true,
-        )
-    }
-
-    fun removeIncludedMedia(uriValues: Set<String>) {
-        if (uriValues.isEmpty()) return
-        val config = libraryState.config
-        val remainingManual =
-            config.manualItems.filterNot { it.uri.toString() in uriValues }
-        updateLibraryConfig(
-            config.copy(
-                manualItems = remainingManual,
-                includedUris = config.includedUris.filterNot(uriValues::contains),
-                ignoredUris = (config.ignoredUris + uriValues).distinct(),
-                subtitleAssociations =
-                    config.subtitleAssociations.filterNot { it.mediaUri.toString() in uriValues },
-                playlists = config.playlists.withoutItems(uriValues),
-            ),
-            rescan = false,
-            repartition = true,
-        )
-    }
-
-    fun restoreIgnoredMedia(uriValues: Set<String>) {
-        if (uriValues.isEmpty()) return
-        val config = libraryState.config
-        updateLibraryConfig(
-            config.copy(ignoredUris = config.ignoredUris.filterNot(uriValues::contains)),
-            rescan = false,
-            repartition = true,
-        )
-    }
-
-    fun toggleHomeShortcut(shortcut: LibraryShortcut) {
-        val config = libraryState.config
-        val shortcuts =
-            if (shortcut in config.homeShortcuts) {
-                config.homeShortcuts - shortcut
-            } else {
-                config.homeShortcuts + shortcut
-            }
-        updateLibraryConfig(config.copy(homeShortcuts = shortcuts), rescan = false)
-    }
-
-    fun createPlaylist(
-        name: String,
-        initialItem: MediaSourceRef?,
-    ) {
-        val trimmed = name.trim()
-        if (trimmed.isEmpty()) return
-        val config = libraryState.config
-        val playlist =
-            LibraryPlaylist(
-                id = UUID.randomUUID().toString(),
-                name = trimmed,
-                items = initialItem?.let(::listOf).orEmpty(),
-            )
-        updateLibraryConfig(
-            config.copy(
-                playlists = config.playlists + playlist,
-                homeShortcuts =
-                    config.homeShortcuts +
-                        LibraryShortcut(LibraryShortcutType.Playlist, playlist.id),
-            ),
-            rescan = false,
-        )
-    }
-
-    fun addToPlaylist(
-        playlistId: String,
-        item: MediaSourceRef,
-    ) {
-        val config = libraryState.config
-        val updated =
-            config.playlists.map { playlist ->
-                if (playlist.id != playlistId || playlist.items.any { it.uri == item.uri }) {
-                    playlist
-                } else {
-                    playlist.copy(items = playlist.items + item)
-                }
-            }
-        updateLibraryConfig(config.copy(playlists = updated), rescan = false)
-    }
-
-    fun removeFromPlaylist(
-        playlistId: String,
-        item: MediaSourceRef,
-    ) {
-        val config = libraryState.config
-        val updated =
-            config.playlists.map { playlist ->
-                if (playlist.id == playlistId) {
-                    playlist.copy(items = playlist.items.filterNot { it.uri == item.uri })
-                } else {
-                    playlist
-                }
-            }
-        updateLibraryConfig(config.copy(playlists = updated), rescan = false)
-    }
-
-    fun deletePlaylist(playlistId: String) {
-        val config = libraryState.config
-        updateLibraryConfig(
-            config.copy(
-                playlists = config.playlists.filterNot { it.id == playlistId },
-                homeShortcuts =
-                    config.homeShortcuts.filterNot {
-                        it.type == LibraryShortcutType.Playlist && it.key == playlistId
-                    },
-            ),
-            rescan = false,
-        )
-    }
-
-    fun updateSubtitleAssociation(
-        mediaUri: Uri,
-        subtitle: SubtitleSourceRef?,
-    ) {
-        val config = libraryState.config
-        val associations =
-            config.subtitleAssociations.filterNot { it.mediaUri == mediaUri } +
-                subtitle?.let { SubtitleAssociation(mediaUri, it) }
-                    .let { association -> listOfNotNull(association) }
-        updateLibraryConfig(
-            config.copy(subtitleAssociations = associations),
-            rescan = false,
-        )
-    }
-
+    val libraryState = libraryStateHolder.state
     fun startPlayer() {
         if (player.playbackState == Player.STATE_ENDED) player.seekTo(0L)
         if (player.playbackState == Player.STATE_IDLE && player.mediaItemCount > 0) {
@@ -561,7 +198,7 @@ fun VortexCueApp(
                     val updated = current.copy(subtitle = loaded)
                     activeSession = updated
                     draft = updated.toDraft()
-                    updateSubtitleAssociation(media.uri, loaded.source)
+                    libraryStateHolder.updateSubtitleAssociation(media.uri, loaded.source)
                     persistSession(updated)
                 }
             }
@@ -625,9 +262,9 @@ fun VortexCueApp(
             coroutineScope.launch {
                 try {
                     ensureMediaReadable(contentResolver, source)
-                    val readySource = mediaScanner.inspect(source)
+                    val readySource = libraryStateHolder.inspectMedia(source)
                     if (requestId != mediaRequestId) return@launch
-                    rememberManualMedia(readySource)
+                    libraryStateHolder.rememberManualMedia(readySource)
                     when (target) {
                         MediaPickTarget.Draft ->
                             draft = draft.copy(media = DraftMedia.Ready(readySource))
@@ -711,13 +348,7 @@ fun VortexCueApp(
     }
 
     LaunchedEffect(Unit) {
-        val storedLibrary = runCatching { libraryStore.load() }.getOrDefault(LibraryConfig())
-        libraryState =
-            libraryState.copy(
-                config = storedLibrary,
-                hasAudioAccess = context.hasAudioLibraryPermission(),
-                hasVideoAccess = context.hasVideoLibraryPermission(),
-            )
+        val storedLibrary = libraryStateHolder.restoreConfig()
         val stored =
             runCatching { sessionStore.load() }
                 .getOrElse {
@@ -821,7 +452,7 @@ fun VortexCueApp(
             }
         }
         restorationCompleted = true
-        scanLibrary(storedLibrary)
+        libraryStateHolder.scan(storedLibrary)
     }
 
     LaunchedEffect(restorationCompleted, draft) {
@@ -918,11 +549,11 @@ fun VortexCueApp(
         }
     val folderPicker =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-            uri?.let(::addLibraryFolder)
+            uri?.let(libraryStateHolder::addFolder)
         }
     val libraryPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-            scanLibrary()
+            libraryStateHolder.scan()
         }
 
     val glowActive =
@@ -941,7 +572,7 @@ fun VortexCueApp(
         onDispose {
             mediaLoadJob?.cancel()
             subtitleLoadJob?.cancel()
-            libraryScanJob?.cancel()
+            libraryStateHolder.cancelScan()
             onPlaybackActiveChanged(false)
             onImmersiveModeChanged(false)
             onWindowBrightnessChanged(null)
@@ -1001,20 +632,20 @@ fun VortexCueApp(
                                 PackageManager.PERMISSION_GRANTED
                         }
                     if (missingPermissions.isEmpty()) {
-                        scanLibrary()
+                        libraryStateHolder.scan()
                     } else {
                         libraryPermissionLauncher.launch(missingPermissions.toTypedArray())
                     }
                 },
-                onRefreshLibrary = { scanLibrary() },
+                onRefreshLibrary = { libraryStateHolder.scan() },
                 onAddFolder = { folderPicker.launch(null) },
-                onRemoveFolder = ::removeLibraryFolder,
-                onClearLooseFiles = ::clearLooseFiles,
-                onAcceptCandidates = ::acceptLibraryCandidates,
-                onIgnoreCandidates = ::ignoreLibraryCandidates,
-                onRemoveIncluded = ::removeIncludedMedia,
-                onRestoreIgnored = ::restoreIgnoredMedia,
-                onToggleHomeShortcut = ::toggleHomeShortcut,
+                onRemoveFolder = libraryStateHolder::removeFolder,
+                onClearLooseFiles = libraryStateHolder::clearLooseFiles,
+                onAcceptCandidates = libraryStateHolder::acceptCandidates,
+                onIgnoreCandidates = libraryStateHolder::ignoreCandidates,
+                onRemoveIncluded = libraryStateHolder::removeIncluded,
+                onRestoreIgnored = libraryStateHolder::restoreIgnored,
+                onToggleHomeShortcut = libraryStateHolder::toggleHomeShortcut,
                 onPlayLibraryItems = { items, index ->
                     items.getOrNull(index)?.let { media ->
                         player.setMediaItems(
@@ -1057,10 +688,10 @@ fun VortexCueApp(
                 onAddToQueue = { media ->
                     player.addMediaItem(media.toMediaItem())
                 },
-                onCreatePlaylist = ::createPlaylist,
-                onAddToPlaylist = ::addToPlaylist,
-                onRemoveFromPlaylist = ::removeFromPlaylist,
-                onDeletePlaylist = ::deletePlaylist,
+                onCreatePlaylist = libraryStateHolder::createPlaylist,
+                onAddToPlaylist = libraryStateHolder::addToPlaylist,
+                onRemoveFromPlaylist = libraryStateHolder::removeFromPlaylist,
+                onDeletePlaylist = libraryStateHolder::deletePlaylist,
                 onRemoveSubtitle = {
                     cancelSubtitleLoad()
                     draft = draft.copy(subtitle = DraftSubtitle.None)
@@ -1099,7 +730,10 @@ fun VortexCueApp(
                                 subtitleOffsetMs = preservedOffsetMs,
                             )
                         activeSession = applied
-                        updateSubtitleAssociation(media.uri, loadedSubtitle?.source)
+                        libraryStateHolder.updateSubtitleAssociation(
+                            media.uri,
+                            loadedSubtitle?.source,
+                        )
                         draft = applied.toDraft()
                         playerSurface = PlayerSurface.Normal
                         destination = AppDestination.Player
@@ -1375,40 +1009,3 @@ private const val MediaExtraKind = "vortexcue.kind"
 private const val MediaExtraSize = "vortexcue.size_bytes"
 private const val MediaExtraVideoWidth = "vortexcue.video_width"
 private const val MediaExtraVideoHeight = "vortexcue.video_height"
-
-private data class LibraryPartition(
-    val included: List<MediaSourceRef>,
-    val candidates: List<MediaSourceRef>,
-    val ignored: List<MediaSourceRef>,
-)
-
-private fun partitionLibrary(
-    discovered: List<MediaSourceRef>,
-    config: LibraryConfig,
-): LibraryPartition {
-    val explicitUris =
-        (
-            config.includedUris +
-                config.manualItems.map { it.uri.toString() } +
-                config.playlists.flatMap { playlist ->
-                    playlist.items.map { it.uri.toString() }
-                }
-        ).toSet()
-    val ignoredUris = config.ignoredUris.toSet() - explicitUris
-    return LibraryPartition(
-        included = discovered.filter { it.uri.toString() in explicitUris },
-        candidates =
-            discovered.filter {
-                it.uri.toString() !in explicitUris && it.uri.toString() !in ignoredUris
-            },
-        ignored = discovered.filter { it.uri.toString() in ignoredUris },
-    )
-}
-
-private fun MediaLibraryState.allDiscoveredItems(): List<MediaSourceRef> =
-    (items + candidates + ignoredItems).distinctBy { it.uri.toString() }
-
-private fun List<LibraryPlaylist>.withoutItems(uriValues: Set<String>): List<LibraryPlaylist> =
-    map { playlist ->
-        playlist.copy(items = playlist.items.filterNot { it.uri.toString() in uriValues })
-    }

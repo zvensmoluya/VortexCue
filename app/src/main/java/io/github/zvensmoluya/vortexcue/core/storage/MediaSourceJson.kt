@@ -1,6 +1,7 @@
-package io.github.zvensmoluya.vortexcue
+package io.github.zvensmoluya.vortexcue.core.storage
 
 import android.net.Uri
+import io.github.zvensmoluya.vortexcue.core.model.*
 import org.json.JSONArray
 import org.json.JSONObject
 

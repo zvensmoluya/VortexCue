@@ -1,16 +1,14 @@
-package io.github.zvensmoluya.vortexcue
+package io.github.zvensmoluya.vortexcue.library
 
-import android.Manifest
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Context
-import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
 import android.provider.MediaStore
-import androidx.core.content.ContextCompat
+import io.github.zvensmoluya.vortexcue.core.model.*
 import java.io.File
 import java.util.ArrayDeque
 import kotlinx.coroutines.Dispatchers
@@ -385,31 +383,6 @@ class LocalMediaScanner(private val context: Context) {
             }
     }
 }
-
-fun requiredAudioLibraryPermission(): String =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        Manifest.permission.READ_MEDIA_AUDIO
-    } else {
-        Manifest.permission.READ_EXTERNAL_STORAGE
-    }
-
-fun requiredVideoLibraryPermission(): String =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        Manifest.permission.READ_MEDIA_VIDEO
-    } else {
-        Manifest.permission.READ_EXTERNAL_STORAGE
-    }
-
-fun requiredMediaLibraryPermissions(): Array<String> =
-    arrayOf(requiredAudioLibraryPermission(), requiredVideoLibraryPermission()).distinct().toTypedArray()
-
-fun Context.hasAudioLibraryPermission(): Boolean =
-    ContextCompat.checkSelfPermission(this, requiredAudioLibraryPermission()) ==
-        PackageManager.PERMISSION_GRANTED
-
-fun Context.hasVideoLibraryPermission(): Boolean =
-    ContextCompat.checkSelfPermission(this, requiredVideoLibraryPermission()) ==
-        PackageManager.PERMISSION_GRANTED
 
 private fun android.database.Cursor.stringOrNull(index: Int): String? =
     if (index < 0 || isNull(index)) null else getString(index)
