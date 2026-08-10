@@ -63,6 +63,12 @@ private enum class MediaPickTarget {
     LastSession,
 }
 
+private enum class SubtitlePickTarget {
+    Draft,
+    PlayerPrimary,
+    PlayerSecondary,
+}
+
 @Composable
 fun VortexCueApp(
     player: MediaController,
@@ -103,6 +109,11 @@ fun VortexCueApp(
     var mediaRequestId by remember { mutableLongStateOf(0L) }
     var subtitleLoadJob by remember { mutableStateOf<Job?>(null) }
     var subtitleRequestId by remember { mutableLongStateOf(0L) }
+    var primaryTrackLoadJob by remember { mutableStateOf<Job?>(null) }
+    var primaryTrackRequestId by remember { mutableLongStateOf(0L) }
+    var secondaryTrackLoadJob by remember { mutableStateOf<Job?>(null) }
+    var secondaryTrackRequestId by remember { mutableLongStateOf(0L) }
+    var subtitlePickTarget by rememberSaveable { mutableStateOf(SubtitlePickTarget.Draft) }
     var notificationPermissionRequested by rememberSaveable { mutableStateOf(false) }
     var pendingAutoPlay by rememberSaveable { mutableStateOf(false) }
     var openImportOnHome by rememberSaveable { mutableStateOf(false) }
@@ -182,26 +193,6 @@ fun VortexCueApp(
         val saved = currentRestorableSession(session)
         lastSession = saved
         coroutineScope.launch { sessionStore.saveLastSession(saved) }
-    }
-
-    fun restoreAssociatedSubtitle(media: MediaSourceRef) {
-        val subtitleSource =
-            libraryState.config.activePrimarySubtitleSource(media)
-                ?: return
-        coroutineScope.launch {
-            runCatching {
-                loadSubtitleSource(contentResolver, subtitleCache, subtitleSource)
-            }.onSuccess { loaded ->
-                val current = activeSession
-                if (current?.media?.uri == media.uri && current.subtitle == null) {
-                    val updated = current.copy(subtitle = loaded)
-                    activeSession = updated
-                    draft = updated.toDraft()
-                    libraryStateHolder.updateResolvedSubtitle(media, loaded.source)
-                    persistSession(updated)
-                }
-            }
-        }
     }
 
     fun resumeSession(saved: RestorableSession) {
@@ -311,7 +302,168 @@ fun VortexCueApp(
         subtitleLoadJob = null
     }
 
-    fun loadSubtitle(uri: Uri) {
+    fun cancelTrackLoad(slot: TextTrackSlot) {
+        when (slot) {
+            TextTrackSlot.Primary -> {
+                primaryTrackRequestId += 1L
+                primaryTrackLoadJob?.cancel()
+                primaryTrackLoadJob = null
+            }
+            TextTrackSlot.Secondary -> {
+                secondaryTrackRequestId += 1L
+                secondaryTrackLoadJob?.cancel()
+                secondaryTrackLoadJob = null
+            }
+        }
+    }
+
+    fun updateSessionTrack(
+        media: MediaSourceRef,
+        slot: TextTrackSlot,
+        loaded: LoadedSubtitle?,
+    ) {
+        val current = activeSession ?: return
+        if (current.media.uri != media.uri) return
+        val updated =
+            when (slot) {
+                TextTrackSlot.Primary -> current.copy(subtitle = loaded)
+                TextTrackSlot.Secondary -> current.copy(secondarySubtitle = loaded)
+            }
+        activeSession = updated
+        draft = updated.toDraft()
+        persistSession(updated)
+    }
+
+    fun loadSessionTrack(
+        media: MediaSourceRef,
+        slot: TextTrackSlot,
+        track: TimedTextTrack,
+    ) {
+        val source = track.toSubtitleSourceRef()
+        if (source == null) {
+            updateSessionTrack(media, slot, null)
+            return
+        }
+        cancelTrackLoad(slot)
+        val requestId =
+            when (slot) {
+                TextTrackSlot.Primary -> primaryTrackRequestId
+                TextTrackSlot.Secondary -> secondaryTrackRequestId
+            }
+        libraryStateHolder.updateTextTrackReadiness(
+            media = media,
+            trackId = track.stableId,
+            readiness = TimedTextReadiness.Unknown,
+        )
+        updateSessionTrack(media, slot, null)
+        val job =
+            coroutineScope.launch {
+                try {
+                    contentResolver.persistReadPermission(source.uri)
+                    val loaded = loadSubtitleSource(contentResolver, subtitleCache, source)
+                    val isCurrent =
+                        when (slot) {
+                            TextTrackSlot.Primary -> requestId == primaryTrackRequestId
+                            TextTrackSlot.Secondary -> requestId == secondaryTrackRequestId
+                        }
+                    if (!isCurrent || activeSession?.media?.uri != media.uri) return@launch
+                    libraryStateHolder.updateTextTrackReadiness(
+                        media = media,
+                        trackId = track.stableId,
+                        readiness = TimedTextReadiness.Ready,
+                        resolvedSource = loaded.source,
+                    )
+                    updateSessionTrack(media, slot, loaded)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    val isCurrent =
+                        when (slot) {
+                            TextTrackSlot.Primary -> requestId == primaryTrackRequestId
+                            TextTrackSlot.Secondary -> requestId == secondaryTrackRequestId
+                        }
+                    if (!isCurrent) return@launch
+                    val failure = subtitleFailure(error)
+                    libraryStateHolder.updateTextTrackReadiness(
+                        media = media,
+                        trackId = track.stableId,
+                        readiness = failure.readiness,
+                        failureMessage = failure.message,
+                    )
+                    updateSessionTrack(media, slot, null)
+                }
+            }
+        when (slot) {
+            TextTrackSlot.Primary -> primaryTrackLoadJob = job
+            TextTrackSlot.Secondary -> secondaryTrackLoadJob = job
+        }
+    }
+
+    fun selectSessionTrack(
+        slot: TextTrackSlot,
+        trackId: String?,
+    ) {
+        val media = activeSession?.media ?: return
+        cancelTrackLoad(slot)
+        val track = libraryStateHolder.selectManualTextTrack(media, slot, trackId)
+        updateSessionTrack(media, slot, null)
+        if (
+            slot == TextTrackSlot.Primary &&
+                libraryStateHolder.state.config.activeTextTrack(
+                    media,
+                    TextTrackSlot.Secondary,
+                ) == null
+        ) {
+            cancelTrackLoad(TextTrackSlot.Secondary)
+            updateSessionTrack(media, TextTrackSlot.Secondary, null)
+        }
+        track?.let { loadSessionTrack(media, slot, it) }
+    }
+
+    fun restoreAutomaticSessionTrack(slot: TextTrackSlot) {
+        val media = activeSession?.media ?: return
+        cancelTrackLoad(slot)
+        val track = libraryStateHolder.restoreAutomaticTextTrack(media, slot)
+        updateSessionTrack(media, slot, null)
+        track?.let { loadSessionTrack(media, slot, it) }
+    }
+
+    fun restoreAssociatedTextTracks(media: MediaSourceRef) {
+        val config = libraryStateHolder.state.config
+        val primaryTrack =
+            config.activeTextTrack(media, TextTrackSlot.Primary)
+                ?: config.activePrimarySubtitleSource(media)?.let { source ->
+                    libraryStateHolder.updateManualTextSource(
+                        media = media,
+                        slot = TextTrackSlot.Primary,
+                        subtitle = source,
+                    )
+                }
+        val secondaryTrack = config.activeTextTrack(media, TextTrackSlot.Secondary)
+        listOf(
+            TextTrackSlot.Primary to primaryTrack,
+            TextTrackSlot.Secondary to secondaryTrack,
+        ).forEach { (slot, track) ->
+            if (track == null) return@forEach
+            val loaded =
+                when (slot) {
+                    TextTrackSlot.Primary -> activeSession?.subtitle
+                    TextTrackSlot.Secondary -> activeSession?.secondarySubtitle
+                }
+            if (
+                loaded?.source?.uri?.toString() == track.locator.uriValue &&
+                    track.readiness == TimedTextReadiness.Ready
+            ) {
+                return@forEach
+            }
+            loadSessionTrack(media, slot, track)
+        }
+    }
+
+    fun loadSubtitle(
+        uri: Uri,
+        target: SubtitlePickTarget,
+    ) {
         cancelSubtitleLoad()
         val source =
             SubtitleSourceRef(
@@ -319,6 +471,34 @@ fun VortexCueApp(
                 displayName = contentResolver.displayName(uri),
                 mimeType = contentResolver.safeMimeType(uri),
             )
+        if (target != SubtitlePickTarget.Draft) {
+            val session = activeSession ?: return
+            val slot =
+                when (target) {
+                    SubtitlePickTarget.PlayerPrimary -> TextTrackSlot.Primary
+                    SubtitlePickTarget.PlayerSecondary -> TextTrackSlot.Secondary
+                    SubtitlePickTarget.Draft -> error("Draft target handled above")
+                }
+            val track =
+                libraryStateHolder.updateManualTextSource(
+                    media = session.media,
+                    slot = slot,
+                    subtitle = source,
+                )
+            updateSessionTrack(session.media, slot, null)
+            if (
+                slot == TextTrackSlot.Primary &&
+                    libraryStateHolder.state.config.activeTextTrack(
+                        session.media,
+                        TextTrackSlot.Secondary,
+                    ) == null
+            ) {
+                cancelTrackLoad(TextTrackSlot.Secondary)
+                updateSessionTrack(session.media, TextTrackSlot.Secondary, null)
+            }
+            track?.let { loadSessionTrack(session.media, slot, it) }
+            return
+        }
         val requestId = subtitleRequestId
         draft = draft.copy(subtitle = DraftSubtitle.Loading(source))
         subtitleLoadJob =
@@ -367,18 +547,105 @@ fun VortexCueApp(
                 runCatching {
                     ensureMediaReadable(contentResolver, storedLast.media)
                 }.exceptionOrNull()
-            val loadedSubtitle =
-                storedLast.subtitle?.let { source ->
-                    runCatching {
-                        loadSubtitleSource(contentResolver, subtitleCache, source)
-                    }.getOrNull()
+            var restoredConfig = libraryStateHolder.state.config
+            val contentUnit = restoredConfig.contentUnitFor(storedLast.media)
+            var primaryTrack =
+                restoredConfig.activeTextTrack(storedLast.media, TextTrackSlot.Primary)
+            val primarySource =
+                when {
+                    contentUnit?.activeText?.primaryTrackId != null ->
+                        primaryTrack?.toSubtitleSourceRef()
+                    contentUnit?.activeText?.primaryMode == TextSelectionMode.Manual -> null
+                    else ->
+                        restoredConfig.activePrimarySubtitleSource(storedLast.media)
+                            ?: storedLast.subtitle.takeIf { contentUnit == null }
                 }
+            if (primaryTrack == null && primarySource != null) {
+                primaryTrack =
+                    libraryStateHolder.updateManualTextSource(
+                        media = storedLast.media,
+                        slot = TextTrackSlot.Primary,
+                        subtitle = primarySource,
+                    )
+                restoredConfig = libraryStateHolder.state.config
+            }
+            var secondaryTrack =
+                restoredConfig.activeTextTrack(storedLast.media, TextTrackSlot.Secondary)
+            val secondaryUnit = restoredConfig.contentUnitFor(storedLast.media)
+            val secondarySource =
+                when {
+                    secondaryUnit?.activeText?.secondaryTrackId != null ->
+                        secondaryTrack?.toSubtitleSourceRef()
+                    secondaryUnit?.activeText?.secondaryMode == TextSelectionMode.Manual -> null
+                    else -> storedLast.secondarySubtitle.takeIf { secondaryUnit == null }
+                }
+            if (secondaryTrack == null && secondarySource != null) {
+                secondaryTrack =
+                    libraryStateHolder.updateManualTextSource(
+                        media = storedLast.media,
+                        slot = TextTrackSlot.Secondary,
+                        subtitle = secondarySource,
+                    )
+            }
+            val primaryResult =
+                primarySource?.let { source ->
+                    runCatching { loadSubtitleSource(contentResolver, subtitleCache, source) }
+                }
+            val secondaryResult =
+                secondarySource?.let { source ->
+                    runCatching { loadSubtitleSource(contentResolver, subtitleCache, source) }
+                }
+            primaryTrack?.let { track ->
+                primaryResult?.fold(
+                    onSuccess = { loaded ->
+                        libraryStateHolder.updateTextTrackReadiness(
+                            media = storedLast.media,
+                            trackId = track.stableId,
+                            readiness = TimedTextReadiness.Ready,
+                            resolvedSource = loaded.source,
+                        )
+                    },
+                    onFailure = { error ->
+                        val failure = subtitleFailure(error)
+                        libraryStateHolder.updateTextTrackReadiness(
+                            media = storedLast.media,
+                            trackId = track.stableId,
+                            readiness = failure.readiness,
+                            failureMessage = failure.message,
+                        )
+                    },
+                )
+            }
+            secondaryTrack?.let { track ->
+                secondaryResult?.fold(
+                    onSuccess = { loaded ->
+                        libraryStateHolder.updateTextTrackReadiness(
+                            media = storedLast.media,
+                            trackId = track.stableId,
+                            readiness = TimedTextReadiness.Ready,
+                            resolvedSource = loaded.source,
+                        )
+                    },
+                    onFailure = { error ->
+                        val failure = subtitleFailure(error)
+                        libraryStateHolder.updateTextTrackReadiness(
+                            media = storedLast.media,
+                            trackId = track.stableId,
+                            readiness = failure.readiness,
+                            failureMessage = failure.message,
+                        )
+                    },
+                )
+            }
+            val loadedSubtitle = primaryResult?.getOrNull()
+            val loadedSecondarySubtitle = secondaryResult?.getOrNull()
             val restored =
                 RestorableSession(
                     session =
                         ActiveSession(
                             media = storedLast.media,
                             subtitle = loadedSubtitle,
+                            secondarySubtitle = loadedSecondarySubtitle,
                             subtitleOffsetMs = storedLast.subtitleOffsetMs,
                         ),
                     positionMs = storedLast.positionMs,
@@ -400,6 +667,7 @@ fun VortexCueApp(
                 activeSession =
                     initialSession.copy(
                         subtitle = loadedSubtitle,
+                        secondarySubtitle = loadedSecondarySubtitle,
                         subtitleOffsetMs = storedLast.subtitleOffsetMs,
                     )
                 player.setPlaybackSpeed(storedLast.playbackSpeed)
@@ -459,6 +727,11 @@ fun VortexCueApp(
     LaunchedEffect(restorationCompleted, draft) {
         if (restorationCompleted) sessionStore.saveDraft(draft)
     }
+    LaunchedEffect(restorationCompleted, activeSession?.media?.uri) {
+        if (restorationCompleted) {
+            activeSession?.media?.let(::restoreAssociatedTextTracks)
+        }
+    }
     LaunchedEffect(restorationCompleted, displayProfile) {
         if (restorationCompleted) {
             delay(300L)
@@ -516,6 +789,8 @@ fun VortexCueApp(
                         if (session?.media?.uri == media.uri) {
                             session.copy(media = media)
                         } else {
+                            cancelTrackLoad(TextTrackSlot.Primary)
+                            cancelTrackLoad(TextTrackSlot.Secondary)
                             ActiveSession(media = media, subtitle = null)
                         }
                     activeSession = updated
@@ -524,7 +799,9 @@ fun VortexCueApp(
                         libraryStateHolder.rememberRecentMedia(media)
                         persistSession(updated)
                     }
-                    if (updated.subtitle == null) restoreAssociatedSubtitle(media)
+                    if (updated.subtitle == null || updated.secondarySubtitle == null) {
+                        restoreAssociatedTextTracks(media)
+                    }
                 }
             }
         player.addListener(listener)
@@ -552,7 +829,9 @@ fun VortexCueApp(
         }
     val subtitlePicker =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            uri?.let(::loadSubtitle)
+            val target = subtitlePickTarget
+            subtitlePickTarget = SubtitlePickTarget.Draft
+            uri?.let { loadSubtitle(it, target) }
         }
     val folderPicker =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -579,6 +858,8 @@ fun VortexCueApp(
         onDispose {
             mediaLoadJob?.cancel()
             subtitleLoadJob?.cancel()
+            primaryTrackLoadJob?.cancel()
+            secondaryTrackLoadJob?.cancel()
             libraryStateHolder.cancelScan()
             onPlaybackActiveChanged(false)
             onImmersiveModeChanged(false)
@@ -631,7 +912,10 @@ fun VortexCueApp(
                     mediaPickTarget = MediaPickTarget.Draft
                     mediaPicker.launch(arrayOf("audio/*", "video/*"))
                 },
-                onPickSubtitle = { subtitlePicker.launch(arrayOf("*/*")) },
+                onPickSubtitle = {
+                    subtitlePickTarget = SubtitlePickTarget.Draft
+                    subtitlePicker.launch(arrayOf("*/*"))
+                },
                 onRequestLibraryAccess = {
                     val permissions = mediaLibraryPermissionsToRequest(context)
                     if (permissions.isEmpty()) {
@@ -664,6 +948,10 @@ fun VortexCueApp(
                                     activeSession
                                         ?.takeIf { it.media.uri == media.uri }
                                         ?.subtitle,
+                                secondarySubtitle =
+                                    activeSession
+                                        ?.takeIf { it.media.uri == media.uri }
+                                        ?.secondarySubtitle,
                                 subtitleOffsetMs =
                                     activeSession
                                         ?.takeIf { it.media.uri == media.uri }
@@ -676,7 +964,9 @@ fun VortexCueApp(
                         destination = AppDestination.Player
                         playWithNotificationPermission()
                         persistSession(session)
-                        if (session.subtitle == null) restoreAssociatedSubtitle(media)
+                        if (session.subtitle == null || session.secondarySubtitle == null) {
+                            restoreAssociatedTextTracks(media)
+                        }
                     }
                 },
                 onPlayNext = { media ->
@@ -730,6 +1020,10 @@ fun VortexCueApp(
                             ActiveSession(
                                 media = media,
                                 subtitle = loadedSubtitle,
+                                secondarySubtitle =
+                                    activeSession
+                                        ?.takeIf { it.media.uri == media.uri }
+                                        ?.secondarySubtitle,
                                 subtitleOffsetMs = preservedOffsetMs,
                             )
                         libraryStateHolder.rememberRecentMedia(media)
@@ -787,6 +1081,7 @@ fun VortexCueApp(
                     sleepTimer = sleepTimer,
                     showGestureHint = !glowGestureHintSeen,
                     isCollected = libraryState.config.isCollected(session.media),
+                    contentUnit = libraryState.config.contentUnitFor(session.media),
                     onPlayPause = ::togglePlayback,
                     onSurfaceChanged = { requested ->
                         playerSurface =
@@ -836,11 +1131,14 @@ fun VortexCueApp(
                             libraryStateHolder.collectMedia(session.media)
                         }
                     },
-                    onAddSubtitle = {
-                        draft = session.toDraft()
-                        homeSection = HomeSection.Library
-                        openImportOnHome = true
-                        destination = AppDestination.Home
+                    onSelectTextTrack = ::selectSessionTrack,
+                    onRestoreAutomaticTextTrack = ::restoreAutomaticSessionTrack,
+                    onAddTextTrack = { slot ->
+                        subtitlePickTarget =
+                            when (slot) {
+                                TextTrackSlot.Primary -> SubtitlePickTarget.PlayerPrimary
+                                TextTrackSlot.Secondary -> SubtitlePickTarget.PlayerSecondary
+                            }
                         subtitlePicker.launch(arrayOf("*/*"))
                     },
                     onSubtitleOffsetChanged = { offsetMs ->
@@ -881,6 +1179,7 @@ private suspend fun loadSubtitleSource(
         val parseName =
             if (providerBytes.isSuccess) source.displayName else source.cachedFileName ?: source.displayName
         val cues = SubtitleParser.parse(parseName, bytes)
+        require(cues.isNotEmpty()) { "字幕中没有可显示的同步文字" }
         val cachedFileName =
             if (providerBytes.isSuccess) {
                 runCatching { subtitleCache.store(source.uri, cues) }
@@ -891,6 +1190,35 @@ private suspend fun loadSubtitleSource(
             }
         val cachedSource = source.copy(cachedFileName = cachedFileName)
         LoadedSubtitle(cachedSource, SubtitleTimeline(cues))
+    }
+
+private data class SubtitleFailure(
+    val readiness: TimedTextReadiness,
+    val message: String,
+)
+
+private fun subtitleFailure(error: Throwable): SubtitleFailure =
+    when (error) {
+        is SecurityException ->
+            SubtitleFailure(
+                TimedTextReadiness.Unreadable,
+                "字幕授权已失效，请重新选择文件。",
+            )
+        is FileNotFoundException ->
+            SubtitleFailure(
+                TimedTextReadiness.Unreadable,
+                "字幕文件已移动、删除或无法访问，请重新选择。",
+            )
+        is IOException ->
+            SubtitleFailure(
+                TimedTextReadiness.Unreadable,
+                "无法读取字幕文件，请重新选择后重试。",
+            )
+        else ->
+            SubtitleFailure(
+                TimedTextReadiness.ParseFailed,
+                error.message ?: "无法解析字幕，请选择其他文件。",
+            )
     }
 
 private suspend fun ensureMediaReadable(

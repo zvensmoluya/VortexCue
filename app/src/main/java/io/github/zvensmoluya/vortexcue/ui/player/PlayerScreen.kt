@@ -76,12 +76,15 @@ internal fun PlayerScreen(
     sleepTimer: SleepTimerState,
     showGestureHint: Boolean,
     isCollected: Boolean,
+    contentUnit: PlayableContentUnit?,
     onPlayPause: () -> Unit,
     onSurfaceChanged: (PlayerSurface) -> Unit,
     onBackToLibrary: () -> Unit,
     onOpenSources: () -> Unit,
     onToggleCollected: () -> Unit,
-    onAddSubtitle: () -> Unit,
+    onSelectTextTrack: (TextTrackSlot, String?) -> Unit,
+    onRestoreAutomaticTextTrack: (TextTrackSlot) -> Unit,
+    onAddTextTrack: (TextTrackSlot) -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
     onDisplayProfileChanged: (DisplayProfile) -> Unit,
     onCalibrationCompleted: () -> Unit,
@@ -91,6 +94,7 @@ internal fun PlayerScreen(
     onCancelSleepTimer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var textTracksVisible by rememberSaveable { mutableStateOf(false) }
     val cuePositionMs =
         (playback.positionMs + session.subtitleOffsetMs).coerceAtLeast(0L)
     val currentCue =
@@ -103,6 +107,16 @@ internal fun PlayerScreen(
         } else {
             null
         }
+    val secondaryCue =
+        if (
+            playback.playbackState != Player.STATE_IDLE &&
+                playback.playbackState != Player.STATE_ENDED &&
+                playback.errorMessage == null
+        ) {
+            session.secondarySubtitle?.timeline?.resolve(cuePositionMs)
+        } else {
+            null
+        }
 
     when (surface) {
         PlayerSurface.Normal ->
@@ -112,13 +126,14 @@ internal fun PlayerScreen(
                 playback = playback,
                 cuePositionMs = cuePositionMs,
                 currentCue = currentCue,
+                secondaryCue = secondaryCue,
                 sleepTimer = sleepTimer,
                 isCollected = isCollected,
                 onPlayPause = onPlayPause,
                 onBackToLibrary = onBackToLibrary,
                 onOpenSources = onOpenSources,
                 onToggleCollected = onToggleCollected,
-                onAddSubtitle = onAddSubtitle,
+                onManageTextTracks = { textTracksVisible = true },
                 onEnterGlow = { onSurfaceChanged(PlayerSurface.Glow) },
                 onEnterCalibration = { onSurfaceChanged(PlayerSurface.Calibration) },
                 onSubtitleOffsetChanged = onSubtitleOffsetChanged,
@@ -141,15 +156,30 @@ internal fun PlayerScreen(
                 session = session,
                 playback = playback,
                 currentCue = currentCue,
+                secondaryCue = secondaryCue,
                 displayProfile = displayProfile,
                 sleepTimer = sleepTimer,
                 showGestureHint = showGestureHint,
                 onPlayPause = onPlayPause,
                 onExitGlow = { onSurfaceChanged(PlayerSurface.Normal) },
+                onManageTextTracks = { textTracksVisible = true },
                 onSubtitleOffsetChanged = onSubtitleOffsetChanged,
                 onGestureHintSeen = onGestureHintSeen,
                 modifier = modifier,
             )
+    }
+
+    if (textTracksVisible) {
+        TextTrackDialog(
+            contentUnit = contentUnit,
+            onDismiss = { textTracksVisible = false },
+            onSelectTrack = onSelectTextTrack,
+            onRestoreAutomatic = onRestoreAutomaticTextTrack,
+            onAddTrack = { slot ->
+                textTracksVisible = false
+                onAddTextTrack(slot)
+            },
+        )
     }
 }
 
@@ -298,13 +328,14 @@ private fun NormalPlayer(
     playback: PlaybackSnapshot,
     cuePositionMs: Long,
     currentCue: SubtitleCue?,
+    secondaryCue: SubtitleCue?,
     sleepTimer: SleepTimerState,
     isCollected: Boolean,
     onPlayPause: () -> Unit,
     onBackToLibrary: () -> Unit,
     onOpenSources: () -> Unit,
     onToggleCollected: () -> Unit,
-    onAddSubtitle: () -> Unit,
+    onManageTextTracks: () -> Unit,
     onEnterGlow: () -> Unit,
     onEnterCalibration: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
@@ -352,11 +383,26 @@ private fun NormalPlayer(
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             TextButton(onClick = onToggleCollected) {
                 Text(
                     text = if (isCollected) "移出我的内容" else "加入我的内容",
                     color = if (isCollected) AppMutedText else AppSecondaryText,
+                    fontSize = 12.sp,
+                )
+            }
+            TextButton(onClick = onManageTextTracks) {
+                Text(
+                    text =
+                        when {
+                            session.subtitle != null && session.secondarySubtitle != null ->
+                                "字幕 · 主 / 次"
+                            session.subtitle != null || session.secondarySubtitle != null ->
+                                "字幕 · 1 轨"
+                            else -> "字幕"
+                        },
+                    color = AppSecondaryText,
                     fontSize = 12.sp,
                 )
             }
@@ -381,7 +427,7 @@ private fun NormalPlayer(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            if (session.subtitle == null) {
+            if (session.subtitle == null && session.secondarySubtitle == null) {
                 Text(
                     text = "当前会话没有字幕",
                     color = AppSecondaryText,
@@ -392,10 +438,10 @@ private fun NormalPlayer(
                     color = AppMutedText,
                     fontSize = 12.sp,
                 )
-                TextButton(onClick = onAddSubtitle) {
-                    Text("添加字幕", color = AppSecondaryText)
+                TextButton(onClick = onManageTextTracks) {
+                    Text("添加或选择字幕", color = AppSecondaryText)
                 }
-            } else {
+            } else if (session.subtitle != null) {
                 CueText(
                     text = context.previous?.text.orEmpty(),
                     color = AppMutedText,
@@ -409,12 +455,28 @@ private fun NormalPlayer(
                     fontSize = 26,
                     maxLines = 6,
                 )
+                if (session.secondarySubtitle != null) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    CueText(
+                        text = secondaryCue?.text.orEmpty(),
+                        color = AppSecondaryText,
+                        fontSize = 17,
+                        maxLines = 4,
+                    )
+                }
                 Spacer(modifier = Modifier.height(24.dp))
                 CueText(
                     text = context.next?.text.orEmpty(),
                     color = AppMutedText,
                     fontSize = 15,
                     maxLines = 3,
+                )
+            } else {
+                CueText(
+                    text = secondaryCue?.text.orEmpty(),
+                    color = AppPrimaryText,
+                    fontSize = 24,
+                    maxLines = 6,
                 )
             }
         }
@@ -433,7 +495,8 @@ private fun NormalPlayer(
             player = player,
             playback = playback,
             subtitleOffsetMs = session.subtitleOffsetMs,
-            subtitleControlsEnabled = session.subtitle != null,
+            subtitleControlsEnabled =
+                session.subtitle != null || session.secondarySubtitle != null,
             contentColor = AppPrimaryText,
             secondaryColor = AppSecondaryText,
             accentColor = AppAccent,
@@ -466,7 +529,12 @@ private fun NormalPlayer(
                     ),
             ) {
                 Text(
-                    text = if (session.subtitle == null) "无字幕 · 进入微光" else "进入微光",
+                    text =
+                        if (session.subtitle == null && session.secondarySubtitle == null) {
+                            "无字幕 · 进入微光"
+                        } else {
+                            "进入微光"
+                        },
                     color = AppAccent,
                 )
             }
@@ -504,16 +572,233 @@ private fun NormalPlayer(
 }
 
 @Composable
+private fun TextTrackDialog(
+    contentUnit: PlayableContentUnit?,
+    onDismiss: () -> Unit,
+    onSelectTrack: (TextTrackSlot, String?) -> Unit,
+    onRestoreAutomatic: (TextTrackSlot) -> Unit,
+    onAddTrack: (TextTrackSlot) -> Unit,
+) {
+    val tracks = contentUnit?.timedTextTracks.orEmpty()
+    val selection = contentUnit?.activeText ?: ActiveTextSelection()
+    val primary = tracks.firstOrNull { it.stableId == selection.primaryTrackId }
+    val secondary = tracks.firstOrNull { it.stableId == selection.secondaryTrackId }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("字幕轨", color = AppPrimaryText) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                TextSelectionSummary(
+                    title = "主轨",
+                    track = primary,
+                    mode = selection.primaryMode,
+                    slot = TextTrackSlot.Primary,
+                    onClear = { onSelectTrack(TextTrackSlot.Primary, null) },
+                    onRestoreAutomatic = onRestoreAutomatic,
+                    onAddTrack = onAddTrack,
+                )
+                TextSelectionSummary(
+                    title = "次轨",
+                    track = secondary,
+                    mode = selection.secondaryMode,
+                    slot = TextTrackSlot.Secondary,
+                    onClear = { onSelectTrack(TextTrackSlot.Secondary, null) },
+                    onRestoreAutomatic = onRestoreAutomatic,
+                    onAddTrack = onAddTrack,
+                )
+                Spacer(modifier = Modifier.fillMaxWidth().height(1.dp).background(AppHairline))
+                if (tracks.isEmpty()) {
+                    Text(
+                        "还没有已发现或手动添加的字幕轨。",
+                        color = AppMutedText,
+                        fontSize = 12.sp,
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
+                    ) {
+                        itemsIndexed(
+                            items = tracks,
+                            key = { _, track -> track.stableId },
+                        ) { index, track ->
+                            TextTrackChoiceRow(
+                                track = track,
+                                isPrimary = track.stableId == selection.primaryTrackId,
+                                isSecondary = track.stableId == selection.secondaryTrackId,
+                                onSelectPrimary = {
+                                    onSelectTrack(TextTrackSlot.Primary, track.stableId)
+                                },
+                                onSelectSecondary = {
+                                    onSelectTrack(TextTrackSlot.Secondary, track.stableId)
+                                },
+                            )
+                            if (index != tracks.lastIndex) {
+                                Spacer(
+                                    modifier =
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .height(1.dp)
+                                            .background(AppHairline),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("完成", color = AppAccent) }
+        },
+        containerColor = AppSurfaceRaised,
+    )
+}
+
+@Composable
+private fun TextSelectionSummary(
+    title: String,
+    track: TimedTextTrack?,
+    mode: TextSelectionMode,
+    slot: TextTrackSlot,
+    onClear: () -> Unit,
+    onRestoreAutomatic: (TextTrackSlot) -> Unit,
+    onAddTrack: (TextTrackSlot) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, color = AppMutedText, fontSize = 11.sp)
+                Text(
+                    track?.let(::textTrackLabel) ?: "关闭",
+                    color = AppPrimaryText,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                if (mode == TextSelectionMode.Automatic) "自动" else "手动",
+                color = AppMutedText,
+                fontSize = 10.sp,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            if (mode == TextSelectionMode.Manual) {
+                TextButton(onClick = { onRestoreAutomatic(slot) }) {
+                    Text("恢复自动", color = AppSecondaryText, fontSize = 11.sp)
+                }
+            }
+            TextButton(onClick = onClear) {
+                Text("关闭", color = AppMutedText, fontSize = 11.sp)
+            }
+            TextButton(onClick = { onAddTrack(slot) }) {
+                Text("选择文件", color = AppSecondaryText, fontSize = 11.sp)
+            }
+        }
+        track?.failureMessage?.let { message ->
+            Text(message, color = AppError, fontSize = 11.sp, lineHeight = 15.sp)
+        }
+    }
+}
+
+@Composable
+private fun TextTrackChoiceRow(
+    track: TimedTextTrack,
+    isPrimary: Boolean,
+    isSecondary: Boolean,
+    onSelectPrimary: () -> Unit,
+    onSelectSecondary: () -> Unit,
+) {
+    val failed =
+        track.readiness in
+            setOf(TimedTextReadiness.Unreadable, TimedTextReadiness.ParseFailed)
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(
+            textTrackLabel(track),
+            color = AppPrimaryText,
+            fontSize = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            textTrackDetail(track),
+            color = if (failed) AppError else AppMutedText,
+            fontSize = 10.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            TextButton(onClick = onSelectPrimary, enabled = !isPrimary || failed) {
+                Text(
+                    if (isPrimary && failed) "重试主轨" else if (isPrimary) "当前主轨" else "设为主轨",
+                    color = if (!isPrimary || failed) AppSecondaryText else AppMutedText,
+                    fontSize = 11.sp,
+                )
+            }
+            TextButton(
+                onClick = onSelectSecondary,
+                enabled = (!isSecondary || failed) && !isPrimary,
+            ) {
+                Text(
+                    if (isSecondary && failed) "重试次轨" else if (isSecondary) "当前次轨" else "设为次轨",
+                    color =
+                        if ((!isSecondary || failed) && !isPrimary) {
+                            AppSecondaryText
+                        } else {
+                            AppMutedText
+                        },
+                    fontSize = 11.sp,
+                )
+            }
+        }
+    }
+}
+
+private fun textTrackLabel(track: TimedTextTrack): String =
+    track.label?.takeIf(String::isNotBlank)
+        ?: track.language?.takeIf(String::isNotBlank)
+        ?: track.locator.displayName
+
+private fun textTrackDetail(track: TimedTextTrack): String =
+    listOfNotNull(
+        when (track.origin) {
+            TimedTextOrigin.Embedded -> "内嵌"
+            TimedTextOrigin.Sidecar -> "外挂"
+            TimedTextOrigin.Lyrics -> "歌词"
+            TimedTextOrigin.Generated -> "生成"
+        },
+        track.format?.uppercase(Locale.ROOT),
+        "默认".takeIf { TimedTextRole.Default in track.roles },
+        "强制".takeIf { TimedTextRole.Forced in track.roles },
+        "SDH".takeIf { TimedTextRole.Sdh in track.roles },
+        "CC".takeIf { TimedTextRole.ClosedCaptions in track.roles },
+        when (track.readiness) {
+            TimedTextReadiness.Unknown -> "待验证"
+            TimedTextReadiness.Ready -> "可用"
+            TimedTextReadiness.Unreadable -> "文件不可读"
+            TimedTextReadiness.ParseFailed -> "无法解析"
+        },
+    ).joinToString(" · ")
+
+@Composable
 private fun GlowPlayer(
     player: Player,
     session: ActiveSession,
     playback: PlaybackSnapshot,
     currentCue: SubtitleCue?,
+    secondaryCue: SubtitleCue?,
     displayProfile: DisplayProfile,
     sleepTimer: SleepTimerState,
     showGestureHint: Boolean,
     onPlayPause: () -> Unit,
     onExitGlow: () -> Unit,
+    onManageTextTracks: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
     onGestureHintSeen: () -> Unit,
     modifier: Modifier = Modifier,
@@ -599,8 +884,7 @@ private fun GlowPlayer(
                     )
                 },
     ) {
-        Text(
-            text = currentCue?.text.orEmpty(),
+        Column(
             modifier =
                 Modifier
                     .align(
@@ -613,13 +897,32 @@ private fun GlowPlayer(
                     )
                     .fillMaxWidth()
                     .padding(horizontal = 28.dp),
-            color = subtitleColor,
-            fontSize = displayProfile.glowSubtitleSizeSp.coerceIn(18f, 36f).sp,
-            fontWeight = FontWeight.Medium,
-            lineHeight =
-                (displayProfile.glowSubtitleSizeSp.coerceIn(18f, 36f) * 1.4f).sp,
-            textAlign = TextAlign.Center,
-        )
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = currentCue?.text.orEmpty(),
+                modifier = Modifier.fillMaxWidth(),
+                color = subtitleColor,
+                fontSize = displayProfile.glowSubtitleSizeSp.coerceIn(18f, 36f).sp,
+                fontWeight = FontWeight.Medium,
+                lineHeight =
+                    (displayProfile.glowSubtitleSizeSp.coerceIn(18f, 36f) * 1.4f).sp,
+                textAlign = TextAlign.Center,
+            )
+            if (session.secondarySubtitle != null) {
+                Text(
+                    text = secondaryCue?.text.orEmpty(),
+                    modifier = Modifier.fillMaxWidth(),
+                    color = subtitleColor.copy(alpha = 0.68f),
+                    fontSize =
+                        (displayProfile.glowSubtitleSizeSp.coerceIn(18f, 36f) * 0.68f).sp,
+                    lineHeight =
+                        (displayProfile.glowSubtitleSizeSp.coerceIn(18f, 36f) * 0.95f).sp,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
 
         AnimatedVisibility(
             visible = gestureFeedback != null,
@@ -703,6 +1006,9 @@ private fun GlowPlayer(
                     TextButton(onClick = { controlsVisible = false }) {
                         Text("锁定", color = controlColor)
                     }
+                    TextButton(onClick = onManageTextTracks) {
+                        Text("字幕轨", color = controlColor)
+                    }
                     TextButton(onClick = onExitGlow) {
                         Text("退出微光", color = controlColor)
                     }
@@ -720,7 +1026,8 @@ private fun GlowPlayer(
                     player = player,
                     playback = playback,
                     subtitleOffsetMs = session.subtitleOffsetMs,
-                    subtitleControlsEnabled = session.subtitle != null,
+                    subtitleControlsEnabled =
+                        session.subtitle != null || session.secondarySubtitle != null,
                     contentColor = controlColor,
                     secondaryColor = controlColor.copy(alpha = 0.72f),
                     accentColor = controlColor,
