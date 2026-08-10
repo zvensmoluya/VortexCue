@@ -33,6 +33,7 @@ class LibraryStore(context: Context) {
     private fun encodeConfig(config: LibraryConfig): JSONObject =
         JSONObject()
             .put("version", CurrentVersion)
+            .put("contentUnits", ContentUnitJson.encodeList(config.contentUnits))
             .put("catalogItems", MediaSourceJson.encodeList(config.catalogItems))
             .put("recentItems", MediaSourceJson.encodeList(config.recentItems))
             .put("folders", JSONArray().apply { config.folders.forEach { put(it.toJson()) } })
@@ -52,6 +53,9 @@ class LibraryStore(context: Context) {
         val catalogItems = MediaSourceJson.decodeList(json.optJSONArray("catalogItems"))
         val recentItems = MediaSourceJson.decodeList(json.optJSONArray("recentItems"))
         val legacyManualItems = MediaSourceJson.decodeList(json.optJSONArray("manualItems"))
+        val playlists = json.optJSONArray("playlists").mapObjects(::playlistFromJson)
+        val subtitleAssociations =
+            json.optJSONArray("subtitleAssociations").mapObjects(::subtitleAssociationFromJson)
         val migration =
             resolveLibraryMigration(
                 catalogUriValues = catalogItems.map { it.uri.toString() },
@@ -62,13 +66,24 @@ class LibraryStore(context: Context) {
         val sourcesByUri =
             (legacyManualItems + catalogItems + recentItems)
                 .associateBy { it.uri.toString() }
+        val migratedCatalogItems = migration.catalogUriValues.mapNotNull(sourcesByUri::get)
+        val migratedRecentItems = migration.recentUriValues.mapNotNull(sourcesByUri::get)
+        val contentUnits =
+            migratePlayableContentUnits(
+                storedUnits = ContentUnitJson.decodeList(json.optJSONArray("contentUnits")),
+                mediaSnapshots =
+                    migratedCatalogItems +
+                        migratedRecentItems +
+                        playlists.flatMap(LibraryPlaylist::items),
+                legacyAssociations = subtitleAssociations,
+            )
         return LibraryConfig(
-            catalogItems = migration.catalogUriValues.mapNotNull(sourcesByUri::get),
-            recentItems = migration.recentUriValues.mapNotNull(sourcesByUri::get),
+            contentUnits = contentUnits,
+            catalogItems = migratedCatalogItems,
+            recentItems = migratedRecentItems,
             folders = json.optJSONArray("folders").mapObjects(::folderFromJson),
-            playlists = json.optJSONArray("playlists").mapObjects(::playlistFromJson),
-            subtitleAssociations =
-                json.optJSONArray("subtitleAssociations").mapObjects(::subtitleAssociationFromJson),
+            playlists = playlists,
+            subtitleAssociations = subtitleAssociations,
             includedUris = migration.includedUriValues,
             ignoredUris = json.optJSONArray("ignoredUris").stringValues().distinct(),
             homeShortcuts =
@@ -144,7 +159,7 @@ class LibraryStore(context: Context) {
     }
 
     private companion object {
-        const val CurrentVersion = 4
+        const val CurrentVersion = 5
         val StateKey = stringPreferencesKey("state_json")
     }
 }

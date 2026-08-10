@@ -186,9 +186,7 @@ fun VortexCueApp(
 
     fun restoreAssociatedSubtitle(media: MediaSourceRef) {
         val subtitleSource =
-            libraryState.config.subtitleAssociations
-                .firstOrNull { it.mediaUri == media.uri }
-                ?.subtitle
+            libraryState.config.activePrimarySubtitleSource(media)
                 ?: return
         coroutineScope.launch {
             runCatching {
@@ -199,7 +197,7 @@ fun VortexCueApp(
                     val updated = current.copy(subtitle = loaded)
                     activeSession = updated
                     draft = updated.toDraft()
-                    libraryStateHolder.updateSubtitleAssociation(media.uri, loaded.source)
+                    libraryStateHolder.updateResolvedSubtitle(media, loaded.source)
                     persistSession(updated)
                 }
             }
@@ -737,7 +735,7 @@ fun VortexCueApp(
                         libraryStateHolder.rememberRecentMedia(media)
                         activeSession = applied
                         libraryStateHolder.updateSubtitleAssociation(
-                            media.uri,
+                            media,
                             loadedSubtitle?.source,
                         )
                         draft = applied.toDraft()

@@ -47,6 +47,7 @@ data class SubtitleAssociation(
 )
 
 data class LibraryConfig(
+    val contentUnits: List<PlayableContentUnit> = emptyList(),
     val catalogItems: List<MediaSourceRef> = emptyList(),
     val recentItems: List<MediaSourceRef> = emptyList(),
     val folders: List<LibraryFolderRef> = emptyList(),
@@ -63,7 +64,7 @@ data class MediaLibraryState(
     val ignoredItems: List<MediaSourceRef> = emptyList(),
     val config: LibraryConfig = LibraryConfig(),
     val sources: List<LibrarySourceState> = emptyList(),
-    val suggestedSubtitleAssociations: List<SubtitleAssociation> = emptyList(),
+    val suggestedTextTracks: List<TimedTextTrackCandidate> = emptyList(),
     val isLoading: Boolean = false,
     val hasAudioAccess: Boolean = false,
     val videoAccess: VideoLibraryAccess = VideoLibraryAccess.None,
@@ -81,7 +82,7 @@ data class MediaLibraryState(
 
 data class LibraryScanBatch(
     val media: List<MediaSourceRef> = emptyList(),
-    val subtitleSuggestions: List<SubtitleAssociation> = emptyList(),
+    val subtitleSuggestions: List<TimedTextTrackCandidate> = emptyList(),
 )
 
 object LibrarySourceIds {

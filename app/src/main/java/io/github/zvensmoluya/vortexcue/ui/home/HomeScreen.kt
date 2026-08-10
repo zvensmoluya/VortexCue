@@ -1723,10 +1723,11 @@ private fun MediaSourceRef.matches(query: String): Boolean =
         .any { value -> value?.contains(query, ignoreCase = true) == true }
 
 private fun MediaLibraryState.hasSuggestedSubtitleFor(media: MediaSourceRef): Boolean =
-    suggestedSubtitleAssociations.any { it.mediaUri == media.uri }
+    suggestedTextTracks.any { it.mediaUriValue == media.uri.toString() } ||
+        config.hasTimedTextTracks(media)
 
 private fun MediaLibraryState.hasSubtitleFor(media: MediaSourceRef): Boolean =
-    config.subtitleAssociations.any { it.mediaUri == media.uri }
+    config.activePrimarySubtitleSource(media) != null
 
 private fun collectionDetail(items: List<MediaSourceRef>): String {
     val audioCount = items.count { it.kind == MediaKind.Audio }

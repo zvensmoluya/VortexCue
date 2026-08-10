@@ -7,6 +7,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import io.github.zvensmoluya.vortexcue.core.model.ContentAvailability
 import io.github.zvensmoluya.vortexcue.core.model.MediaOrigin
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
 import io.github.zvensmoluya.vortexcue.core.model.SubtitleSourceRef
@@ -105,7 +106,7 @@ internal class LibraryStateHolder(
                         )
                 }
 
-                val subtitleSuggestions = mutableListOf<SubtitleAssociation>()
+                val subtitleSuggestions = mutableListOf<TimedTextTrackCandidate>()
                 config.folders.forEach { folder ->
                     val result = runCatching { scanner.scanFolder(folder) }
                     val batch = result.getOrDefault(LibraryScanBatch())
@@ -158,7 +159,8 @@ internal class LibraryStateHolder(
                                 preferred = freshItems,
                                 fallback = latestConfig.catalogItems,
                             ),
-                    )
+                    ).withMediaSnapshots(freshItems, ContentAvailability.Available)
+                        .withTimedTextCandidates(subtitleSuggestions)
                 val catalogItems =
                     mergeCatalogItems(
                         preferred = updatedConfig.catalogItems,
@@ -172,7 +174,7 @@ internal class LibraryStateHolder(
                         ignoredItems = partition.ignored,
                         config = updatedConfig,
                         sources = sources,
-                        suggestedSubtitleAssociations = subtitleSuggestions,
+                        suggestedTextTracks = subtitleSuggestions,
                         isLoading = false,
                         hasAudioAccess = hasAudioAccess,
                         videoAccess = videoAccess,
@@ -205,7 +207,7 @@ internal class LibraryStateHolder(
             config.copy(
                 recentItems =
                     membership.recentUriValues.mapNotNull(recentSourcesByUri::get),
-            )
+            ).withMediaSnapshots(listOf(recentSource), ContentAvailability.Available)
         state = state.copy(config = updatedConfig)
         coroutineScope.launch { store.save(updatedConfig) }
     }
@@ -240,7 +242,7 @@ internal class LibraryStateHolder(
                     } else {
                         config.homeShortcuts
                     },
-            ),
+            ).withMediaSnapshots(listOf(collected), ContentAvailability.Available),
             repartition = true,
         )
     }
@@ -288,7 +290,7 @@ internal class LibraryStateHolder(
                 subtitleAssociations =
                     config.subtitleAssociations.filterNot { it.mediaUri.toString() in removedUris },
                 playlists = config.playlists.withoutItems(removedUris),
-            ),
+            ).withoutContentUris(removedUris),
             rescan = true,
         )
     }
@@ -318,7 +320,11 @@ internal class LibraryStateHolder(
                             shortcut.key.startsWith("${LibrarySourceIds.LooseFiles}|")
                     },
                 playlists = config.playlists.withoutItems(looseUris),
-            ),
+                subtitleAssociations =
+                    config.subtitleAssociations.filterNot {
+                        it.mediaUri.toString() in looseUris
+                    },
+            ).withoutContentUris(looseUris),
             rescan = true,
         )
     }
@@ -326,17 +332,10 @@ internal class LibraryStateHolder(
     fun acceptCandidates(uriValues: Set<String>) {
         if (uriValues.isEmpty()) return
         val config = state.config
-        val suggestions =
-            state.suggestedSubtitleAssociations.filter { it.mediaUri.toString() in uriValues }
-        val updatedAssociations =
-            (config.subtitleAssociations.filterNot { existing ->
-                suggestions.any { it.mediaUri == existing.mediaUri }
-            } + suggestions).distinctBy { it.mediaUri }
         updateConfig(
             config.copy(
                 includedUris = (config.includedUris + uriValues).distinct(),
                 ignoredUris = config.ignoredUris.filterNot(uriValues::contains),
-                subtitleAssociations = updatedAssociations,
             ),
             repartition = true,
         )
@@ -405,13 +404,17 @@ internal class LibraryStateHolder(
                 name = trimmed,
                 items = initialItem?.let(::listOf).orEmpty(),
             )
-        updateConfig(
+        val updatedConfig =
             config.copy(
                 playlists = config.playlists + playlist,
                 homeShortcuts =
                     config.homeShortcuts +
                         LibraryShortcut(LibraryShortcutType.Playlist, playlist.id),
-            ),
+            )
+        updateConfig(
+            initialItem?.let {
+                updatedConfig.withMediaSnapshots(listOf(it), ContentAvailability.Available)
+            } ?: updatedConfig,
         )
     }
 
@@ -428,7 +431,10 @@ internal class LibraryStateHolder(
                     playlist.copy(items = playlist.items + item)
                 }
             }
-        updateConfig(config.copy(playlists = playlists))
+        updateConfig(
+            config.copy(playlists = playlists)
+                .withMediaSnapshots(listOf(item), ContentAvailability.Available),
+        )
     }
 
     fun removeFromPlaylist(
@@ -461,14 +467,35 @@ internal class LibraryStateHolder(
     }
 
     fun updateSubtitleAssociation(
-        mediaUri: Uri,
+        media: MediaSourceRef,
         subtitle: SubtitleSourceRef?,
     ) {
         val config = state.config
         val associations =
-            config.subtitleAssociations.filterNot { it.mediaUri == mediaUri } +
-                listOfNotNull(subtitle?.let { SubtitleAssociation(mediaUri, it) })
-        updateConfig(config.copy(subtitleAssociations = associations))
+            config.subtitleAssociations.filterNot { it.mediaUri == media.uri } +
+                listOfNotNull(subtitle?.let { SubtitleAssociation(media.uri, it) })
+        updateConfig(
+            config.copy(subtitleAssociations = associations)
+                .withManualPrimaryText(media, subtitle),
+        )
+    }
+
+    fun updateResolvedSubtitle(
+        media: MediaSourceRef,
+        subtitle: SubtitleSourceRef,
+    ) {
+        val config = state.config
+        val associations =
+            if (config.subtitleAssociations.any { it.mediaUri == media.uri }) {
+                config.subtitleAssociations.filterNot { it.mediaUri == media.uri } +
+                    SubtitleAssociation(media.uri, subtitle)
+            } else {
+                config.subtitleAssociations
+            }
+        updateConfig(
+            config.copy(subtitleAssociations = associations)
+                .withResolvedPrimaryText(media, subtitle),
+        )
     }
 
     private fun updateConfig(

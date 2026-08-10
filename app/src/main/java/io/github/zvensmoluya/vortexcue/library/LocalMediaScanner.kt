@@ -365,21 +365,15 @@ class LocalMediaScanner(private val context: Context) {
         fun matchSubtitles(
             media: List<MediaSourceRef>,
             subtitles: List<DiscoveredSubtitle>,
-        ): List<SubtitleAssociation> =
-            media.mapNotNull { item ->
-                val mediaStem = item.displayName.substringBeforeLast('.').lowercase()
+        ): List<TimedTextTrackCandidate> =
+            media.flatMap { item ->
                 subtitles
                     .asSequence()
                     .filter { it.folder == item.folder }
-                    .map { subtitle ->
-                        subtitle to subtitle.source.displayName.substringBeforeLast('.').lowercase()
+                    .mapNotNull { subtitle ->
+                        buildSidecarTextTrackCandidate(item, subtitle.source)
                     }
-                    .filter { (_, subtitleStem) ->
-                        subtitleStem == mediaStem || subtitleStem.startsWith("$mediaStem.")
-                    }
-                    .minByOrNull { (_, subtitleStem) -> subtitleStem.length }
-                    ?.first
-                    ?.let { SubtitleAssociation(item.uri, it.source) }
+                    .toList()
             }
     }
 }
