@@ -6,6 +6,11 @@
 - 使用仓库内的 Gradle Wrapper，不依赖全局 Gradle。
 - 不提交密钥、凭据、本机绝对路径、`local.properties`、构建产物或缓存。
 
+## Product context
+
+- 涉及产品定位、用户流程、信息架构、范围取舍或产品相关架构调整时，先阅读 `docs/DOMAIN_CONTEXT.md`，再以 `docs/GUIDE.md` 确认当前行为和实施边界。
+- `docs/DOMAIN_CONTEXT.md` 记录长期领域背景和产品设计 DNA，不自动产生实现要求；与当前规格冲突时以 `docs/GUIDE.md` 为准。
+
 ## Verification
 
 - 默认运行与改动直接相关、范围最小的验证；只有改动影响共享行为、构建或发布时才扩大范围。

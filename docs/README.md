@@ -4,9 +4,15 @@
 
 ## 当前规范
 
-- [`GUIDE.md`](GUIDE.md)：当前唯一的产品与工程指导，包含产品边界、交互默认值、架构约束和实施顺序。
+- [`GUIDE.md`](GUIDE.md)：当前唯一的产品与工程指导；当前阶段为 M3 退场式播放垂直切片，包含产品边界、目标路径、架构约束、实施顺序和验证门槛。
 
 如果其他文档与 `GUIDE.md` 冲突，以 `GUIDE.md` 为准。仓库协作、验证和提交规则仍以根目录 [`AGENTS.md`](../AGENTS.md) 为准。
+
+## 长期产品背景
+
+- [`DOMAIN_CONTEXT.md`](DOMAIN_CONTEXT.md)：解释荧荧为什么存在，以及 sleep-first、界面退场、同步文字与本地内容生态等需要长期保留的产品设计 DNA。
+
+它不是当前规格。涉及产品定位、信息架构、功能范围或相关架构调整时应先理解这份背景，再以 `GUIDE.md` 确认当前实施要求。
 
 ## 验证记录
 
@@ -25,6 +31,9 @@
 ## 参考资料
 
 - [`reference/research.md`](reference/research.md)：M0B–M1 产品与交互研究报告；保留原文，供需要时查阅。
+- [`reference/PRODUCT_RESEARCH_BRIEF.md`](reference/PRODUCT_RESEARCH_BRIEF.md)：围绕字幕发现、内容入口和产品再定位的研究委托书；用于交给研究型模型继续探索，不是当前规格。
+- [`reference/research2v1dratf.md`](reference/research2v1dratf.md)：第一轮深度研究结论；保留完整证据台账、字幕模型、服务蓝图和验证设计。
+- [`reference/research2.md`](reference/research2.md)：在补入 ASMR、本地付费内容分发和跨语言消费背景后形成的 V2 结论；修正产品定义为 sleep-first 的退场式本地内容播放器。
 - [`reference/PROJECT_SEED.md`](reference/PROJECT_SEED.md)：项目建立时的完整设计种子；用于理解背景和长期可能性。
 
 参考资料不是当前规格。只有被吸收到 `GUIDE.md` 的内容才约束当前实现。
