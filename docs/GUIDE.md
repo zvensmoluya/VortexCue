@@ -607,6 +607,19 @@ ui        首次体验、Home、Player 和主题
 
 状态：已完成代码、自动化检查与 Android 13 的 v3→v4 原位升级真机验证。单文件进入 Recent、明确加入 / 移出“我的内容”、冷启动无扫描恢复和旧 `includedUris` 决定补全目录均已走通；真机基线没有旧 `manualItems` 和 Playlist，这两条迁移继续由单元测试覆盖。详见 [`records/M3_CATALOG_VALIDATION.md`](records/M3_CATALOG_VALIDATION.md)。
 
+#### M3.2b 第二实现切片
+
+本切片在 M3.2a 的 URI 兼容目录之上建立稳定内容单元和多文字轨事实，仍不同时改造 Home、Tonight 或播放界面：
+
+1. 为每个已知媒体快照建立确定性的稳定内容 ID，并以 version 5 持久化 `PlayableContentUnit`；
+2. 每个内容单元可以保存 `0..N` 文字轨，以及来源、定位信息、格式、语言、名称、角色、匹配依据、可读状态和 primary / secondary 选择；
+3. Folder 匹配保留全部 exact、语言和角色后缀候选，不再只留下最短文件名；唯一 exact 候选才自动成为 primary，多个不明确候选只建立关系；
+4. 用户手动选择或明确移除 primary 后，后续自动候选不得覆盖；被拒绝候选即使暂时消失，也保留拒绝决定；
+5. 旧字幕关联非破坏性迁移为稳定的 Legacy 轨和手动 primary；暂时没有媒体快照的旧关联继续保留，等待内容再次出现；
+6. 当前播放器通过兼容层继续消费一个外挂 primary，不在本切片提前声称已经支持内嵌轨播放、secondary 显示、失效修复或完整轨道选择 UI。
+
+状态：已完成代码、自动化检查与 Android 13 的 v4→v5 原位升级真机验证。253 个旧媒体快照全部生成唯一稳定 ID，Recent、Collection 决定和旧字幕关联均未丢失；第二次冷启动状态保持不变且未触发扫描。M3.2 尚未整体完成，内嵌文字轨、primary / secondary 播放界面和失效重定位仍属于后续切片。详见 [`records/M3_CONTENT_UNIT_VALIDATION.md`](records/M3_CONTENT_UNIT_VALIDATION.md)。
+
 ### M3.3 建立我的内容与来源
 
 1. 提供最小“我的内容”列表、搜索和收录 / 移出操作；

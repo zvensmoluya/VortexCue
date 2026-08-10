@@ -20,6 +20,7 @@
 - [`records/M1_SMOKE_VALIDATION.md`](records/M1_SMOKE_VALIDATION.md)：M1 播放器首轮集中真机 smoke test，记录已通过路径、真机修复和剩余覆盖。
 - [`records/M2_SELECTIVE_LIBRARY_VALIDATION.md`](records/M2_SELECTIVE_LIBRARY_VALIDATION.md)：M2 选择性音视频发现、收录、首页内容集和持久化真机验收。
 - [`records/M3_CATALOG_VALIDATION.md`](records/M3_CATALOG_VALIDATION.md)：M3.2a 内容目录、Recent / Collection 分离和 v3→v4 原位升级真机验收。
+- [`records/M3_CONTENT_UNIT_VALIDATION.md`](records/M3_CONTENT_UNIT_VALIDATION.md)：M3.2b 稳定内容单元、`0..N` 文字轨目录和 v4→v5 原位升级真机验收。
 
 记录只说明当时做了什么、观察到了什么，不自动产生新的开发要求。
 
