@@ -40,7 +40,7 @@ internal class LibraryStateHolder(
             state.copy(
                 config = config,
                 hasAudioAccess = appContext.hasAudioLibraryPermission(),
-                hasVideoAccess = appContext.hasVideoLibraryPermission(),
+                videoAccess = appContext.videoLibraryAccess(),
             )
         return config
     }
@@ -56,14 +56,15 @@ internal class LibraryStateHolder(
         val requestId = scanRequestId
         scanJob?.cancel()
         val hasAudioAccess = appContext.hasAudioLibraryPermission()
-        val hasVideoAccess = appContext.hasVideoLibraryPermission()
+        val videoAccess = appContext.videoLibraryAccess()
+        val hasVideoAccess = videoAccess != VideoLibraryAccess.None
         val hasSystemAccess = hasAudioAccess || hasVideoAccess
         state =
             state.copy(
                 config = config,
                 isLoading = true,
                 hasAudioAccess = hasAudioAccess,
-                hasVideoAccess = hasVideoAccess,
+                videoAccess = videoAccess,
                 errorMessage = null,
             )
         scanJob =
@@ -153,7 +154,7 @@ internal class LibraryStateHolder(
                         suggestedSubtitleAssociations = subtitleSuggestions,
                         isLoading = false,
                         hasAudioAccess = hasAudioAccess,
-                        hasVideoAccess = hasVideoAccess,
+                        videoAccess = videoAccess,
                         errorMessage = sources.firstNotNullOfOrNull { it.errorMessage },
                     )
             }

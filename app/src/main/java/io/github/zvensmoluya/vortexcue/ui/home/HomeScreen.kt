@@ -900,6 +900,9 @@ private fun ContentManagerOverview(
                     label =
                         when {
                             !library.hasSystemAccess -> "扫描本机"
+                            library.hasAudioAccess &&
+                                library.videoAccess == VideoLibraryAccess.Partial ->
+                                "调整视频范围"
                             !library.hasCompleteSystemAccess -> "补充本机授权"
                             else -> "重新扫描本机"
                         },
@@ -1217,7 +1220,13 @@ private fun ScanSources(
                 primaryActionLabel =
                     when (source.kind) {
                         LibrarySourceKind.SystemLibrary ->
-                            if (library.hasCompleteSystemAccess) "刷新" else "补充授权"
+                            when {
+                                library.hasCompleteSystemAccess -> "刷新"
+                                library.hasAudioAccess &&
+                                    library.videoAccess == VideoLibraryAccess.Partial ->
+                                    "调整范围"
+                                else -> "补充授权"
+                            }
                         LibrarySourceKind.Folder -> null
                         LibrarySourceKind.LooseFiles -> "清空"
                     },

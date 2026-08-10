@@ -626,15 +626,11 @@ fun VortexCueApp(
                 },
                 onPickSubtitle = { subtitlePicker.launch(arrayOf("*/*")) },
                 onRequestLibraryAccess = {
-                    val missingPermissions =
-                        requiredMediaLibraryPermissions().filterNot { permission ->
-                            ContextCompat.checkSelfPermission(context, permission) ==
-                                PackageManager.PERMISSION_GRANTED
-                        }
-                    if (missingPermissions.isEmpty()) {
+                    val permissions = mediaLibraryPermissionsToRequest(context)
+                    if (permissions.isEmpty()) {
                         libraryStateHolder.scan()
                     } else {
-                        libraryPermissionLauncher.launch(missingPermissions.toTypedArray())
+                        libraryPermissionLauncher.launch(permissions)
                     }
                 },
                 onRefreshLibrary = { libraryStateHolder.scan() },

@@ -64,14 +64,17 @@ data class MediaLibraryState(
     val suggestedSubtitleAssociations: List<SubtitleAssociation> = emptyList(),
     val isLoading: Boolean = false,
     val hasAudioAccess: Boolean = false,
-    val hasVideoAccess: Boolean = false,
+    val videoAccess: VideoLibraryAccess = VideoLibraryAccess.None,
     val errorMessage: String? = null,
 ) {
+    val hasVideoAccess: Boolean
+        get() = videoAccess != VideoLibraryAccess.None
+
     val hasSystemAccess: Boolean
         get() = hasAudioAccess || hasVideoAccess
 
     val hasCompleteSystemAccess: Boolean
-        get() = hasAudioAccess && hasVideoAccess
+        get() = hasAudioAccess && videoAccess == VideoLibraryAccess.Full
 }
 
 data class LibraryScanBatch(
