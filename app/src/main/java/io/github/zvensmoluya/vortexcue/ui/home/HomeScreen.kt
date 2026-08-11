@@ -1391,6 +1391,7 @@ private fun ImportContentDialog(
     onApplyDraft: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val canPickSubtitle = draft.media is DraftMedia.Ready
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("打开内容", color = AppPrimaryText) },
@@ -1414,13 +1415,19 @@ private fun ImportContentDialog(
                     label = "同步字幕",
                     value =
                         when (val subtitle = draft.subtitle) {
-                            DraftSubtitle.None -> "可选 · SRT / LRC / VTT / ASS"
+                            DraftSubtitle.None ->
+                                if (canPickSubtitle) {
+                                    "可选 · SRT / LRC / VTT / ASS"
+                                } else {
+                                    "请先选择播放内容"
+                                }
                             is DraftSubtitle.Loading -> "正在读取 ${subtitle.source.displayName}"
                             is DraftSubtitle.Ready -> subtitle.subtitle.source.displayName
                             is DraftSubtitle.Failed -> subtitle.source.displayName
                         },
                     action = if (draft.subtitle == DraftSubtitle.None) "选择" else "更换",
                     onClick = onPickSubtitle,
+                    enabled = canPickSubtitle,
                 )
                 when (val subtitle = draft.subtitle) {
                     is DraftSubtitle.Failed -> StatusText(subtitle.message, AppError)
@@ -1625,13 +1632,16 @@ private fun SourceRow(
     value: String,
     action: String,
     onClick: () -> Unit,
+    enabled: Boolean = true,
 ) {
     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(label, color = AppMutedText, fontSize = 11.sp)
             Text(value, color = AppPrimaryText, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
-        TextButton(onClick = onClick) { Text(action, color = AppSecondaryText) }
+        TextButton(onClick = onClick, enabled = enabled) {
+            Text(action, color = if (enabled) AppSecondaryText else AppMutedText)
+        }
     }
 }
 

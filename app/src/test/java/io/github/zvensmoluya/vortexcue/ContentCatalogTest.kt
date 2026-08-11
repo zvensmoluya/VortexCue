@@ -218,6 +218,25 @@ class ContentCatalogTest {
     }
 
     @Test
+    fun `legacy draft can seed a catalog without a primary decision`() {
+        val emptyAutomatic = ActiveTextSelection()
+
+        assertTrue(emptyAutomatic.allowsLegacyDraftPrimaryMigration())
+    }
+
+    @Test
+    fun `legacy draft cannot overwrite catalog decisions`() {
+        val manuallyDisabled =
+            ActiveTextSelection(primaryMode = TextSelectionMode.Manual)
+        val selected = ActiveTextSelection(primaryTrackId = "selected")
+        val rejected = ActiveTextSelection(rejectedTrackIds = listOf("rejected"))
+
+        assertFalse(manuallyDisabled.allowsLegacyDraftPrimaryMigration())
+        assertFalse(selected.allowsLegacyDraftPrimaryMigration())
+        assertFalse(rejected.allowsLegacyDraftPrimaryMigration())
+    }
+
+    @Test
     fun `restoring automatic selection chooses the usable exact track`() {
         val exact = track("exact", TimedTextMatchBasis.ExactStem)
         val manualOff =

@@ -593,6 +593,11 @@ internal fun LibraryConfig.activePrimarySubtitleSource(
     return subtitleAssociations.firstOrNull { it.mediaUri == media.uri }?.subtitle
 }
 
+internal fun ActiveTextSelection.allowsLegacyDraftPrimaryMigration(): Boolean =
+    primaryTrackId == null &&
+        primaryMode == TextSelectionMode.Automatic &&
+        rejectedTrackIds.isEmpty()
+
 internal fun LibraryConfig.contentUnitFor(media: MediaSourceRef): PlayableContentUnit? =
     contentUnits.firstOrNull { it.media.uri == media.uri }
 

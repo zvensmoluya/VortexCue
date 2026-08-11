@@ -17,6 +17,7 @@ import io.github.zvensmoluya.vortexcue.core.model.TimedTextReadiness
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextTrack
 import io.github.zvensmoluya.vortexcue.core.model.displayTitle
 import io.github.zvensmoluya.vortexcue.core.storage.displayName
+import io.github.zvensmoluya.vortexcue.core.storage.OrderedStateWriter
 import io.github.zvensmoluya.vortexcue.core.storage.persistReadPermission
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +34,7 @@ internal class LibraryStateHolder(
 ) {
     private val appContext = context.applicationContext
     private val contentResolver = appContext.contentResolver
+    private val configWriter = OrderedStateWriter(coroutineScope, store::save)
     private var scanJob: Job? = null
     private var scanRequestId = 0L
 
@@ -184,7 +186,7 @@ internal class LibraryStateHolder(
                         videoAccess = videoAccess,
                         errorMessage = sources.firstNotNullOfOrNull { it.errorMessage },
                     )
-                store.save(updatedConfig)
+                configWriter.submit(updatedConfig)
             }
     }
 
@@ -213,7 +215,7 @@ internal class LibraryStateHolder(
                     membership.recentUriValues.mapNotNull(recentSourcesByUri::get),
             ).withMediaSnapshots(listOf(recentSource), ContentAvailability.Available)
         state = state.copy(config = updatedConfig)
-        coroutineScope.launch { store.save(updatedConfig) }
+        configWriter.submit(updatedConfig)
     }
 
     fun collectMedia(source: MediaSourceRef) {
@@ -470,13 +472,6 @@ internal class LibraryStateHolder(
         )
     }
 
-    fun updateSubtitleAssociation(
-        media: MediaSourceRef,
-        subtitle: SubtitleSourceRef?,
-    ) {
-        updateManualTextSource(media, TextTrackSlot.Primary, subtitle)
-    }
-
     fun updateManualTextSource(
         media: MediaSourceRef,
         slot: TextTrackSlot,
@@ -598,6 +593,10 @@ internal class LibraryStateHolder(
         if (updatedConfig != config) updateConfig(updatedConfig, repartition = true)
     }
 
+    suspend fun awaitPendingWrites() {
+        configWriter.awaitIdle()
+    }
+
     private fun updateConfig(
         config: LibraryConfig,
         rescan: Boolean = false,
@@ -620,7 +619,7 @@ internal class LibraryStateHolder(
             } else {
                 state.copy(config = config)
             }
-        coroutineScope.launch { store.save(config) }
+        configWriter.submit(config)
         if (rescan) scan(config)
     }
 
