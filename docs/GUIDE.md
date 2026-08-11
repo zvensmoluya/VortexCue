@@ -668,7 +668,7 @@ ui        首次体验、Home、Player 和主题
 
 本切片不删除已实现的 secondary 轨，不引入媒体全文哈希、文件移动或完整的 Home / Source 信息架构重做。“我的内容”列表、Folder Source 表面和新发现 Inbox 仍属于 M3.3。
 
-状态：部分实现。单文件导入现在会在媒体确认后建立内容，手动 primary 字幕先完成内容目录写入再更新导入状态；更换媒体按新内容恢复，启动只从内容目录恢复字幕，目录写入按操作顺序串行化。Library version 7 将 `PlayableContentUnit` 改为稳定内容 ID、`1..N` 个媒体 locator 与 active locator；SAF authority + document ID 作为强等价身份，单文件 URI 与 Tree URI 可以复用文字轨、选择和 offset，文件名、大小与时长不参与静默合并。明确重新定位只增加 locator，不再更换内容或文字轨 ID；Folder 刷新与移除只更新 locator 可用性，仍被 Recent、Collection、Playlist 或当前会话引用的内容事实继续保留。Session version 2 不再单独持久化 offset。相关代码与领域单元测试已完成，真机交叉入口、授权移除和进程重建仍待验证；secondary 草稿入口仍待实现，M3.3 在本切片完成后开始。
+状态：代码实现完成，真机补充验证待执行。单文件导入现在会在媒体确认后建立内容，导入草稿可分别选择、移除和并行读取可选 primary / secondary 外挂字幕；每次手动选择先完成内容目录写入再更新草稿状态，同一字幕文件不会同时占用两个显示槽。更换媒体按新内容恢复，启动只从内容目录恢复字幕，目录写入按操作顺序串行化。Library version 7 将 `PlayableContentUnit` 改为稳定内容 ID、`1..N` 个媒体 locator 与 active locator；SAF authority + document ID 作为强等价身份，单文件 URI 与 Tree URI 可以复用文字轨、选择和 offset，文件名、大小与时长不参与静默合并。明确重新定位只增加 locator，不再更换内容或文字轨 ID；Folder 刷新与移除只更新 locator 可用性，仍被 Recent、Collection、Playlist 或当前会话引用的内容事实继续保留。Session version 2 不再单独持久化 offset。相关代码与领域单元测试已完成，真机交叉入口、双草稿字幕、授权移除和进程重建仍待验证；M3.3 可以开始。
 
 ### M3.3 建立我的内容与来源
 
@@ -740,6 +740,7 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 - 文字轨匹配和排序；
 - 手动选择压过自动规则；
 - 媒体已确定后手动选择字幕，关闭导入界面、返回 Home、重新打开和进程重建后关系仍保留；
+- 导入草稿的 primary / secondary 字幕可以独立选择、取消和并行读取，同一字幕不会同时占用两个显示槽；
 - 更换媒体不继承上一内容的导入字幕；
 - 具有强等价身份的单文件与 Folder locator 复用同一内容 ID 和文字关系，弱信号相似的不同内容不会被静默合并；
 - 明确重新定位保持内容 ID、文字轨 ID、主副选择和 offset，Source 刷新或移除只改变 locator 可用性；

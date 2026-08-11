@@ -107,10 +107,34 @@ sealed interface DraftSubtitle {
     ) : DraftSubtitle
 }
 
+internal fun DraftSubtitle.sourceOrNull(): SubtitleSourceRef? =
+    when (this) {
+        DraftSubtitle.None -> null
+        is DraftSubtitle.Loading -> source
+        is DraftSubtitle.Ready -> subtitle.source
+        is DraftSubtitle.Failed -> source
+    }
+
 data class SessionDraft(
     val media: DraftMedia = DraftMedia.None,
     val subtitle: DraftSubtitle = DraftSubtitle.None,
+    val secondarySubtitle: DraftSubtitle = DraftSubtitle.None,
 )
+
+internal fun SessionDraft.subtitleFor(slot: TextTrackSlot): DraftSubtitle =
+    when (slot) {
+        TextTrackSlot.Primary -> subtitle
+        TextTrackSlot.Secondary -> secondarySubtitle
+    }
+
+internal fun SessionDraft.withSubtitle(
+    slot: TextTrackSlot,
+    value: DraftSubtitle,
+): SessionDraft =
+    when (slot) {
+        TextTrackSlot.Primary -> copy(subtitle = value)
+        TextTrackSlot.Secondary -> copy(secondarySubtitle = value)
+    }
 
 data class ActiveSession(
     val media: MediaSourceRef,

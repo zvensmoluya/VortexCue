@@ -67,7 +67,8 @@ private enum class MediaPickTarget {
 }
 
 private enum class SubtitlePickTarget {
-    Draft,
+    DraftPrimary,
+    DraftSecondary,
     PlayerPrimary,
     PlayerSecondary,
 }
@@ -111,13 +112,16 @@ fun VortexCueApp(
     var mediaPickTarget by rememberSaveable { mutableStateOf(MediaPickTarget.Draft) }
     var mediaLoadJob by remember { mutableStateOf<Job?>(null) }
     var mediaRequestId by remember { mutableLongStateOf(0L) }
-    var subtitleLoadJob by remember { mutableStateOf<Job?>(null) }
-    var subtitleRequestId by remember { mutableLongStateOf(0L) }
+    var primaryDraftSubtitleLoadJob by remember { mutableStateOf<Job?>(null) }
+    var secondaryDraftSubtitleLoadJob by remember { mutableStateOf<Job?>(null) }
+    var draftSubtitleRequestIds by remember { mutableStateOf(DraftSubtitleRequestIds()) }
     var primaryTrackLoadJob by remember { mutableStateOf<Job?>(null) }
     var primaryTrackRequestId by remember { mutableLongStateOf(0L) }
     var secondaryTrackLoadJob by remember { mutableStateOf<Job?>(null) }
     var secondaryTrackRequestId by remember { mutableLongStateOf(0L) }
-    var subtitlePickTarget by rememberSaveable { mutableStateOf(SubtitlePickTarget.Draft) }
+    var subtitlePickTarget by rememberSaveable {
+        mutableStateOf(SubtitlePickTarget.DraftPrimary)
+    }
     var notificationPermissionRequested by rememberSaveable { mutableStateOf(false) }
     var pendingAutoPlay by rememberSaveable { mutableStateOf(false) }
     var openImportOnHome by rememberSaveable { mutableStateOf(false) }
@@ -231,21 +235,34 @@ fun VortexCueApp(
         mediaLoadJob = null
     }
 
-    fun cancelSubtitleLoad() {
-        subtitleRequestId += 1L
-        subtitleLoadJob?.cancel()
-        subtitleLoadJob = null
+    fun cancelDraftSubtitleLoad(slot: TextTrackSlot) {
+        draftSubtitleRequestIds = draftSubtitleRequestIds.invalidate(slot)
+        when (slot) {
+            TextTrackSlot.Primary -> {
+                primaryDraftSubtitleLoadJob?.cancel()
+                primaryDraftSubtitleLoadJob = null
+            }
+            TextTrackSlot.Secondary -> {
+                secondaryDraftSubtitleLoadJob?.cancel()
+                secondaryDraftSubtitleLoadJob = null
+            }
+        }
+    }
+
+    fun cancelDraftSubtitleLoads() {
+        TextTrackSlot.entries.forEach(::cancelDraftSubtitleLoad)
     }
 
     fun startDraftSubtitleLoad(
         media: MediaSourceRef,
+        slot: TextTrackSlot,
         source: SubtitleSourceRef,
         existingTrack: TimedTextTrack? = null,
     ) {
-        cancelSubtitleLoad()
+        cancelDraftSubtitleLoad(slot)
         contentResolver.persistReadPermission(source.uri)
-        val requestId = subtitleRequestId
-        subtitleLoadJob =
+        val requestId = draftSubtitleRequestIds.current(slot)
+        val job =
             coroutineScope.launch {
                 var track = existingTrack
                 try {
@@ -253,55 +270,65 @@ fun VortexCueApp(
                         track =
                             libraryStateHolder.persistManualTextSource(
                                 media = media,
-                                slot = TextTrackSlot.Primary,
+                                slot = slot,
                                 subtitle = source,
                             )
                     }
                     if (
                         !isCurrentDraftSubtitleRequest(
+                            slot = slot,
                             requestId = requestId,
-                            currentRequestId = subtitleRequestId,
+                            currentRequestIds = draftSubtitleRequestIds,
                             mediaUriValue = media.uri.toString(),
                             currentMediaUriValue = draft.media.source?.uri?.toString(),
                         )
                     ) {
                         return@launch
                     }
-                    track?.let {
-                        libraryStateHolder.updateTextTrackReadiness(
-                            media = media,
-                            trackId = it.stableId,
-                            readiness = TimedTextReadiness.Unknown,
-                        )
+                    if (track == null) {
+                        draft =
+                            draft.withSubtitle(
+                                slot,
+                                DraftSubtitle.Failed(
+                                    source = source,
+                                    message = "这份字幕已被另一显示轨使用",
+                                ),
+                            )
+                        return@launch
                     }
-                    draft = draft.copy(subtitle = DraftSubtitle.Loading(source))
+                    libraryStateHolder.updateTextTrackReadiness(
+                        media = media,
+                        trackId = track.stableId,
+                        readiness = TimedTextReadiness.Unknown,
+                    )
+                    draft = draft.withSubtitle(slot, DraftSubtitle.Loading(source))
                     val loaded = loadSubtitleSource(contentResolver, subtitleCache, source)
                     if (
                         !isCurrentDraftSubtitleRequest(
+                            slot = slot,
                             requestId = requestId,
-                            currentRequestId = subtitleRequestId,
+                            currentRequestIds = draftSubtitleRequestIds,
                             mediaUriValue = media.uri.toString(),
                             currentMediaUriValue = draft.media.source?.uri?.toString(),
                         )
                     ) {
                         return@launch
                     }
-                    track?.let {
-                        libraryStateHolder.updateTextTrackReadiness(
-                            media = media,
-                            trackId = it.stableId,
-                            readiness = TimedTextReadiness.Ready,
-                            resolvedSource = loaded.source,
-                        )
-                    }
-                    draft = draft.copy(subtitle = DraftSubtitle.Ready(loaded))
+                    libraryStateHolder.updateTextTrackReadiness(
+                        media = media,
+                        trackId = track.stableId,
+                        readiness = TimedTextReadiness.Ready,
+                        resolvedSource = loaded.source,
+                    )
+                    draft = draft.withSubtitle(slot, DraftSubtitle.Ready(loaded))
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
                     if (
                         !isCurrentDraftSubtitleRequest(
+                            slot = slot,
                             requestId = requestId,
-                            currentRequestId = subtitleRequestId,
+                            currentRequestIds = draftSubtitleRequestIds,
                             mediaUriValue = media.uri.toString(),
                             currentMediaUriValue = draft.media.source?.uri?.toString(),
                         )
@@ -318,22 +345,29 @@ fun VortexCueApp(
                         )
                     }
                     draft =
-                        draft.copy(
-                            subtitle = DraftSubtitle.Failed(source, failure.message),
+                        draft.withSubtitle(
+                            slot,
+                            DraftSubtitle.Failed(source, failure.message),
                         )
                 }
             }
+        when (slot) {
+            TextTrackSlot.Primary -> primaryDraftSubtitleLoadJob = job
+            TextTrackSlot.Secondary -> secondaryDraftSubtitleLoadJob = job
+        }
     }
 
-    fun restoreDraftSubtitle(media: MediaSourceRef) {
+    fun restoreDraftSubtitles(media: MediaSourceRef) {
         val config = libraryStateHolder.state.config
-        val track = config.activeTextTrack(media, TextTrackSlot.Primary)
-        val source = track?.toSubtitleSourceRef()
-        if (source == null) {
-            cancelSubtitleLoad()
-            draft = draft.copy(subtitle = DraftSubtitle.None)
-        } else {
-            startDraftSubtitleLoad(media, source, track)
+        TextTrackSlot.entries.forEach { slot ->
+            val track = config.activeTextTrack(media, slot)
+            val source = track?.toSubtitleSourceRef()
+            if (source == null) {
+                cancelDraftSubtitleLoad(slot)
+                draft = draft.withSubtitle(slot, DraftSubtitle.None)
+            } else {
+                startDraftSubtitleLoad(media, slot, source, track)
+            }
         }
     }
 
@@ -342,7 +376,7 @@ fun VortexCueApp(
         target: MediaPickTarget,
     ) {
         cancelMediaLoad()
-        if (target == MediaPickTarget.Draft) cancelSubtitleLoad()
+        if (target == MediaPickTarget.Draft) cancelDraftSubtitleLoads()
         val source =
             MediaSourceRef(
                 uri = uri,
@@ -385,7 +419,7 @@ fun VortexCueApp(
                                     media = DraftMedia.Ready(readySource),
                                     subtitle = DraftSubtitle.None,
                                 )
-                            restoreDraftSubtitle(readySource)
+                            restoreDraftSubtitles(readySource)
                         }
                         MediaPickTarget.LastSession ->
                             relinkedSession?.let { session ->
@@ -574,20 +608,30 @@ fun VortexCueApp(
         uri: Uri,
         target: SubtitlePickTarget,
     ) {
-        cancelSubtitleLoad()
         val source =
             SubtitleSourceRef(
                 uri = uri,
                 displayName = contentResolver.displayName(uri),
                 mimeType = contentResolver.safeMimeType(uri),
             )
-        if (target != SubtitlePickTarget.Draft) {
+        val draftSlot =
+            when (target) {
+                SubtitlePickTarget.DraftPrimary -> TextTrackSlot.Primary
+                SubtitlePickTarget.DraftSecondary -> TextTrackSlot.Secondary
+                SubtitlePickTarget.PlayerPrimary,
+                SubtitlePickTarget.PlayerSecondary,
+                -> null
+            }
+        if (draftSlot == null) {
+            cancelDraftSubtitleLoads()
             val session = activeSession ?: return
             val slot =
                 when (target) {
                     SubtitlePickTarget.PlayerPrimary -> TextTrackSlot.Primary
                     SubtitlePickTarget.PlayerSecondary -> TextTrackSlot.Secondary
-                    SubtitlePickTarget.Draft -> error("Draft target handled above")
+                    SubtitlePickTarget.DraftPrimary,
+                    SubtitlePickTarget.DraftSecondary,
+                    -> error("Draft target handled above")
                 }
             val track =
                 libraryStateHolder.updateManualTextSource(
@@ -599,7 +643,29 @@ fun VortexCueApp(
             return
         }
         val media = (draft.media as? DraftMedia.Ready)?.source ?: return
-        startDraftSubtitleLoad(media, source)
+        val otherSlot =
+            when (draftSlot) {
+                TextTrackSlot.Primary -> TextTrackSlot.Secondary
+                TextTrackSlot.Secondary -> TextTrackSlot.Primary
+            }
+        val otherSource =
+            draft.subtitleFor(otherSlot).sourceOrNull()
+                ?: libraryStateHolder.state.config
+                    .activeTextTrack(media, otherSlot)
+                    ?.toSubtitleSourceRef()
+        if (otherSource?.uri == source.uri) {
+            cancelDraftSubtitleLoad(draftSlot)
+            draft =
+                draft.withSubtitle(
+                    draftSlot,
+                    DraftSubtitle.Failed(
+                        source = source,
+                        message = "同一份字幕不能同时作为主字幕和副字幕",
+                    ),
+                )
+            return
+        }
+        startDraftSubtitleLoad(media, draftSlot, source)
     }
 
     LaunchedEffect(Unit) {
@@ -763,7 +829,7 @@ fun VortexCueApp(
                     ContentAvailability.Unavailable,
                 )
             }
-            restoreDraftSubtitle(storedMedia)
+            restoreDraftSubtitles(storedMedia)
         }
         restorationCompleted = true
     }
@@ -938,7 +1004,7 @@ fun VortexCueApp(
     val subtitlePicker =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             val target = subtitlePickTarget
-            subtitlePickTarget = SubtitlePickTarget.Draft
+            subtitlePickTarget = SubtitlePickTarget.DraftPrimary
             uri?.let { loadSubtitle(it, target) }
         }
     val folderPicker =
@@ -965,7 +1031,8 @@ fun VortexCueApp(
     DisposableEffect(Unit) {
         onDispose {
             mediaLoadJob?.cancel()
-            subtitleLoadJob?.cancel()
+            primaryDraftSubtitleLoadJob?.cancel()
+            secondaryDraftSubtitleLoadJob?.cancel()
             primaryTrackLoadJob?.cancel()
             secondaryTrackLoadJob?.cancel()
             libraryStateHolder.cancelScan()
@@ -1020,8 +1087,12 @@ fun VortexCueApp(
                     mediaPickTarget = MediaPickTarget.Draft
                     mediaPicker.launch(arrayOf("audio/*", "video/*"))
                 },
-                onPickSubtitle = {
-                    subtitlePickTarget = SubtitlePickTarget.Draft
+                onPickSubtitle = { slot ->
+                    subtitlePickTarget =
+                        when (slot) {
+                            TextTrackSlot.Primary -> SubtitlePickTarget.DraftPrimary
+                            TextTrackSlot.Secondary -> SubtitlePickTarget.DraftSecondary
+                        }
                     subtitlePicker.launch(arrayOf("*/*"))
                 },
                 onRequestLibraryAccess = {
@@ -1108,17 +1179,17 @@ fun VortexCueApp(
                 onAddToPlaylist = libraryStateHolder::addToPlaylist,
                 onRemoveFromPlaylist = libraryStateHolder::removeFromPlaylist,
                 onDeletePlaylist = libraryStateHolder::deletePlaylist,
-                onRemoveSubtitle = {
-                    cancelSubtitleLoad()
+                onRemoveSubtitle = { slot ->
+                    cancelDraftSubtitleLoad(slot)
                     val media = (draft.media as? DraftMedia.Ready)?.source
                     if (media != null) {
                         libraryStateHolder.updateManualTextSource(
                             media = media,
-                            slot = TextTrackSlot.Primary,
+                            slot = slot,
                             subtitle = null,
                         )
                     }
-                    draft = draft.copy(subtitle = DraftSubtitle.None)
+                    draft = draft.withSubtitle(slot, DraftSubtitle.None)
                     if (
                         media != null &&
                             activeSession?.let {
@@ -1130,13 +1201,15 @@ fun VortexCueApp(
                 },
                 onClearDraft = {
                     cancelMediaLoad()
-                    cancelSubtitleLoad()
+                    cancelDraftSubtitleLoads()
                     draft = SessionDraft()
                 },
                 onApplyDraft = {
                     (draft.media as? DraftMedia.Ready)?.source?.let { media ->
                         val loadedSubtitle =
                             (draft.subtitle as? DraftSubtitle.Ready)?.subtitle
+                        val loadedSecondarySubtitle =
+                            (draft.secondarySubtitle as? DraftSubtitle.Ready)?.subtitle
                         val mediaChanged =
                             player.currentMediaItem
                                 ?.localConfiguration
@@ -1161,15 +1234,7 @@ fun VortexCueApp(
                             ActiveSession(
                                 media = media,
                                 subtitle = loadedSubtitle,
-                                secondarySubtitle =
-                                    activeSession
-                                        ?.takeIf {
-                                            libraryStateHolder.state.config.sameContent(
-                                                it.media,
-                                                media,
-                                            )
-                                        }
-                                        ?.secondarySubtitle,
+                                secondarySubtitle = loadedSecondarySubtitle,
                                 subtitleOffsetMs = preservedOffsetMs,
                             )
                         libraryStateHolder.rememberRecentMedia(media)
@@ -1530,6 +1595,8 @@ private fun ActiveSession.toDraft(): SessionDraft =
     SessionDraft(
         media = DraftMedia.Ready(media),
         subtitle = subtitle?.let(DraftSubtitle::Ready) ?: DraftSubtitle.None,
+        secondarySubtitle =
+            secondarySubtitle?.let(DraftSubtitle::Ready) ?: DraftSubtitle.None,
     )
 
 private const val MediaExtraDisplayName = "vortexcue.display_name"

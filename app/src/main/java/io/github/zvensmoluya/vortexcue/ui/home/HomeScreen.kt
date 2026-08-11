@@ -90,7 +90,7 @@ internal fun HomeScreen(
     openImportRequested: Boolean,
     onImportRequestConsumed: () -> Unit,
     onPickMedia: () -> Unit,
-    onPickSubtitle: () -> Unit,
+    onPickSubtitle: (TextTrackSlot) -> Unit,
     onRequestLibraryAccess: () -> Unit,
     onRefreshLibrary: () -> Unit,
     onAddFolder: () -> Unit,
@@ -108,7 +108,7 @@ internal fun HomeScreen(
     onAddToPlaylist: (String, MediaSourceRef) -> Unit,
     onRemoveFromPlaylist: (String, MediaSourceRef) -> Unit,
     onDeletePlaylist: (String) -> Unit,
-    onRemoveSubtitle: () -> Unit,
+    onRemoveSubtitle: (TextTrackSlot) -> Unit,
     onClearDraft: () -> Unit,
     onApplyDraft: () -> Unit,
     onContinue: () -> Unit,
@@ -1390,13 +1390,14 @@ private fun ImportContentDialog(
     draft: SessionDraft,
     activeSession: ActiveSession?,
     onPickMedia: () -> Unit,
-    onPickSubtitle: () -> Unit,
-    onRemoveSubtitle: () -> Unit,
+    onPickSubtitle: (TextTrackSlot) -> Unit,
+    onRemoveSubtitle: (TextTrackSlot) -> Unit,
     onClearDraft: () -> Unit,
     onApplyDraft: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val canPickSubtitle = draft.media is DraftMedia.Ready
+    val subtitleDrafts = listOf(draft.subtitle, draft.secondarySubtitle)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("打开内容", color = AppPrimaryText) },
@@ -1416,32 +1417,23 @@ private fun ImportContentDialog(
                 )
                 if (draft.media is DraftMedia.Unavailable) StatusText(draft.media.message, AppError)
                 Hairline()
-                SourceRow(
-                    label = "同步字幕",
-                    value =
-                        when (val subtitle = draft.subtitle) {
-                            DraftSubtitle.None ->
-                                if (canPickSubtitle) {
-                                    "可选 · SRT / LRC / VTT / ASS"
-                                } else {
-                                    "请先选择播放内容"
-                                }
-                            is DraftSubtitle.Loading -> "正在读取 ${subtitle.source.displayName}"
-                            is DraftSubtitle.Ready -> subtitle.subtitle.source.displayName
-                            is DraftSubtitle.Failed -> subtitle.source.displayName
-                        },
-                    action = if (draft.subtitle == DraftSubtitle.None) "选择" else "更换",
-                    onClick = onPickSubtitle,
-                    enabled = canPickSubtitle,
+                DraftSubtitleSourceRow(
+                    label = "主字幕",
+                    emptyValue = "可选 · 一份字幕文件即可",
+                    subtitle = draft.subtitle,
+                    canPickSubtitle = canPickSubtitle,
+                    onPick = { onPickSubtitle(TextTrackSlot.Primary) },
+                    onRemove = { onRemoveSubtitle(TextTrackSlot.Primary) },
                 )
-                when (val subtitle = draft.subtitle) {
-                    is DraftSubtitle.Failed -> StatusText(subtitle.message, AppError)
-                    is DraftSubtitle.Ready -> StatusText("已读取 ${subtitle.subtitle.timeline.cues.size} 条字幕")
-                    else -> Unit
-                }
-                if (draft.subtitle != DraftSubtitle.None) {
-                    TextButton(onClick = onRemoveSubtitle) { Text("移除字幕", color = AppMutedText) }
-                }
+                Hairline()
+                DraftSubtitleSourceRow(
+                    label = "副字幕",
+                    emptyValue = "可选 · 仅在需要第二份独立字幕时添加",
+                    subtitle = draft.secondarySubtitle,
+                    canPickSubtitle = canPickSubtitle,
+                    onPick = { onPickSubtitle(TextTrackSlot.Secondary) },
+                    onRemove = { onRemoveSubtitle(TextTrackSlot.Secondary) },
+                )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = onClearDraft) { Text("清空", color = AppMutedText) }
                     QuietButton(
@@ -1449,12 +1441,16 @@ private fun ImportContentDialog(
                             when {
                                 draft.media is DraftMedia.Checking -> "正在验证"
                                 draft.media is DraftMedia.Unavailable -> "需要重新定位"
-                                draft.subtitle is DraftSubtitle.Failed -> "忽略字幕并播放"
+                                subtitleDrafts.any { it is DraftSubtitle.Loading } -> "正在读取字幕"
+                                subtitleDrafts.any { it is DraftSubtitle.Failed } ->
+                                    "忽略不可用字幕并播放"
                                 activeSession == null -> "开始播放"
                                 else -> "应用并播放"
                             },
                         onClick = onApplyDraft,
-                        enabled = draft.media is DraftMedia.Ready && draft.subtitle !is DraftSubtitle.Loading,
+                        enabled =
+                            draft.media is DraftMedia.Ready &&
+                                subtitleDrafts.none { it is DraftSubtitle.Loading },
                         modifier = Modifier.weight(1f),
                         emphasized = true,
                     )
@@ -1464,6 +1460,42 @@ private fun ImportContentDialog(
         confirmButton = { TextButton(onClick = onDismiss) { Text("关闭", color = AppSecondaryText) } },
         containerColor = AppSurfaceRaised,
     )
+}
+
+@Composable
+private fun DraftSubtitleSourceRow(
+    label: String,
+    emptyValue: String,
+    subtitle: DraftSubtitle,
+    canPickSubtitle: Boolean,
+    onPick: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    SourceRow(
+        label = label,
+        value =
+            when (subtitle) {
+                DraftSubtitle.None ->
+                    if (canPickSubtitle) emptyValue else "请先选择播放内容"
+                is DraftSubtitle.Loading -> "正在读取 ${subtitle.source.displayName}"
+                is DraftSubtitle.Ready -> subtitle.subtitle.source.displayName
+                is DraftSubtitle.Failed -> subtitle.source.displayName
+            },
+        action = if (subtitle == DraftSubtitle.None) "选择" else "更换",
+        onClick = onPick,
+        enabled = canPickSubtitle,
+    )
+    when (subtitle) {
+        is DraftSubtitle.Failed -> StatusText(subtitle.message, AppError)
+        is DraftSubtitle.Ready ->
+            StatusText("已读取 ${subtitle.subtitle.timeline.cues.size} 条字幕")
+        else -> Unit
+    }
+    if (subtitle != DraftSubtitle.None) {
+        TextButton(onClick = onRemove) {
+            Text("移除$label", color = AppMutedText)
+        }
+    }
 }
 
 @Composable
