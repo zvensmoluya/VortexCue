@@ -57,24 +57,17 @@ import io.github.zvensmoluya.vortexcue.ui.player.formatTime
 import io.github.zvensmoluya.vortexcue.ui.theme.*
 
 internal enum class HomeSection {
-    Library,
-    Manage,
+    Home,
+    MyContent,
+    Discoveries,
+    Sources,
     Display,
 }
 
-private enum class ManagerPage(val title: String) {
-    Overview("内容管理"),
-    Review("待整理"),
-    Included("已收录"),
-    Ignored("已忽略"),
-    Sources("扫描范围"),
-}
-
-private data class ResolvedCollection(
-    val shortcut: LibraryShortcut,
+private data class ResolvedPlaylist(
+    val id: String,
     val name: String,
     val items: List<MediaSourceRef>,
-    val isPlaylist: Boolean = false,
 )
 
 @Composable
@@ -100,7 +93,7 @@ internal fun HomeScreen(
     onIgnoreCandidates: (Set<String>) -> Unit,
     onRemoveIncluded: (Set<String>) -> Unit,
     onRestoreIgnored: (Set<String>) -> Unit,
-    onToggleHomeShortcut: (LibraryShortcut) -> Unit,
+    onCollectMedia: (MediaSourceRef) -> Unit,
     onPlayLibraryItems: (List<MediaSourceRef>, Int) -> Unit,
     onPlayNext: (MediaSourceRef) -> Unit,
     onAddToQueue: (MediaSourceRef) -> Unit,
@@ -118,8 +111,9 @@ internal fun HomeScreen(
 ) {
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
-    var selectedShortcut by remember { mutableStateOf<LibraryShortcut?>(null) }
-    var managerPage by rememberSaveable { mutableStateOf(ManagerPage.Overview) }
+    var selectedPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
+    var myContentTab by rememberSaveable { mutableStateOf(MyContentTab.Collected) }
+    var showingIgnored by rememberSaveable { mutableStateOf(false) }
     var reviewSelection by remember { mutableStateOf<Set<String>>(emptySet()) }
     var importVisible by rememberSaveable { mutableStateOf(false) }
     var playlistTarget by remember { mutableStateOf<MediaSourceRef?>(null) }
@@ -131,11 +125,11 @@ internal fun HomeScreen(
     var clearLooseFilesConfirmation by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(section) {
-        if (section != HomeSection.Library) {
+        if (section != HomeSection.MyContent) {
             searchVisible = false
-            selectedShortcut = null
+            selectedPlaylistId = null
         }
-        if (section != HomeSection.Manage) managerPage = ManagerPage.Overview
+        if (section != HomeSection.Discoveries) showingIgnored = false
     }
     LaunchedEffect(openImportRequested) {
         if (openImportRequested) {
@@ -143,8 +137,8 @@ internal fun HomeScreen(
             onImportRequestConsumed()
         }
     }
-    LaunchedEffect(managerPage) {
-        if (managerPage == ManagerPage.Review) {
+    LaunchedEffect(section, showingIgnored) {
+        if (section == HomeSection.Discoveries && !showingIgnored) {
             reviewSelection =
                 library.candidates
                     .filter { it.kind == MediaKind.Audio }
@@ -155,24 +149,27 @@ internal fun HomeScreen(
     val resumableSession = activeSession ?: lastSession?.session
     val miniPlayerSession =
         resumableSession?.takeIf {
-            section == HomeSection.Library && (searchVisible || selectedShortcut != null)
+            section == HomeSection.MyContent &&
+                (searchVisible || selectedPlaylistId != null)
         }
     val showMiniPlayer = miniPlayerSession != null
-    val selectedCollection =
-        selectedShortcut?.let { shortcut -> resolveCollection(shortcut, library) }
+    val selectedPlaylist =
+        selectedPlaylistId?.let { playlistId -> resolvePlaylist(playlistId, library) }
 
     BackHandler(
         enabled =
-            (section == HomeSection.Library && (searchVisible || selectedShortcut != null)) ||
-                (section == HomeSection.Manage && managerPage != ManagerPage.Overview),
+            (section == HomeSection.MyContent &&
+                (searchVisible || selectedPlaylistId != null)) ||
+                (section == HomeSection.Discoveries && showingIgnored),
     ) {
         when {
-            section == HomeSection.Library && selectedShortcut != null -> selectedShortcut = null
-            section == HomeSection.Library && searchVisible -> {
+            section == HomeSection.MyContent && selectedPlaylistId != null ->
+                selectedPlaylistId = null
+            section == HomeSection.MyContent && searchVisible -> {
                 searchVisible = false
                 searchQuery = ""
             }
-            section == HomeSection.Manage -> managerPage = ManagerPage.Overview
+            section == HomeSection.Discoveries -> showingIgnored = false
         }
     }
 
@@ -189,82 +186,100 @@ internal fun HomeScreen(
         HomeHeader(
             section = section,
             searchVisible = searchVisible,
-            selectedCollection = selectedCollection,
-            managerPage = managerPage,
+            selectedPlaylist = selectedPlaylist,
+            showingIgnored = showingIgnored,
             onBack = {
                 when {
-                    section == HomeSection.Library && selectedShortcut != null ->
-                        selectedShortcut = null
-                    section == HomeSection.Library && searchVisible -> {
+                    section == HomeSection.MyContent && selectedPlaylistId != null ->
+                        selectedPlaylistId = null
+                    section == HomeSection.MyContent && searchVisible -> {
                         searchVisible = false
                         searchQuery = ""
                     }
-                    section == HomeSection.Manage && managerPage != ManagerPage.Overview ->
-                        managerPage = ManagerPage.Overview
-                    section != HomeSection.Library -> onSectionChanged(HomeSection.Library)
+                    section == HomeSection.Discoveries && showingIgnored ->
+                        showingIgnored = false
+                    section != HomeSection.Home -> onSectionChanged(HomeSection.Home)
                 }
             },
             onSearch = {
-                selectedShortcut = null
+                selectedPlaylistId = null
                 searchVisible = true
             },
-            onManage = { onSectionChanged(HomeSection.Manage) },
             onDisplay = { onSectionChanged(HomeSection.Display) },
+            onToggleIgnored = { showingIgnored = !showingIgnored },
         )
 
         when (section) {
-            HomeSection.Library ->
+            HomeSection.Home ->
+                HomeLanding(
+                    library = library,
+                    resumableSession = resumableSession,
+                    activeSession = activeSession,
+                    lastSession = lastSession,
+                    playback = playback,
+                    onOpenMyContent = {
+                        myContentTab = defaultMyContentTab(library.items.size)
+                        onSectionChanged(HomeSection.MyContent)
+                    },
+                    onOpenDiscoveries = {
+                        showingIgnored = false
+                        onSectionChanged(HomeSection.Discoveries)
+                    },
+                    onOpenSources = { onSectionChanged(HomeSection.Sources) },
+                    onPlayLibraryItems = onPlayLibraryItems,
+                    onOpenMediaActions = { mediaActionTarget = it },
+                    onAddFolder = onAddFolder,
+                    onOpenFile = {
+                        importVisible = true
+                        onPickMedia()
+                    },
+                    onContinue = onContinue,
+                    onPlayPause = onPlayPause,
+                    bottomPadding = 8.dp,
+                    modifier = Modifier.weight(1f),
+                )
+            HomeSection.MyContent ->
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     when {
-                        searchVisible ->
-                            LibrarySearch(
-                                query = searchQuery,
-                                onQueryChanged = { searchQuery = it },
-                                library = library,
-                                onOpenCollection = {
-                                    searchVisible = false
-                                    searchQuery = ""
-                                    selectedShortcut = it
-                                },
-                                onPlayLibraryItems = onPlayLibraryItems,
-                                onOpenMediaActions = { mediaActionTarget = it },
-                                bottomPadding = if (showMiniPlayer) 88.dp else 8.dp,
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                        selectedCollection != null ->
-                            CollectionDetail(
-                                collection = selectedCollection,
+                        selectedPlaylist != null ->
+                            PlaylistDetail(
+                                playlist = selectedPlaylist,
                                 library = library,
                                 onPlayLibraryItems = onPlayLibraryItems,
                                 onOpenMediaActions = { mediaActionTarget = it },
                                 onRemoveFromPlaylist = onRemoveFromPlaylist,
                                 onDeletePlaylist = { playlistId ->
                                     onDeletePlaylist(playlistId)
-                                    selectedShortcut = null
+                                    selectedPlaylistId = null
                                 },
                                 bottomPadding = if (showMiniPlayer) 88.dp else 8.dp,
                                 modifier = Modifier.fillMaxSize(),
                             )
-                        else ->
-                            LibraryLanding(
+                        searchVisible ->
+                            MyContentSearch(
+                                query = searchQuery,
+                                onQueryChanged = { searchQuery = it },
                                 library = library,
-                                resumableSession = resumableSession,
-                                activeSession = activeSession,
-                                lastSession = lastSession,
-                                playback = playback,
-                                onOpenCollection = { selectedShortcut = it },
                                 onPlayLibraryItems = onPlayLibraryItems,
-                                onOpenManage = { page ->
-                                    managerPage = page
-                                    onSectionChanged(HomeSection.Manage)
+                                onOpenMediaActions = { mediaActionTarget = it },
+                                bottomPadding = if (showMiniPlayer) 88.dp else 8.dp,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        else ->
+                            MyContent(
+                                library = library,
+                                selectedTab = myContentTab,
+                                onTabChanged = { myContentTab = it },
+                                onPlayLibraryItems = onPlayLibraryItems,
+                                onOpenMediaActions = { mediaActionTarget = it },
+                                onOpenPlaylist = { playlistId ->
+                                    selectedPlaylistId = playlistId
                                 },
-                                onAddFolder = onAddFolder,
-                                onOpenFile = {
-                                    importVisible = true
-                                    onPickMedia()
+                                onCreatePlaylist = {
+                                    createPlaylistSeed = null
+                                    createPlaylistName = ""
+                                    createPlaylistVisible = true
                                 },
-                                onContinue = onContinue,
-                                onPlayPause = onPlayPause,
                                 bottomPadding = 8.dp,
                                 modifier = Modifier.fillMaxSize(),
                             )
@@ -283,72 +298,46 @@ internal fun HomeScreen(
                         )
                     }
                 }
-            HomeSection.Manage ->
-                when (managerPage) {
-                    ManagerPage.Overview ->
-                        ContentManagerOverview(
-                            library = library,
-                            onOpenPage = { managerPage = it },
-                            onToggleHomeShortcut = onToggleHomeShortcut,
-                            onRequestLibraryAccess = onRequestLibraryAccess,
-                            onRefreshLibrary = onRefreshLibrary,
-                            onAddFolder = onAddFolder,
-                            onOpenFile = {
-                                importVisible = true
-                                onPickMedia()
-                            },
-                            onCreatePlaylist = {
-                                createPlaylistSeed = null
-                                createPlaylistName = ""
-                                createPlaylistVisible = true
-                            },
-                            modifier = Modifier.weight(1f),
-                        )
-                    ManagerPage.Review ->
-                        CandidateReview(
-                            library = library,
-                            selectedUris = reviewSelection,
-                            onSelectionChanged = { reviewSelection = it },
-                            onAccept = {
-                                onAcceptCandidates(reviewSelection)
-                                managerPage = ManagerPage.Overview
-                            },
-                            onIgnore = { uri ->
-                                reviewSelection -= uri
-                                onIgnoreCandidates(setOf(uri))
-                            },
-                            modifier = Modifier.weight(1f),
-                        )
-                    ManagerPage.Included ->
-                        IncludedContent(
-                            items = library.items,
-                            onRemove = { onRemoveIncluded(setOf(it.uri.toString())) },
-                            modifier = Modifier.weight(1f),
-                        )
-                    ManagerPage.Ignored ->
-                        IgnoredContent(
-                            items = library.ignoredItems,
-                            onRestore = { onRestoreIgnored(setOf(it.uri.toString())) },
-                            modifier = Modifier.weight(1f),
-                        )
-                    ManagerPage.Sources ->
-                        ScanSources(
-                            library = library,
-                            onRequestLibraryAccess = onRequestLibraryAccess,
-                            onRefreshLibrary = onRefreshLibrary,
-                            onAddFolder = onAddFolder,
-                            onOpenFile = {
-                                importVisible = true
-                                onPickMedia()
-                            },
-                            onRemoveFolder = { folderId ->
-                                folderRemovalTarget =
-                                    library.config.folders.firstOrNull { it.id == folderId }
-                            },
-                            onClearLooseFiles = { clearLooseFilesConfirmation = true },
-                            modifier = Modifier.weight(1f),
-                        )
+            HomeSection.Discoveries ->
+                if (showingIgnored) {
+                    IgnoredContent(
+                        items = library.ignoredItems,
+                        onRestore = { onRestoreIgnored(setOf(it.uri.toString())) },
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    CandidateReview(
+                        library = library,
+                        selectedUris = reviewSelection,
+                        onSelectionChanged = { reviewSelection = it },
+                        onAccept = {
+                            onAcceptCandidates(reviewSelection)
+                            reviewSelection = emptySet()
+                        },
+                        onIgnore = { uri ->
+                            reviewSelection -= uri
+                            onIgnoreCandidates(setOf(uri))
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
                 }
+            HomeSection.Sources ->
+                ScanSources(
+                    library = library,
+                    onRequestLibraryAccess = onRequestLibraryAccess,
+                    onRefreshLibrary = onRefreshLibrary,
+                    onAddFolder = onAddFolder,
+                    onOpenFile = {
+                        importVisible = true
+                        onPickMedia()
+                    },
+                    onRemoveFolder = { folderId ->
+                        folderRemovalTarget =
+                            library.config.folders.firstOrNull { it.id == folderId }
+                    },
+                    onClearLooseFiles = { clearLooseFilesConfirmation = true },
+                    modifier = Modifier.weight(1f),
+                )
             HomeSection.Display ->
                 Column(
                     modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
@@ -380,7 +369,7 @@ internal fun HomeScreen(
     mediaActionTarget?.let { item ->
         MediaActionDialog(
             item = item,
-            canRemoveFromLibrary = library.config.isCollected(item),
+            isCollected = library.config.isCollected(item),
             onDismiss = { mediaActionTarget = null },
             onPlayNext = {
                 onPlayNext(item)
@@ -393,6 +382,10 @@ internal fun HomeScreen(
             onChoosePlaylist = {
                 mediaActionTarget = null
                 playlistTarget = item
+            },
+            onAddToMyContent = {
+                onCollectMedia(item)
+                mediaActionTarget = null
             },
             onRemoveFromLibrary = {
                 onRemoveIncluded(setOf(item.uri.toString()))
@@ -434,10 +427,10 @@ internal fun HomeScreen(
     folderRemovalTarget?.let { folder ->
         AlertDialog(
             onDismissRequest = { folderRemovalTarget = null },
-            title = { Text("移除扫描范围？", color = AppPrimaryText) },
+            title = { Text("移除来源？", color = AppPrimaryText) },
             text = {
                 Text(
-                    "将停止发现“${folder.displayName}”中的内容，不会删除原文件。",
+                    "只移除应用对“${folder.displayName}”的来源引用，不会删除原文件。",
                     color = AppSecondaryText,
                 )
             },
@@ -489,30 +482,38 @@ internal fun HomeScreen(
 private fun HomeHeader(
     section: HomeSection,
     searchVisible: Boolean,
-    selectedCollection: ResolvedCollection?,
-    managerPage: ManagerPage,
+    selectedPlaylist: ResolvedPlaylist?,
+    showingIgnored: Boolean,
     onBack: () -> Unit,
     onSearch: () -> Unit,
-    onManage: () -> Unit,
     onDisplay: () -> Unit,
+    onToggleIgnored: () -> Unit,
 ) {
-    val isRoot =
-        section == HomeSection.Library && !searchVisible && selectedCollection == null
+    val isHome = section == HomeSection.Home
     val title =
         when {
             searchVisible -> "搜索"
-            selectedCollection != null -> selectedCollection.name
-            section == HomeSection.Manage -> managerPage.title
+            selectedPlaylist != null -> selectedPlaylist.name
+            section == HomeSection.MyContent -> "我的内容"
+            section == HomeSection.Discoveries && showingIgnored -> "已忽略"
+            section == HomeSection.Discoveries -> "新发现"
+            section == HomeSection.Sources -> "来源"
             section == HomeSection.Display -> "显示"
-            else -> ""
+            else -> "今晚"
         }
     Row(
         modifier = Modifier.fillMaxWidth().height(52.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (isRoot) {
-            Spacer(modifier = Modifier.weight(1f))
+        if (isHome) {
+            Text(
+                title,
+                modifier = Modifier.weight(1f),
+                color = AppPrimaryText,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Medium,
+            )
         } else {
             Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onBack, contentPadding = PaddingValues(end = 12.dp)) {
@@ -529,32 +530,41 @@ private fun HomeHeader(
             }
         }
         when {
-            isRoot -> {
+            isHome ->
+                TextButton(onClick = onDisplay) {
+                    Text("显示", color = AppSecondaryText, fontSize = 12.sp)
+                }
+            section == HomeSection.MyContent &&
+                !searchVisible &&
+                selectedPlaylist == null -> {
                 TextButton(onClick = onSearch) {
                     Text("搜索", color = AppSecondaryText, fontSize = 12.sp)
                 }
-                TextButton(onClick = onManage) {
-                    Text("更多来源", color = AppSecondaryText, fontSize = 12.sp)
-                }
             }
-            section == HomeSection.Manage && managerPage == ManagerPage.Overview ->
-                TextButton(onClick = onDisplay) {
-                    Text("显示", color = AppSecondaryText, fontSize = 12.sp)
+            section == HomeSection.Discoveries ->
+                TextButton(onClick = onToggleIgnored) {
+                    Text(
+                        if (showingIgnored) "新发现" else "已忽略",
+                        color = AppSecondaryText,
+                        fontSize = 12.sp,
+                    )
                 }
         }
     }
 }
 
 @Composable
-private fun LibraryLanding(
+private fun HomeLanding(
     library: MediaLibraryState,
     resumableSession: ActiveSession?,
     activeSession: ActiveSession?,
     lastSession: RestorableSession?,
     playback: PlaybackSnapshot,
-    onOpenCollection: (LibraryShortcut) -> Unit,
+    onOpenMyContent: () -> Unit,
+    onOpenDiscoveries: () -> Unit,
+    onOpenSources: () -> Unit,
     onPlayLibraryItems: (List<MediaSourceRef>, Int) -> Unit,
-    onOpenManage: (ManagerPage) -> Unit,
+    onOpenMediaActions: (MediaSourceRef) -> Unit,
     onAddFolder: () -> Unit,
     onOpenFile: () -> Unit,
     onContinue: () -> Unit,
@@ -562,82 +572,127 @@ private fun LibraryLanding(
     bottomPadding: Dp,
     modifier: Modifier = Modifier,
 ) {
-    val collections = remember(library.items, library.config) { resolveHomeCollections(library) }
+    val recentItems = remember(library.config) { resolveRecentItems(library) }
+    val collectedItems =
+        remember(library.items, library.config) { orderedCollectedItems(library, recentItems) }
+    val firstUse =
+        shouldShowFirstUseHome(
+            hasResumableSession = resumableSession != null,
+            collectedCount = collectedItems.size,
+            recentCount = recentItems.size,
+            discoveryCount = library.candidates.size,
+            ignoredCount = library.ignoredItems.size,
+            hasConfiguredSource =
+                library.config.folders.isNotEmpty() || library.hasSystemAccess,
+        )
     LazyColumn(
         modifier = modifier,
         contentPadding = PaddingValues(bottom = bottomPadding),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        resumableSession?.let { session ->
-            item(key = "continue") {
-                ContinueSection(
-                    session = session,
-                    activeSession = activeSession,
-                    lastSession = lastSession,
-                    libraryConfig = library.config,
-                    playback = playback,
-                    onContinue = onContinue,
-                    onPlayPause = onPlayPause,
+        if (firstUse) {
+            item(key = "first-use") {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "今晚想听什么？",
+                        color = AppPrimaryText,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    QuietButton(
+                        "打开一个内容",
+                        onOpenFile,
+                        Modifier.fillMaxWidth(),
+                        emphasized = true,
+                    )
+                    QuietButton("添加常用文件夹", onAddFolder, Modifier.fillMaxWidth())
+                }
+            }
+        } else {
+            resumableSession?.let { session ->
+                item(key = "continue") {
+                    ContinueSection(
+                        session = session,
+                        activeSession = activeSession,
+                        lastSession = lastSession,
+                        libraryConfig = library.config,
+                        playback = playback,
+                        onContinue = onContinue,
+                        onPlayPause = onPlayPause,
+                    )
+                }
+            }
+            item(key = "my-content-heading") {
+                ManagerEntry(
+                    title = "我的内容",
+                    detail =
+                        when {
+                            collectedItems.isNotEmpty() -> "${collectedItems.size} 项已收录"
+                            recentItems.isNotEmpty() -> "${recentItems.size} 项最近打开"
+                            else -> "还没有收录内容"
+                        },
+                    action = "查看全部",
+                    onClick = onOpenMyContent,
+                )
+            }
+            itemsIndexed(
+                items = collectedItems.take(HomePreviewItemCount),
+                key = { _, item -> "home-content-${item.uri}" },
+            ) { index, media ->
+                TrackRow(
+                    media = media,
+                    hasSubtitle = library.hasSubtitleFor(media),
+                    unavailable = library.isUnavailable(media),
+                    onPlay = { onPlayLibraryItems(collectedItems, index) },
+                    onOpenMediaActions = { onOpenMediaActions(media) },
+                )
+            }
+            item(key = "more-heading") { SectionHeading("更多") }
+            if (library.candidates.isNotEmpty() || library.ignoredItems.isNotEmpty()) {
+                item(key = "discoveries") {
+                    ManagerEntry(
+                        title = "新发现",
+                        detail =
+                            if (library.candidates.isNotEmpty()) {
+                                "${library.candidates.size} 项尚未决定的内容"
+                            } else {
+                                "没有新发现 · ${library.ignoredItems.size} 项已忽略"
+                            },
+                        action = "查看",
+                        onClick = onOpenDiscoveries,
+                    )
+                }
+            }
+            item(key = "add-actions") {
+                Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    QuietButton(
+                        "打开一个内容",
+                        onOpenFile,
+                        Modifier.fillMaxWidth(),
+                        emphasized = true,
+                    )
+                    QuietButton("添加常用文件夹", onAddFolder, Modifier.fillMaxWidth())
+                }
+            }
+            item(key = "sources") {
+                ManagerEntry(
+                    title = "来源",
+                    detail = sourceSummary(library),
+                    action = "管理",
+                    onClick = onOpenSources,
                 )
             }
         }
-        item(key = "intent-actions") {
-            HomeIntentActions(
-                onOpenFile = onOpenFile,
-                onAddFolder = onAddFolder,
-                onOpenMoreSources = { onOpenManage(ManagerPage.Overview) },
-            )
-        }
-        if (library.isLoading) item(key = "loading") { StatusText("更多来源正在扫描…") }
+        if (library.isLoading) item(key = "loading") { StatusText("来源正在扫描…") }
         library.errorMessage?.let { message ->
             item(key = "error") { StatusText(message, AppError) }
         }
-        if (collections.isNotEmpty()) {
-            item(key = "collections-heading") { SectionHeading("已整理内容") }
-            items(collections, key = { "home-${it.shortcut.type}-${it.shortcut.key}" }) {
-                collection ->
-                CollectionRow(
-                    collection = collection,
-                    onOpen = { onOpenCollection(collection.shortcut) },
-                    onPlay = {
-                        if (collection.items.isNotEmpty()) {
-                            onPlayLibraryItems(collection.items, 0)
-                        }
-                    },
-                )
-            }
-        }
-        if (library.candidates.isNotEmpty()) {
-            item(key = "pending") {
-                ManagerEntry(
-                    title = "待整理",
-                    detail = "${library.candidates.size} 项来自扫描或文件夹的内容",
-                    action = "查看",
-                    onClick = { onOpenManage(ManagerPage.Review) },
-                )
-            }
-        }
     }
 }
 
 @Composable
-private fun HomeIntentActions(
-    onOpenFile: () -> Unit,
-    onAddFolder: () -> Unit,
-    onOpenMoreSources: () -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-        QuietButton("打开内容", onOpenFile, Modifier.fillMaxWidth(), emphasized = true)
-        QuietButton("选择文件夹", onAddFolder, Modifier.fillMaxWidth())
-        TextButton(onClick = onOpenMoreSources, modifier = Modifier.fillMaxWidth()) {
-            Text("更多来源", color = AppSecondaryText)
-        }
-    }
-}
-
-@Composable
-private fun CollectionRow(
-    collection: ResolvedCollection,
+private fun PlaylistRow(
+    playlist: ResolvedPlaylist,
     onOpen: () -> Unit,
     onPlay: () -> Unit,
 ) {
@@ -648,15 +703,15 @@ private fun CollectionRow(
     ) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
-                collection.name,
+                playlist.name,
                 color = AppPrimaryText,
                 fontSize = 18.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(collectionDetail(collection.items), color = AppMutedText, fontSize = 11.sp)
+            Text(collectionDetail(playlist.items), color = AppMutedText, fontSize = 11.sp)
         }
-        TextButton(onClick = onPlay, enabled = collection.items.isNotEmpty()) {
+        TextButton(onClick = onPlay, enabled = playlist.items.isNotEmpty()) {
             Text("播放", color = AppSecondaryText, fontSize = 12.sp)
         }
     }
@@ -664,8 +719,8 @@ private fun CollectionRow(
 }
 
 @Composable
-private fun CollectionDetail(
-    collection: ResolvedCollection,
+private fun PlaylistDetail(
+    playlist: ResolvedPlaylist,
     library: MediaLibraryState,
     onPlayLibraryItems: (List<MediaSourceRef>, Int) -> Unit,
     onOpenMediaActions: (MediaSourceRef) -> Unit,
@@ -681,61 +736,152 @@ private fun CollectionDetail(
     ) {
         item(key = "collection-actions") {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(collectionDetail(collection.items), color = AppMutedText, fontSize = 12.sp)
+                Text(collectionDetail(playlist.items), color = AppMutedText, fontSize = 12.sp)
                 Row {
                     TextButton(
-                        onClick = { onPlayLibraryItems(collection.items, 0) },
-                        enabled = collection.items.isNotEmpty(),
+                        onClick = { onPlayLibraryItems(playlist.items, 0) },
+                        enabled = playlist.items.isNotEmpty(),
                     ) {
                         Text("播放全部", color = AppSecondaryText, fontSize = 12.sp)
                     }
-                    if (collection.isPlaylist) {
-                        TextButton(onClick = { onDeletePlaylist(collection.shortcut.key) }) {
-                            Text("删除", color = AppMutedText, fontSize = 12.sp)
-                        }
+                    TextButton(onClick = { onDeletePlaylist(playlist.id) }) {
+                        Text("删除", color = AppMutedText, fontSize = 12.sp)
                     }
                 }
             }
         }
         itemsIndexed(
-            items = collection.items,
+            items = playlist.items,
             key = { _, item -> "collection-${item.uri}" },
         ) { index, media ->
             TrackRow(
                 media = media,
                 hasSubtitle = library.hasSubtitleFor(media),
-                onPlay = { onPlayLibraryItems(collection.items, index) },
+                onPlay = { onPlayLibraryItems(playlist.items, index) },
                 onOpenMediaActions = { onOpenMediaActions(media) },
-                onRemove =
-                    if (collection.isPlaylist) {
-                        { onRemoveFromPlaylist(collection.shortcut.key, media) }
-                    } else {
-                        null
-                    },
+                onRemove = { onRemoveFromPlaylist(playlist.id, media) },
             )
         }
-        if (collection.items.isEmpty()) item { StatusText("这里还没有内容") }
+        if (playlist.items.isEmpty()) item { StatusText("这里还没有内容") }
     }
 }
 
 @Composable
-private fun LibrarySearch(
+private fun MyContent(
+    library: MediaLibraryState,
+    selectedTab: MyContentTab,
+    onTabChanged: (MyContentTab) -> Unit,
+    onPlayLibraryItems: (List<MediaSourceRef>, Int) -> Unit,
+    onOpenMediaActions: (MediaSourceRef) -> Unit,
+    onOpenPlaylist: (String) -> Unit,
+    onCreatePlaylist: () -> Unit,
+    bottomPadding: Dp,
+    modifier: Modifier = Modifier,
+) {
+    val recentItems = remember(library.config) { resolveRecentItems(library) }
+    val collectedItems =
+        remember(library.items, library.config) { orderedCollectedItems(library, recentItems) }
+    val visibleItems =
+        when (selectedTab) {
+            MyContentTab.Collected -> collectedItems
+            MyContentTab.Recent -> recentItems
+        }
+    val playlists = remember(library.config.playlists) { availablePlaylists(library) }
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(bottom = bottomPadding),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item(key = "my-content-tabs") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                QuietButton(
+                    label = "已收录 ${collectedItems.size}",
+                    onClick = { onTabChanged(MyContentTab.Collected) },
+                    modifier = Modifier.weight(1f),
+                    emphasized = selectedTab == MyContentTab.Collected,
+                )
+                QuietButton(
+                    label = "最近 ${recentItems.size}",
+                    onClick = { onTabChanged(MyContentTab.Recent) },
+                    modifier = Modifier.weight(1f),
+                    emphasized = selectedTab == MyContentTab.Recent,
+                )
+            }
+        }
+        if (visibleItems.isEmpty()) {
+            item(key = "my-content-empty") {
+                StatusText(
+                    if (selectedTab == MyContentTab.Collected) {
+                        "还没有加入“我的内容”的条目"
+                    } else {
+                        "还没有最近打开的内容"
+                    },
+                )
+            }
+        } else {
+            itemsIndexed(
+                items = visibleItems,
+                key = { _, item -> "my-content-${selectedTab.name}-${item.uri}" },
+            ) { index, media ->
+                TrackRow(
+                    media = media,
+                    hasSubtitle = library.hasSubtitleFor(media),
+                    unavailable = library.isUnavailable(media),
+                    onPlay = { onPlayLibraryItems(visibleItems, index) },
+                    onOpenMediaActions = { onOpenMediaActions(media) },
+                )
+            }
+        }
+        if (selectedTab == MyContentTab.Collected) {
+            item(key = "playlists-heading") {
+                Spacer(modifier = Modifier.height(10.dp))
+                SectionHeading("播放列表", "可选的手动编排")
+            }
+            items(
+                items = playlists,
+                key = { "playlist-${it.id}" },
+            ) { playlist ->
+                PlaylistRow(
+                    playlist = playlist,
+                    onOpen = { onOpenPlaylist(playlist.id) },
+                    onPlay = {
+                        if (playlist.items.isNotEmpty()) {
+                            onPlayLibraryItems(playlist.items, 0)
+                        }
+                    },
+                )
+            }
+            item(key = "create-playlist") {
+                TextButton(onClick = onCreatePlaylist, modifier = Modifier.fillMaxWidth()) {
+                    Text("新建播放列表", color = AppSecondaryText, fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MyContentSearch(
     query: String,
     onQueryChanged: (String) -> Unit,
     library: MediaLibraryState,
-    onOpenCollection: (LibraryShortcut) -> Unit,
     onPlayLibraryItems: (List<MediaSourceRef>, Int) -> Unit,
     onOpenMediaActions: (MediaSourceRef) -> Unit,
     bottomPadding: Dp,
     modifier: Modifier = Modifier,
 ) {
     val normalized = query.trim()
+    val recentItems = remember(library.config) { resolveRecentItems(library) }
+    val searchableItems =
+        remember(library.items, library.config) {
+            distinctContentItems(recentItems + orderedCollectedItems(library, recentItems), library)
+        }
     val matches =
         if (normalized.isEmpty()) emptyList()
-        else library.items.filter { it.matches(normalized) }
-    val collections =
-        if (normalized.isEmpty()) emptyList()
-        else availableCollections(library).filter { it.name.contains(normalized, ignoreCase = true) }
+        else searchableItems.filter { it.matches(normalized) }
     LazyColumn(
         modifier = modifier,
         contentPadding = PaddingValues(bottom = bottomPadding),
@@ -746,149 +892,28 @@ private fun LibrarySearch(
                 value = query,
                 onValueChange = onQueryChanged,
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("标题、文件名、文件夹或播放列表", color = AppMutedText) },
+                placeholder = { Text("标题、文件名或来源", color = AppMutedText) },
                 singleLine = true,
             )
         }
         if (normalized.isEmpty()) {
-            item { StatusText("输入内容开始搜索") }
+            item { StatusText("搜索已收录和最近打开的内容") }
         } else {
-            if (collections.isNotEmpty()) {
-                item { SectionHeading("内容集", "${collections.size} 个") }
-                items(collections.take(8), key = { "search-${it.shortcut.type}-${it.shortcut.key}" }) {
-                    collection ->
-                    CollectionRow(
-                        collection = collection,
-                        onOpen = { onOpenCollection(collection.shortcut) },
-                        onPlay = {
-                            if (collection.items.isNotEmpty()) {
-                                onPlayLibraryItems(collection.items, 0)
-                            }
-                        },
-                    )
-                }
-            }
             if (matches.isNotEmpty()) {
                 item { SectionHeading("内容", "${matches.size} 项") }
                 itemsIndexed(matches, key = { _, item -> "search-${item.uri}" }) { index, media ->
                     TrackRow(
                         media = media,
                         hasSubtitle = library.hasSubtitleFor(media),
+                        statusLabel =
+                            if (library.config.isCollected(media)) "已收录" else "最近打开",
+                        unavailable = library.isUnavailable(media),
                         onPlay = { onPlayLibraryItems(matches, index) },
                         onOpenMediaActions = { onOpenMediaActions(media) },
                     )
                 }
             }
-            if (collections.isEmpty() && matches.isEmpty()) item { StatusText("没有找到相关内容") }
-        }
-    }
-}
-
-@Composable
-private fun ContentManagerOverview(
-    library: MediaLibraryState,
-    onOpenPage: (ManagerPage) -> Unit,
-    onToggleHomeShortcut: (LibraryShortcut) -> Unit,
-    onRequestLibraryAccess: () -> Unit,
-    onRefreshLibrary: () -> Unit,
-    onAddFolder: () -> Unit,
-    onOpenFile: () -> Unit,
-    onCreatePlaylist: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val collections = remember(library.items, library.config) { availableCollections(library) }
-    LazyColumn(
-        modifier = modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(bottom = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
-    ) {
-        if (library.candidates.isNotEmpty()) {
-            item(key = "pending") {
-                val videoCount = library.candidates.count { it.kind == MediaKind.Video }
-                ManagerEntry(
-                    title = "待整理",
-                    detail =
-                        "${library.candidates.size} 项新内容" +
-                            if (videoCount > 0) " · $videoCount 项视频默认未选" else "",
-                    action = "选择",
-                    emphasized = true,
-                    onClick = { onOpenPage(ManagerPage.Review) },
-                )
-            }
-        }
-        item(key = "home-heading") { SectionHeading("首页内容", "选择快捷入口") }
-        if (collections.isEmpty()) {
-            item(key = "home-empty") { StatusText("收录内容后，可以在这里选择首页入口。") }
-        } else {
-            items(collections, key = { "shortcut-${it.shortcut.type}-${it.shortcut.key}" }) {
-                collection ->
-                val visible = collection.shortcut in library.config.homeShortcuts
-                ShortcutSelectionRow(
-                    collection = collection,
-                    visible = visible,
-                    onToggle = { onToggleHomeShortcut(collection.shortcut) },
-                )
-            }
-        }
-        item(key = "library-heading") { SectionHeading("内容", "${library.items.size} 项") }
-        item(key = "included-entry") {
-            ManagerEntry(
-                title = "已收录",
-                detail = collectionDetail(library.items),
-                action = "查看",
-                onClick = { onOpenPage(ManagerPage.Included) },
-            )
-        }
-        if (library.ignoredItems.isNotEmpty()) {
-            item(key = "ignored-entry") {
-                ManagerEntry(
-                    title = "已忽略",
-                    detail = "${library.ignoredItems.size} 项不会再次出现在待整理中",
-                    action = "查看",
-                    onClick = { onOpenPage(ManagerPage.Ignored) },
-                )
-            }
-        }
-        item(key = "add-heading") { SectionHeading("发现内容") }
-        item(key = "add-actions") {
-            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                QuietButton(
-                    label =
-                        when {
-                            !library.hasSystemAccess -> "扫描本机"
-                            library.hasAudioAccess &&
-                                library.videoAccess == VideoLibraryAccess.Partial ->
-                                "调整视频范围"
-                            !library.hasCompleteSystemAccess -> "补充本机授权"
-                            else -> "重新扫描本机"
-                        },
-                    onClick =
-                        if (library.hasCompleteSystemAccess) onRefreshLibrary
-                        else onRequestLibraryAccess,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                QuietButton("选择文件夹", onAddFolder, Modifier.fillMaxWidth())
-                TextButton(onClick = onOpenFile, modifier = Modifier.fillMaxWidth()) {
-                    Text("打开单个文件", color = AppSecondaryText)
-                }
-            }
-        }
-        item(key = "tools-heading") { SectionHeading("更多") }
-        item(key = "playlist-entry") {
-            ManagerEntry(
-                title = "新建播放列表",
-                detail = "手动组织一组内容",
-                action = "新建",
-                onClick = onCreatePlaylist,
-            )
-        }
-        item(key = "sources-entry") {
-            ManagerEntry(
-                title = "扫描范围",
-                detail = "授权、文件夹和单独打开记录",
-                action = "管理",
-                onClick = { onOpenPage(ManagerPage.Sources) },
-            )
+            if (matches.isEmpty()) item { StatusText("没有找到相关内容") }
         }
     }
 }
@@ -898,7 +923,6 @@ private fun ManagerEntry(
     title: String,
     detail: String,
     action: String,
-    emphasized: Boolean = false,
     onClick: () -> Unit,
 ) {
     Row(
@@ -908,28 +932,9 @@ private fun ManagerEntry(
     ) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(title, color = AppPrimaryText, fontSize = 15.sp)
-            Text(detail, color = if (emphasized) AppSecondaryText else AppMutedText, fontSize = 11.sp)
+            Text(detail, color = AppMutedText, fontSize = 11.sp)
         }
-        Text(action, color = if (emphasized) AppAccent else AppSecondaryText, fontSize = 12.sp)
-    }
-    Hairline()
-}
-
-@Composable
-private fun ShortcutSelectionRow(
-    collection: ResolvedCollection,
-    visible: Boolean,
-    onToggle: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(collection.name, color = AppPrimaryText, fontSize = 14.sp)
-            Text(collectionDetail(collection.items), color = AppMutedText, fontSize = 11.sp)
-        }
-        Text(if (visible) "首页显示" else "已隐藏", color = if (visible) AppAccent else AppMutedText, fontSize = 11.sp)
+        Text(action, color = AppSecondaryText, fontSize = 12.sp)
     }
     Hairline()
 }
@@ -943,6 +948,15 @@ private fun CandidateReview(
     onIgnore: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    if (library.candidates.isEmpty()) {
+        Column(
+            modifier = modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            StatusText("没有新发现。已收录内容仍可从“我的内容”打开。")
+        }
+        return
+    }
     val groups =
         remember(library.candidates) {
             library.candidates
@@ -952,7 +966,7 @@ private fun CandidateReview(
         }
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
-            "音频已预选；视频需要逐项确认。未选内容会继续留在这里。",
+            "这里是来源中新发现、尚未决定的内容。音频已预选，视频需要逐项确认。",
             color = AppSecondaryText,
             fontSize = 12.sp,
             lineHeight = 18.sp,
@@ -1025,7 +1039,7 @@ private fun CandidateReview(
         ) {
             Text("已选 ${selectedUris.size} 项", color = AppSecondaryText, fontSize = 12.sp)
             QuietButton(
-                label = "收录所选",
+                label = "加入我的内容",
                 onClick = onAccept,
                 enabled = selectedUris.isNotEmpty(),
                 emphasized = true,
@@ -1066,21 +1080,6 @@ private fun CandidateRow(
         }
     }
     Hairline()
-}
-
-@Composable
-private fun IncludedContent(
-    items: List<MediaSourceRef>,
-    onRemove: (MediaSourceRef) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    ManagedMediaList(
-        items = items,
-        emptyText = "还没有收录内容",
-        action = "移除",
-        onAction = onRemove,
-        modifier = modifier,
-    )
 }
 
 @Composable
@@ -1149,7 +1148,7 @@ private fun ScanSources(
     ) {
         item {
             Text(
-                "这里决定扫描哪里；扫描到的内容仍需在待整理中确认。",
+                "这里管理内容从哪里进入；扫描结果会出现在“新发现”中。",
                 color = AppSecondaryText,
                 fontSize = 12.sp,
                 lineHeight = 18.sp,
@@ -1196,7 +1195,7 @@ private fun ScanSources(
         }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                QuietButton("选择文件夹", onAddFolder, Modifier.fillMaxWidth())
+                QuietButton("添加文件夹", onAddFolder, Modifier.fillMaxWidth())
                 TextButton(onClick = onOpenFile, modifier = Modifier.fillMaxWidth()) {
                     Text("打开单个文件", color = AppSecondaryText)
                 }
@@ -1354,12 +1353,18 @@ private fun NowPlayingBar(
 private fun TrackRow(
     media: MediaSourceRef,
     hasSubtitle: Boolean,
+    statusLabel: String? = null,
+    unavailable: Boolean = false,
     onPlay: () -> Unit,
     onOpenMediaActions: () -> Unit,
     onRemove: (() -> Unit)? = null,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onPlay).padding(vertical = 8.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clickable(enabled = !unavailable, onClick = onPlay)
+                .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1367,11 +1372,13 @@ private fun TrackRow(
             Text(media.displayTitle, color = AppPrimaryText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 listOfNotNull(
+                    "不可用".takeIf { unavailable },
+                    statusLabel,
                     if (media.kind == MediaKind.Video) "视频" else "音频",
                     "字幕".takeIf { hasSubtitle },
                     media.displayArtist ?: media.libraryFolderName,
                 ).joinToString(" · "),
-                color = AppMutedText,
+                color = if (unavailable) AppError else AppMutedText,
                 fontSize = 10.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1529,11 +1536,12 @@ private fun PlaylistChooserDialog(
 @Composable
 private fun MediaActionDialog(
     item: MediaSourceRef,
-    canRemoveFromLibrary: Boolean,
+    isCollected: Boolean,
     onDismiss: () -> Unit,
     onPlayNext: () -> Unit,
     onAddToQueue: () -> Unit,
     onChoosePlaylist: () -> Unit,
+    onAddToMyContent: () -> Unit,
     onRemoveFromLibrary: () -> Unit,
 ) {
     AlertDialog(
@@ -1544,8 +1552,14 @@ private fun MediaActionDialog(
                 TextButton(onClick = onPlayNext) { Text("下一项播放", color = AppPrimaryText) }
                 TextButton(onClick = onAddToQueue) { Text("添加到队列末尾", color = AppPrimaryText) }
                 TextButton(onClick = onChoosePlaylist) { Text("添加到播放列表", color = AppPrimaryText) }
-                if (canRemoveFromLibrary) {
-                    TextButton(onClick = onRemoveFromLibrary) { Text("移出收录", color = AppSecondaryText) }
+                if (isCollected) {
+                    TextButton(onClick = onRemoveFromLibrary) {
+                        Text("移出我的内容", color = AppSecondaryText)
+                    }
+                } else {
+                    TextButton(onClick = onAddToMyContent) {
+                        Text("加入我的内容", color = AppAccent)
+                    }
                 }
             }
         },
@@ -1737,40 +1751,68 @@ private fun StatusText(
     Text(text, color = color, fontSize = 11.sp, lineHeight = 16.sp)
 }
 
-private fun availableCollections(library: MediaLibraryState): List<ResolvedCollection> {
-    val folders =
-        library.items
-            .groupBy(MediaSourceRef::libraryFolderKey)
-            .values
-            .map { items ->
-                ResolvedCollection(
-                    shortcut = items.first().toFolderShortcut(),
-                    name = items.first().libraryFolderName,
-                    items = items.sortedBy { it.displayTitle.lowercase() },
-                )
-            }
-            .sortedBy { it.name.lowercase() }
-    val playlists =
-        library.config.playlists.map { playlist ->
-            ResolvedCollection(
-                shortcut = LibraryShortcut(LibraryShortcutType.Playlist, playlist.id),
-                name = playlist.name,
-                items = playlist.items,
-                isPlaylist = true,
-            )
-        }
-    return folders + playlists
-}
+private fun availablePlaylists(library: MediaLibraryState): List<ResolvedPlaylist> =
+    library.config.playlists.map { playlist ->
+        ResolvedPlaylist(
+            id = playlist.id,
+            name = playlist.name,
+            items = playlist.items,
+        )
+    }
 
-private fun resolveHomeCollections(library: MediaLibraryState): List<ResolvedCollection> {
-    val available = availableCollections(library).associateBy(ResolvedCollection::shortcut)
-    return library.config.homeShortcuts.mapNotNull(available::get)
-}
-
-private fun resolveCollection(
-    shortcut: LibraryShortcut,
+private fun resolvePlaylist(
+    playlistId: String,
     library: MediaLibraryState,
-): ResolvedCollection? = availableCollections(library).firstOrNull { it.shortcut == shortcut }
+): ResolvedPlaylist? =
+    availablePlaylists(library).firstOrNull { it.id == playlistId }
+
+private fun resolveRecentItems(library: MediaLibraryState): List<MediaSourceRef> =
+    distinctContentItems(
+        items =
+            library.config.recentItems.map { recent ->
+                library.config.contentUnitFor(recent)?.media ?: recent
+            },
+        library = library,
+    )
+
+private fun orderedCollectedItems(
+    library: MediaLibraryState,
+    recentItems: List<MediaSourceRef>,
+): List<MediaSourceRef> =
+    orderCollectedContent(
+        recentItems = recentItems,
+        collectedItems = library.items,
+        stableKey = { media ->
+            library.config.contentUnitFor(media)?.stableId ?: "uri:${media.uri}"
+        },
+        isCollected = library.config::isCollected,
+    )
+
+private fun distinctContentItems(
+    items: List<MediaSourceRef>,
+    library: MediaLibraryState,
+): List<MediaSourceRef> =
+    items.distinctBy { media ->
+        library.config.contentUnitFor(media)?.stableId ?: "uri:${media.uri}"
+    }
+
+private fun MediaLibraryState.isUnavailable(media: MediaSourceRef): Boolean =
+    config.contentUnitFor(media)?.availability == ContentAvailability.Unavailable
+
+private fun sourceSummary(library: MediaLibraryState): String {
+    val looseItemCount =
+        library.sources
+            .firstOrNull { it.kind == LibrarySourceKind.LooseFiles }
+            ?.itemCount
+            ?: 0
+    return buildList {
+        if (library.config.folders.isNotEmpty()) add("${library.config.folders.size} 个文件夹")
+        if (library.hasSystemAccess) add("设备媒体库")
+        if (looseItemCount > 0) add("$looseItemCount 项单独打开记录")
+    }.ifEmpty {
+        listOf("添加文件夹或管理设备媒体库")
+    }.joinToString(" · ")
+}
 
 private fun MediaSourceRef.matches(query: String): Boolean =
     listOf(displayTitle, displayArtist, album, folder, displayName)
@@ -1846,3 +1888,5 @@ private fun verticalPositionLabel(bias: Float): String {
         else -> "下移 $percent%"
     }
 }
+
+private const val HomePreviewItemCount = 3

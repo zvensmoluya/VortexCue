@@ -100,7 +100,7 @@ fun VortexCueApp(
                 if (initialSession == null) AppDestination.Home else AppDestination.Player,
             )
         }
-    var homeSection by rememberSaveable { mutableStateOf(HomeSection.Library) }
+    var homeSection by rememberSaveable { mutableStateOf(HomeSection.Home) }
     var playerSurface by rememberSaveable { mutableStateOf(PlayerSurface.Normal) }
     var activeSession by remember { mutableStateOf(initialSession) }
     var lastSession by remember { mutableStateOf<RestorableSession?>(null) }
@@ -1060,14 +1060,14 @@ fun VortexCueApp(
         if (playerSurface != PlayerSurface.Normal) {
             playerSurface = PlayerSurface.Normal
         } else {
-            homeSection = HomeSection.Library
+            homeSection = HomeSection.Home
             destination = AppDestination.Home
         }
     }
     BackHandler(
-        enabled = destination == AppDestination.Home && homeSection != HomeSection.Library,
+        enabled = destination == AppDestination.Home && homeSection != HomeSection.Home,
     ) {
-        homeSection = HomeSection.Library
+        homeSection = HomeSection.Home
     }
 
     when (destination) {
@@ -1111,7 +1111,7 @@ fun VortexCueApp(
                 onIgnoreCandidates = libraryStateHolder::ignoreCandidates,
                 onRemoveIncluded = libraryStateHolder::removeIncluded,
                 onRestoreIgnored = libraryStateHolder::restoreIgnored,
-                onToggleHomeShortcut = libraryStateHolder::toggleHomeShortcut,
+                onCollectMedia = libraryStateHolder::collectMedia,
                 onPlayLibraryItems = { items, index ->
                     items.getOrNull(index)?.let { media ->
                         player.setMediaItems(
@@ -1345,11 +1345,11 @@ fun VortexCueApp(
                         }
                     },
                     onBackToLibrary = {
-                        homeSection = HomeSection.Library
+                        homeSection = HomeSection.Home
                         destination = AppDestination.Home
                     },
                     onOpenSources = {
-                        homeSection = HomeSection.Manage
+                        homeSection = HomeSection.Sources
                         destination = AppDestination.Home
                     },
                     onRelinkMedia = {
