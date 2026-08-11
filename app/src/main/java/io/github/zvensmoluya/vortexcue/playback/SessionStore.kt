@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.first
 import org.json.JSONObject
 
 private val Context.sessionDataStore by preferencesDataStore(name = "session_state")
+private const val CurrentSessionSchemaVersion = 1
 
 data class StoredAppState(
     val draft: StoredDraft,
@@ -28,13 +29,10 @@ data class StoredAppState(
 
 data class StoredDraft(
     val media: MediaSourceRef?,
-    val subtitle: SubtitleSourceRef?,
 )
 
 data class StoredLastSession(
     val media: MediaSourceRef,
-    val subtitle: SubtitleSourceRef?,
-    val secondarySubtitle: SubtitleSourceRef?,
     val positionMs: Long,
     val durationMs: Long,
     val playbackSpeed: Float,
@@ -51,14 +49,23 @@ class SessionStore(context: Context) {
 
     suspend fun load(): StoredAppState {
         val preferences = dataStore.data.first()
+        if (
+            !isCurrentPreReleaseSchema(
+                preferences[Keys.SchemaVersion],
+                CurrentSessionSchemaVersion,
+            )
+        ) {
+            dataStore.edit { mutable ->
+                mutable.clear()
+                mutable[Keys.SchemaVersion] = CurrentSessionSchemaVersion
+            }
+            return emptyStoredAppState()
+        }
         val lastMedia = preferences.readMediaSource(Keys.LastMedia)
         val lastSession =
             lastMedia?.let { media ->
                 StoredLastSession(
                     media = media,
-                    subtitle = preferences.readSubtitleSource(Keys.LastSubtitle),
-                    secondarySubtitle =
-                        preferences.readSubtitleSource(Keys.LastSecondarySubtitle),
                     positionMs = preferences[Keys.LastPosition] ?: 0L,
                     durationMs = preferences[Keys.LastDuration] ?: 0L,
                     playbackSpeed =
@@ -79,7 +86,6 @@ class SessionStore(context: Context) {
             draft =
                 StoredDraft(
                     media = preferences.readMediaSource(Keys.DraftMedia),
-                    subtitle = preferences.readSubtitleSource(Keys.DraftSubtitle),
                 ),
             lastSession = lastSession,
             displayProfile =
@@ -98,27 +104,16 @@ class SessionStore(context: Context) {
 
     suspend fun saveDraft(draft: SessionDraft) {
         val media = draft.media.source
-        val subtitle =
-            when (val value = draft.subtitle) {
-                DraftSubtitle.None -> null
-                is DraftSubtitle.Loading -> value.source
-                is DraftSubtitle.Ready -> value.subtitle.source
-                is DraftSubtitle.Failed -> value.source
-            }
         dataStore.edit { preferences ->
+            preferences[Keys.SchemaVersion] = CurrentSessionSchemaVersion
             preferences.writeMediaSource(Keys.DraftMedia, media)
-            preferences.writeSubtitleSource(Keys.DraftSubtitle, subtitle)
         }
     }
 
     suspend fun saveLastSession(session: RestorableSession) {
         dataStore.edit { preferences ->
+            preferences[Keys.SchemaVersion] = CurrentSessionSchemaVersion
             preferences.writeMediaSource(Keys.LastMedia, session.session.media)
-            preferences.writeSubtitleSource(Keys.LastSubtitle, session.session.subtitle?.source)
-            preferences.writeSubtitleSource(
-                Keys.LastSecondarySubtitle,
-                session.session.secondarySubtitle?.source,
-            )
             preferences[Keys.LastPosition] = session.positionMs.coerceAtLeast(0L)
             preferences[Keys.LastDuration] = session.durationMs.coerceAtLeast(0L)
             preferences[Keys.LastSpeed] =
@@ -140,6 +135,7 @@ class SessionStore(context: Context) {
 
     suspend fun saveDisplayProfile(profile: DisplayProfile) {
         dataStore.edit { preferences ->
+            preferences[Keys.SchemaVersion] = CurrentSessionSchemaVersion
             preferences[Keys.DisplayProfile] = profile.name
             preferences[Keys.DisplayWindowBrightness] =
                 profile.glowWindowBrightness.coerceIn(0.01f, 0.30f)
@@ -159,6 +155,7 @@ class SessionStore(context: Context) {
         gestureHintSeen: Boolean,
     ) {
         dataStore.edit { preferences ->
+            preferences[Keys.SchemaVersion] = CurrentSessionSchemaVersion
             preferences[Keys.GlowCalibrationCompleted] = calibrationCompleted
             preferences[Keys.GlowGestureHintSeen] = gestureHintSeen
         }
@@ -194,16 +191,6 @@ class SessionStore(context: Context) {
         )
     }
 
-    private fun Preferences.readSubtitleSource(keys: SubtitleKeys): SubtitleSourceRef? {
-        val uri = this[keys.uri]?.let(Uri::parse) ?: return null
-        return SubtitleSourceRef(
-            uri = uri,
-            displayName = this[keys.name] ?: uri.lastPathSegment ?: "未命名字幕",
-            mimeType = this[keys.mime],
-            cachedFileName = this[keys.cache],
-        )
-    }
-
     private fun MutablePreferences.writeMediaSource(
         keys: SourceKeys,
         source: MediaSourceRef?,
@@ -223,16 +210,6 @@ class SessionStore(context: Context) {
         writeOptional(keys.size, source?.sizeBytes)
         writeOptional(keys.videoWidth, source?.videoWidth)
         writeOptional(keys.videoHeight, source?.videoHeight)
-    }
-
-    private fun MutablePreferences.writeSubtitleSource(
-        keys: SubtitleKeys,
-        source: SubtitleSourceRef?,
-    ) {
-        writeOptional(keys.uri, source?.uri?.toString())
-        writeOptional(keys.name, source?.displayName)
-        writeOptional(keys.mime, source?.mimeType)
-        writeOptional(keys.cache, source?.cachedFileName)
     }
 
     private fun MutablePreferences.writeOptional(
@@ -274,19 +251,10 @@ class SessionStore(context: Context) {
         val videoHeight: Preferences.Key<Int>,
     )
 
-    private data class SubtitleKeys(
-        val uri: Preferences.Key<String>,
-        val name: Preferences.Key<String>,
-        val mime: Preferences.Key<String>,
-        val cache: Preferences.Key<String>,
-    )
-
     private object Keys {
+        val SchemaVersion = intPreferencesKey("schema_version")
         val DraftMedia = sourceKeys("draft_media")
-        val DraftSubtitle = subtitleKeys("draft_subtitle")
         val LastMedia = sourceKeys("last_media")
-        val LastSubtitle = subtitleKeys("last_subtitle")
-        val LastSecondarySubtitle = subtitleKeys("last_secondary_subtitle")
         val LastPosition = longPreferencesKey("last_position_ms")
         val LastDuration = longPreferencesKey("last_duration_ms")
         val LastSpeed = floatPreferencesKey("last_speed")
@@ -323,16 +291,15 @@ class SessionStore(context: Context) {
                 videoWidth = intPreferencesKey("${prefix}_video_width"),
                 videoHeight = intPreferencesKey("${prefix}_video_height"),
             )
-
-        private fun subtitleKeys(prefix: String) =
-            SubtitleKeys(
-                uri = stringPreferencesKey("${prefix}_uri"),
-                name = stringPreferencesKey("${prefix}_name"),
-                mime = stringPreferencesKey("${prefix}_mime"),
-                cache = stringPreferencesKey("${prefix}_cache"),
-            )
     }
 }
+
+private fun emptyStoredAppState(): StoredAppState =
+    StoredAppState(
+        draft = StoredDraft(media = null),
+        lastSession = null,
+        displayProfile = DisplayProfile.Balanced,
+    )
 
 private fun decodeQueue(
     encoded: String?,

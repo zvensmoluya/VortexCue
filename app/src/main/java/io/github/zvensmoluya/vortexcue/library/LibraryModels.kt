@@ -41,18 +41,12 @@ data class LibraryPlaylist(
     val items: List<MediaSourceRef>,
 )
 
-data class SubtitleAssociation(
-    val mediaUri: Uri,
-    val subtitle: SubtitleSourceRef,
-)
-
 data class LibraryConfig(
     val contentUnits: List<PlayableContentUnit> = emptyList(),
     val catalogItems: List<MediaSourceRef> = emptyList(),
     val recentItems: List<MediaSourceRef> = emptyList(),
     val folders: List<LibraryFolderRef> = emptyList(),
     val playlists: List<LibraryPlaylist> = emptyList(),
-    val subtitleAssociations: List<SubtitleAssociation> = emptyList(),
     val includedUris: List<String> = emptyList(),
     val ignoredUris: List<String> = emptyList(),
     val homeShortcuts: List<LibraryShortcut> = emptyList(),

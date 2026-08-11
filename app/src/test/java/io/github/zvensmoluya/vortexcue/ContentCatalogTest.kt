@@ -218,25 +218,6 @@ class ContentCatalogTest {
     }
 
     @Test
-    fun `legacy draft can seed a catalog without a primary decision`() {
-        val emptyAutomatic = ActiveTextSelection()
-
-        assertTrue(emptyAutomatic.allowsLegacyDraftPrimaryMigration())
-    }
-
-    @Test
-    fun `legacy draft cannot overwrite catalog decisions`() {
-        val manuallyDisabled =
-            ActiveTextSelection(primaryMode = TextSelectionMode.Manual)
-        val selected = ActiveTextSelection(primaryTrackId = "selected")
-        val rejected = ActiveTextSelection(rejectedTrackIds = listOf("rejected"))
-
-        assertFalse(manuallyDisabled.allowsLegacyDraftPrimaryMigration())
-        assertFalse(selected.allowsLegacyDraftPrimaryMigration())
-        assertFalse(rejected.allowsLegacyDraftPrimaryMigration())
-    }
-
-    @Test
     fun `restoring automatic selection chooses the usable exact track`() {
         val exact = track("exact", TimedTextMatchBasis.ExactStem)
         val manualOff =
@@ -388,24 +369,6 @@ class ContentCatalogTest {
         assertTrue(rekeyed.activeText.rejectedTrackIds.single() in rekeyed.tracks.map { it.stableId })
         assertEquals(TextSelectionMode.Manual, rekeyed.activeText.primaryMode)
         assertEquals(TextSelectionMode.Manual, rekeyed.activeText.secondaryMode)
-    }
-
-    @Test
-    fun `legacy subtitle becomes a stable track with cached source intact`() {
-        val track =
-            legacyTimedTextTrack(
-                contentId = "content-legacy",
-                uriValue = "content://subtitle/legacy",
-                displayName = "legacy.ass",
-                mimeType = "text/x-ssa",
-                cachedFileName = "cached.ass",
-            )
-        val selected = TextTrackCatalogState().selectManualPrimary(track)
-
-        assertEquals(TimedTextMatchBasis.Legacy, track.matchBasis)
-        assertEquals("cached.ass", track.locator.cachedFileName)
-        assertEquals(track.stableId, selected.activeText.primaryTrackId)
-        assertEquals(TextSelectionMode.Manual, selected.activeText.primaryMode)
     }
 
     private fun track(

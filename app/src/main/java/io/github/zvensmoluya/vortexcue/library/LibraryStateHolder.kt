@@ -11,7 +11,6 @@ import io.github.zvensmoluya.vortexcue.core.model.ContentAvailability
 import io.github.zvensmoluya.vortexcue.core.model.MediaOrigin
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
 import io.github.zvensmoluya.vortexcue.core.model.SubtitleSourceRef
-import io.github.zvensmoluya.vortexcue.core.model.TextSelectionMode
 import io.github.zvensmoluya.vortexcue.core.model.TextTrackSlot
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextReadiness
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextTrack
@@ -293,8 +292,6 @@ internal class LibraryStateHolder(
                         shortcut.type == LibraryShortcutType.Folder &&
                             shortcut.key.startsWith("$folderId|")
                     },
-                subtitleAssociations =
-                    config.subtitleAssociations.filterNot { it.mediaUri.toString() in removedUris },
                 playlists = config.playlists.withoutItems(removedUris),
             ).withoutContentUris(removedUris),
             rescan = true,
@@ -326,10 +323,6 @@ internal class LibraryStateHolder(
                             shortcut.key.startsWith("${LibrarySourceIds.LooseFiles}|")
                     },
                 playlists = config.playlists.withoutItems(looseUris),
-                subtitleAssociations =
-                    config.subtitleAssociations.filterNot {
-                        it.mediaUri.toString() in looseUris
-                    },
             ).withoutContentUris(looseUris),
             rescan = true,
         )
@@ -478,18 +471,19 @@ internal class LibraryStateHolder(
         subtitle: SubtitleSourceRef?,
     ): TimedTextTrack? {
         val config = state.config
-        var updatedConfig = config.withManualTextSource(media, slot, subtitle)
-        if (slot == TextTrackSlot.Primary) {
-            updatedConfig =
-                updatedConfig.copy(
-                    subtitleAssociations =
-                        config.subtitleAssociations.filterNot { it.mediaUri == media.uri } +
-                            listOfNotNull(
-                                subtitle?.let { SubtitleAssociation(media.uri, it) },
-                            ),
-                )
-        }
+        val updatedConfig = config.withManualTextSource(media, slot, subtitle)
         updateConfig(updatedConfig)
+        return updatedConfig.activeTextTrack(media, slot)
+    }
+
+    suspend fun persistManualTextSource(
+        media: MediaSourceRef,
+        slot: TextTrackSlot,
+        subtitle: SubtitleSourceRef?,
+    ): TimedTextTrack? {
+        val updatedConfig = state.config.withManualTextSource(media, slot, subtitle)
+        updateConfig(updatedConfig, scheduleWrite = false)
+        configWriter.submitAndAwait(updatedConfig)
         return updatedConfig.activeTextTrack(media, slot)
     }
 
@@ -499,17 +493,8 @@ internal class LibraryStateHolder(
         trackId: String?,
     ): TimedTextTrack? {
         val config = state.config
-        var updatedConfig = config.withManualTextTrack(media, slot, trackId)
+        val updatedConfig = config.withManualTextTrack(media, slot, trackId)
         if (updatedConfig === config) return null
-        if (slot == TextTrackSlot.Primary) {
-            val source = updatedConfig.activeTextTrack(media, slot)?.toSubtitleSourceRef()
-            updatedConfig =
-                updatedConfig.copy(
-                    subtitleAssociations =
-                        config.subtitleAssociations.filterNot { it.mediaUri == media.uri } +
-                            listOfNotNull(source?.let { SubtitleAssociation(media.uri, it) }),
-                )
-        }
         updateConfig(updatedConfig)
         return updatedConfig.activeTextTrack(media, slot)
     }
@@ -519,14 +504,7 @@ internal class LibraryStateHolder(
         slot: TextTrackSlot,
     ): TimedTextTrack? {
         val config = state.config
-        var updatedConfig = config.withAutomaticTextTrack(media, slot)
-        if (slot == TextTrackSlot.Primary) {
-            updatedConfig =
-                updatedConfig.copy(
-                    subtitleAssociations =
-                        config.subtitleAssociations.filterNot { it.mediaUri == media.uri },
-                )
-        }
+        val updatedConfig = config.withAutomaticTextTrack(media, slot)
         updateConfig(updatedConfig)
         return updatedConfig.activeTextTrack(media, slot)
     }
@@ -547,20 +525,6 @@ internal class LibraryStateHolder(
                 failureMessage = failureMessage,
                 resolvedSource = resolvedSource,
             )
-        val selectedPrimary = updatedConfig.activeTextTrack(media, TextTrackSlot.Primary)
-        if (
-            resolvedSource != null &&
-                selectedPrimary?.stableId == trackId &&
-                updatedConfig.contentUnitFor(media)?.activeText?.primaryMode ==
-                    TextSelectionMode.Manual
-        ) {
-            updatedConfig =
-                updatedConfig.copy(
-                    subtitleAssociations =
-                        config.subtitleAssociations.filterNot { it.mediaUri == media.uri } +
-                            SubtitleAssociation(media.uri, resolvedSource),
-                )
-        }
         updateConfig(
             updatedConfig,
         )
@@ -601,6 +565,7 @@ internal class LibraryStateHolder(
         config: LibraryConfig,
         rescan: Boolean = false,
         repartition: Boolean = false,
+        scheduleWrite: Boolean = true,
     ) {
         state =
             if (repartition) {
@@ -619,7 +584,7 @@ internal class LibraryStateHolder(
             } else {
                 state.copy(config = config)
             }
-        configWriter.submit(config)
+        if (scheduleWrite) configWriter.submit(config)
         if (rescan) scan(config)
     }
 

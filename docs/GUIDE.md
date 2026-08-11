@@ -193,7 +193,7 @@ TonightQueue
 - 来源；
 - 睡眠定时。
 
-现有 `MediaSourceRef + SubtitleAssociation + LibraryConfig + RestorableSession` 作为迁移起点。M3 不要求一次性重写全部持久化，但新模型必须版本化、兼容旧数据，并避免继续把“打开过”“已收录”和“正在播放”写进同一个列表。
+首个正式 release 之前，应用持久化只支持当前 schema。开发版或不稳定内测版的旧 schema 不形成用户数据兼容承诺；版本不匹配时可以破坏性重置应用拥有的目录、会话、设置和缓存，但不得删除或修改用户原始媒体文件。此阶段保留 schema version 用于识别并重置不兼容状态，不维护跨开发版本迁移链、旧模型 fallback 或新旧结构双写。首个正式 release 冻结数据契约时，再从当时的当前 schema 开始承担向后兼容责任。
 
 ## 应用结构
 
@@ -567,13 +567,13 @@ ui        首次体验、Home、Player 和主题
 ```
 
 - `PlaybackService` 内的 Player / MediaSession 是播放状态唯一真相；
-- `PlayableContentUnit` 是媒体 locator、文字轨及用户选择的持久唯一真相；导入草稿、Active Session 和旧 `SubtitleAssociation` 只能作为待选状态、运行时快照或迁移兼容输入；
+- `PlayableContentUnit` 是媒体 locator、文字轨及用户选择的持久唯一真相；导入草稿只保留尚未确认的交互状态，Active Session 只保留已加载的运行时状态，两者都不重复持久化字幕事实；
 - 后台播放服务只接受本应用和系统认可的可信控制器，应用私有命令不向外部控制器开放；
 - `app` 连接系统入口和功能状态，不重新实现来源、字幕或播放规则；
 - Home 不直接拥有扫描和内容关系算法；
 - “我的内容”只操作应用内目录和用户关系，不直接执行文件系统删除、移动或重命名；
-- 扫描、匹配、轨道排序、迁移和恢复规则保持为可测试的纯逻辑；
-- 当前资源库配置和用户决定必须向后兼容，不进行破坏性清空；
+- 扫描、匹配、轨道排序、schema 判定和恢复规则保持为可测试的纯逻辑；
+- 首个正式 release 前只读取当前 schema；不兼容的开发数据直接重置，不为内部测试数据累积迁移代码；
 - 媒体文件不复制到应用目录；授权、来源快照、内容目录、用户关系和小型文字缓存可以持久化；
 - 只有出现真实构建、隔离或复用需求时才增加 Gradle 模块。
 
@@ -600,15 +600,15 @@ ui        首次体验、Home、Player 和主题
 
 ### M3.2 建立内容目录与文字关系
 
-1. 引入兼容旧数据的 `PlayableContentUnit` 和稳定内容 ID；
+1. 引入 `PlayableContentUnit` 和稳定内容 ID；
 2. 将 Source、Recent、Collection 和 Active Session 的持久状态分离；
 3. 单文件打开只写入 Recent，不再自动写入 Collection；
 4. 持久化已收录内容的媒体快照、来源、可用性和用户决定，冷启动不依赖重扫；
 5. 从单一字幕附件演进为 `0..N` 文字轨，保存语言、角色、来源、匹配依据和手动选择；
 6. 恢复 primary / secondary 显示，并接入内嵌文本字幕；
 7. 让解析失败和 URI 失效可见、可重新定位；
-8. 对旧 `manualItems`、`includedUris`、字幕关联和最后会话提供非破坏性迁移；
-9. 为目录分层、轨道排序、手动优先和恢复迁移增加单元测试。
+8. 内容目录与会话各自使用明确的当前 schema，版本不匹配时按预发布策略重置；
+9. 为目录分层、轨道排序、手动优先、schema 判定和恢复增加单元测试。
 
 #### M3.2a 第一实现切片
 
@@ -617,27 +617,27 @@ ui        首次体验、Home、Player 和主题
 1. 增加版本化的内容目录快照，保存已知 `MediaSourceRef`、来源和收录决定；
 2. 将 Recent 与 Collection 分开持久化，新打开内容只进入 Recent；
 3. 已收录内容在无扫描冷启动中恢复，扫描只负责发现变化和验证来源；
-4. 旧 `manualItems` 和 Playlist 中的内容按已收录迁移，避免升级后从现有首页消失；
-5. 只有 `includedUris`、暂时缺少媒体快照的旧决定继续保留，待对应来源下次可读时补全，不静默丢弃；
-6. 先提供领域层的收录 / 移出能力和迁移测试，再接入最小用户动作；
+4. Playlist 中的内容继续按已收录关系参与目录，不与 Recent 混用；
+5. `includedUris` 暂时缺少媒体快照时继续保留，待对应当前来源可读时补全；
+6. 先提供领域层的收录 / 移出能力和当前 schema 测试，再接入最小用户动作；
 7. 不在该切片引入 Room、收藏、标签、命名 Playlist、后台常驻扫描或新导航结构。
 
 这个切片完成后，代码中不再使用“单独打开列表”同时表达最近、收录和来源三个概念。
 
-状态：已完成代码、自动化检查与 Android 13 的 v3→v4 原位升级真机验证。单文件进入 Recent、明确加入 / 移出“我的内容”、冷启动无扫描恢复和旧 `includedUris` 决定补全目录均已走通；真机基线没有旧 `manualItems` 和 Playlist，这两条迁移继续由单元测试覆盖。详见 [`records/M3_CATALOG_VALIDATION.md`](records/M3_CATALOG_VALIDATION.md)。
+状态：目录分层代码、自动化检查和 Android 13 真机流程已完成。早期 v3→v4 原位升级结果仅作为历史工程记录保留，不构成当前兼容要求；version 6 已删除该迁移路径。详见 [`records/M3_CATALOG_VALIDATION.md`](records/M3_CATALOG_VALIDATION.md)。
 
 #### M3.2b 第二实现切片
 
-本切片在 M3.2a 的 URI 兼容目录之上建立稳定内容单元和多文字轨事实，仍不同时改造 Home、Tonight 或播放界面：
+本切片在 M3.2a 的内容目录之上建立稳定内容单元和多文字轨事实，仍不同时改造 Home、Tonight 或播放界面：
 
 1. 为每个已知媒体快照建立确定性的稳定内容 ID，并以 version 5 持久化 `PlayableContentUnit`；
 2. 每个内容单元可以保存 `0..N` 文字轨，以及来源、定位信息、格式、语言、名称、角色、匹配依据、可读状态和 primary / secondary 选择；
 3. Folder 匹配保留全部 exact、语言和角色后缀候选，不再只留下最短文件名；唯一 exact 候选才自动成为 primary，多个不明确候选只建立关系；
 4. 用户手动选择或明确移除 primary 后，后续自动候选不得覆盖；被拒绝候选即使暂时消失，也保留拒绝决定；
-5. 旧字幕关联非破坏性迁移为稳定的 Legacy 轨和手动 primary；暂时没有媒体快照的旧关联继续保留，等待内容再次出现；
-6. 当前播放器通过兼容层继续消费一个外挂 primary，不在本切片提前声称已经支持内嵌轨播放、secondary 显示、失效修复或完整轨道选择 UI。
+5. 用户手动选择的外挂字幕直接形成稳定的 `UserSelected` 轨和手动 primary，不额外维护 URI 字幕关联表；
+6. 该切片先建立目录事实；内嵌轨播放、secondary 显示、失效修复和完整轨道选择 UI 由后续切片接入。
 
-状态：已完成代码、自动化检查与 Android 13 的 v4→v5 原位升级真机验证。253 个旧媒体快照全部生成唯一稳定 ID，Recent、Collection 决定和旧字幕关联均未丢失；第二次冷启动状态保持不变且未触发扫描。M3.2 尚未整体完成，内嵌文字轨、primary / secondary 播放界面和失效重定位仍属于后续切片。详见 [`records/M3_CONTENT_UNIT_VALIDATION.md`](records/M3_CONTENT_UNIT_VALIDATION.md)。
+状态：稳定内容单元与文字轨目录代码已完成。早期 v4→v5 原位升级和旧关联保留结果仅作为历史工程记录保留；version 6 已删除 `SubtitleAssociation`、Legacy 轨和对应迁移路径。详见 [`records/M3_CONTENT_UNIT_VALIDATION.md`](records/M3_CONTENT_UNIT_VALIDATION.md)。
 
 #### M3.2c 第三实现切片
 
@@ -651,7 +651,7 @@ ui        首次体验、Home、Player 和主题
 6. 当前媒体 URI 失效时显示可恢复状态；重新定位到等价媒体后重建内嵌轨，并保留内容关系、外挂轨和主次选择；
 7. Media3 在 seek、轨道刷新和 `STATE_READY` 之间发生事件重排时，同媒体同轨的当前 cue 不得被后到的状态刷新清空。
 
-状态：已完成代码、自动化检查与 Android 13 真机验收。30 秒合成媒体覆盖两条内嵌 SRT、一个外挂 SRT、Normal / Glow 双轨、内嵌轨互斥、冷启动恢复、URI 失效与等价文件重定位；原有 253 个目录项、95 条收录决定和 2 条旧字幕关联保持不变。详见 [`records/M3_TEXT_TRACK_VALIDATION.md`](records/M3_TEXT_TRACK_VALIDATION.md)。这不是 Golden Session，也不替代 Android 14+、真实长内容、后台系统控制和夜间连续使用验证。
+状态：已完成代码、自动化检查与 Android 13 真机验收。30 秒合成媒体覆盖两条内嵌 SRT、一个外挂 SRT、Normal / Glow 双轨、内嵌轨互斥、冷启动恢复、URI 失效与等价文件重定位。早期夹具数据保留结果不构成 version 6 的兼容承诺；详见 [`records/M3_TEXT_TRACK_VALIDATION.md`](records/M3_TEXT_TRACK_VALIDATION.md)。这不是 Golden Session，也不替代 Android 14+、真实长内容、后台系统控制和夜间连续使用验证。
 
 #### M3.2d 第四实现切片
 
@@ -663,12 +663,12 @@ ui        首次体验、Home、Player 和主题
 4. 将内容稳定 ID 与当前 URI locator 分离；等价 SAF 文档身份或用户明确重新定位可以为已有内容增加 locator，文件名、大小和时长等弱信号不能独立触发静默合并；
 5. 单文件与 Folder Source 若解析为同一内容，必须复用同一文字轨目录、手动选择、拒绝决定和 offset；
 6. 刷新或移除 Source 只更新 locator 和访问状态；只要内容仍被 Recent、Collection 或 Active Session 引用，就保留内容 ID、手动文字轨和用户决定，并在需要时显示失效或重新定位状态；
-7. 旧 `SubtitleAssociation`、导入草稿和 Last Session 中的字幕引用只作为非破坏性迁移输入，不得在新内容目录已有明确决定时反向覆盖；
+7. 导入草稿和 Last Session 不持久化字幕引用；启动恢复只从内容目录读取文字轨与选择，不设置旧模型 fallback；
 8. 持久更新必须按用户操作顺序串行化，并覆盖用户在写入后立即返回或进程被重建的情况，不依赖未跟踪的 fire-and-forget 保存。
 
 本切片不删除已实现的 secondary 轨，不引入媒体全文哈希、文件移动或完整的 Home / Source 信息架构重做。“我的内容”列表、Folder Source 表面和新发现 Inbox 仍属于 M3.3。
 
-状态：部分实现。单文件导入现在会在媒体确认后建立内容，手动 primary 字幕的选择与移除会立即写入内容目录；更换媒体按新内容恢复，启动时内容目录优先于旧草稿，目录写入按操作顺序串行化。稳定 ID 与 locator 分离、单文件和 Folder Source 的强身份复用、Source 移除后的 locator 生命周期以及 secondary 草稿入口仍待实现；M3.3 在本切片完成后开始。
+状态：部分实现。单文件导入现在会在媒体确认后建立内容，手动 primary 字幕先完成内容目录写入再更新导入状态；更换媒体按新内容恢复，启动只从内容目录恢复字幕，目录写入按操作顺序串行化。Library version 6 与 Session version 1 只接受当前 schema；`manualItems`、`SubtitleAssociation`、Legacy 轨及 Draft / Last Session 字幕快照已经删除。稳定 ID 与 locator 分离、单文件和 Folder Source 的强身份复用、Source 移除后的 locator 生命周期以及 secondary 草稿入口仍待实现；M3.3 在本切片完成后开始。
 
 ### M3.3 建立我的内容与来源
 
@@ -736,14 +736,14 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 
 - 单文件打开进入 Recent 但不自动进入 Collection；
 - 收录内容和来源快照可以在不扫描的冷启动中恢复；
-- 旧 `manualItems`、收录决定和最后会话迁移不丢失；
+- 当前 Library 与 Session schema 可以冷启动恢复，版本缺失或不匹配时按预发布策略重置；
 - 文字轨匹配和排序；
 - 手动选择压过自动规则；
 - 媒体已确定后手动选择字幕，关闭导入界面、返回 Home、重新打开和进程重建后关系仍保留；
 - 更换媒体不继承上一内容的导入字幕；
 - 具有强等价身份的单文件与 Folder locator 复用同一内容 ID 和文字关系，弱信号相似的不同内容不会被静默合并；
 - 被拒绝候选不会重新自动激活；
-- 旧字幕关联向新模型迁移；
+- 内容目录是字幕关系的唯一持久来源，Draft 与 Last Session 不含字幕副本；
 - Tonight / Queue 切换恢复每项文字关系和进度；
 - Tonight 在进程重建后保留顺序、当前项和未完成项；
 - `lastSurface`、位置、offset 和显示状态恢复；
@@ -754,6 +754,7 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 涉及以下行为必须使用真实 Android 设备：
 
 - 单文件和 SAF Folder 授权；
+- 安装带有不兼容开发 schema 的版本后，应用状态被重置且用户原始媒体文件不受影响；
 - 单文件选择媒体后手动选择字幕，返回 Home 并重新打开后字幕仍属于该内容；
 - 将同一媒体所在 Folder 加入为 Source，再从 Folder 进入时恢复既有手动字幕关系；
 - 选择字幕后立即返回、强制停止并冷启动，关系和当前选择不丢失；

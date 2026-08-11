@@ -1,5 +1,6 @@
 package io.github.zvensmoluya.vortexcue.core.storage
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -11,12 +12,34 @@ internal class OrderedStateWriter<T>(
     private var tail: Job? = null
 
     fun submit(value: T) {
+        enqueue(value)
+    }
+
+    suspend fun submitAndAwait(value: T) {
+        enqueue(value).await()
+    }
+
+    private fun enqueue(value: T): CompletableDeferred<Unit> {
+        val completion = CompletableDeferred<Unit>()
         val previous = tail
-        tail =
+        val job =
             coroutineScope.launch {
                 previous?.join()
-                write(value)
+                try {
+                    write(value)
+                    completion.complete(Unit)
+                } catch (error: Throwable) {
+                    completion.completeExceptionally(error)
+                    throw error
+                }
             }
+        tail = job
+        job.invokeOnCompletion { error ->
+            if (error != null && !completion.isCompleted) {
+                completion.completeExceptionally(error)
+            }
+        }
+        return completion
     }
 
     suspend fun awaitIdle() {

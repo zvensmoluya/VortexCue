@@ -8,6 +8,17 @@ import org.junit.Test
 
 class OrderedStateWriterTest {
     @Test
+    fun `submit and await returns after the value is written`() =
+        runBlocking {
+            var written: Int? = null
+            val writer = OrderedStateWriter<Int>(this) { written = it }
+
+            writer.submitAndAwait(7)
+
+            assertEquals(7, written)
+        }
+
+    @Test
     fun `writes complete in submission order`() =
         runBlocking {
             val firstStarted = CompletableDeferred<Unit>()

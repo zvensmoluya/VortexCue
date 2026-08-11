@@ -87,7 +87,7 @@ class LibraryCatalogTest {
     }
 
     @Test
-    fun `legacy playlist items remain collected`() {
+    fun `playlist items count as collected`() {
         assertEquals(
             setOf("content://media/included", "content://media/playlist"),
             resolveCollectedUriValues(

@@ -76,31 +76,6 @@ internal fun buildSidecarTextTrackCandidate(
     )
 }
 
-internal fun legacyTimedTextTrack(
-    contentId: String,
-    uriValue: String,
-    displayName: String,
-    mimeType: String?,
-    cachedFileName: String?,
-): TimedTextTrack {
-    val locator =
-        TimedTextLocator(
-            uriValue = uriValue,
-            displayName = displayName,
-            mimeType = mimeType,
-            cachedFileName = cachedFileName,
-        )
-    val format = displayName.substringAfterLast('.', "").lowercase().takeIf(String::isNotBlank)
-    val origin = if (format == "lrc") TimedTextOrigin.Lyrics else TimedTextOrigin.Sidecar
-    return TimedTextTrack(
-        stableId = stableTimedTextTrackId(contentId, origin, locator.stableIdentity),
-        origin = origin,
-        locator = locator,
-        format = format,
-        matchBasis = TimedTextMatchBasis.Legacy,
-    )
-}
-
 internal fun manualTimedTextTrack(
     contentId: String,
     source: SubtitleSourceRef,
@@ -298,38 +273,6 @@ internal fun TextTrackCatalogState.withTrackReadiness(
     )
 }
 
-internal fun migratePlayableContentUnits(
-    storedUnits: List<PlayableContentUnit>,
-    mediaSnapshots: List<MediaSourceRef>,
-    legacyAssociations: List<SubtitleAssociation>,
-): List<PlayableContentUnit> {
-    var units = upsertPlayableContentUnits(storedUnits, mediaSnapshots, availability = null)
-    legacyAssociations.groupBy { it.mediaUri.toString() }.forEach { (uriValue, associations) ->
-        val index = units.indexOfFirst { it.media.uri.toString() == uriValue }
-        if (index < 0) return@forEach
-        val unit = units[index]
-        val legacyTracks =
-            associations.map { association ->
-                legacyTimedTextTrack(
-                    contentId = unit.stableId,
-                    uriValue = association.subtitle.uri.toString(),
-                    displayName = association.subtitle.displayName,
-                    mimeType = association.subtitle.mimeType,
-                    cachedFileName = association.subtitle.cachedFileName,
-                )
-            }
-        var catalogState = unit.textCatalogState().mergeTracks(legacyTracks)
-        if (
-            catalogState.activeText.primaryTrackId == null &&
-                catalogState.activeText.primaryMode == TextSelectionMode.Automatic
-        ) {
-            catalogState = catalogState.selectManualPrimary(legacyTracks.firstOrNull())
-        }
-        units = units.toMutableList().also { it[index] = unit.withTextCatalogState(catalogState) }
-    }
-    return units
-}
-
 internal fun upsertPlayableContentUnits(
     existing: List<PlayableContentUnit>,
     mediaSnapshots: List<MediaSourceRef>,
@@ -449,15 +392,6 @@ internal fun LibraryConfig.relinkMedia(
             playlists.map { playlist ->
                 playlist.copy(items = playlist.items.replaceMedia(previous, replacement))
             },
-        subtitleAssociations =
-            subtitleAssociations
-                .map { association ->
-                    if (association.mediaUri == previous.uri) {
-                        association.copy(mediaUri = replacement.uri)
-                    } else {
-                        association
-                    }
-                }.distinctBy { it.mediaUri.toString() to it.subtitle.uri.toString() },
         includedUris = updatedIncluded,
         ignoredUris = updatedIgnored,
     )
@@ -580,24 +514,6 @@ internal fun LibraryConfig.withTextTrackReadiness(
 internal fun LibraryConfig.withoutContentUris(uriValues: Set<String>): LibraryConfig =
     copy(contentUnits = contentUnits.filterNot { it.media.uri.toString() in uriValues })
 
-internal fun LibraryConfig.activePrimarySubtitleSource(
-    media: MediaSourceRef,
-): SubtitleSourceRef? {
-    val unit = contentUnitFor(media)
-    if (unit != null) {
-        if (unit.activeText.primaryTrackId != null) {
-            return activeTextTrack(media, TextTrackSlot.Primary)?.toSubtitleSourceRef()
-        }
-        if (unit.activeText.primaryMode == TextSelectionMode.Manual) return null
-    }
-    return subtitleAssociations.firstOrNull { it.mediaUri == media.uri }?.subtitle
-}
-
-internal fun ActiveTextSelection.allowsLegacyDraftPrimaryMigration(): Boolean =
-    primaryTrackId == null &&
-        primaryMode == TextSelectionMode.Automatic &&
-        rejectedTrackIds.isEmpty()
-
 internal fun LibraryConfig.contentUnitFor(media: MediaSourceRef): PlayableContentUnit? =
     contentUnits.firstOrNull { it.media.uri == media.uri }
 
@@ -700,7 +616,7 @@ private fun TimedTextTrack.mergeMetadata(incoming: TimedTextTrack): TimedTextTra
         label = incoming.label ?: label,
         roles = (roles + incoming.roles).distinct(),
         matchBasis =
-            if (matchBasis in setOf(TimedTextMatchBasis.UserSelected, TimedTextMatchBasis.Legacy)) {
+            if (matchBasis == TimedTextMatchBasis.UserSelected) {
                 matchBasis
             } else {
                 incoming.matchBasis
@@ -789,11 +705,10 @@ private fun sortTimedTextTracks(
 private fun timedTextTrackRank(track: TimedTextTrack): Int =
     when {
         track.matchBasis == TimedTextMatchBasis.UserSelected -> 0
-        track.matchBasis == TimedTextMatchBasis.Legacy -> 1
-        track.origin == TimedTextOrigin.Embedded && TimedTextRole.Default in track.roles -> 2
-        track.matchBasis == TimedTextMatchBasis.ExactStem -> 3
-        track.matchBasis == TimedTextMatchBasis.LanguageSuffix -> 4
-        else -> 5
+        track.origin == TimedTextOrigin.Embedded && TimedTextRole.Default in track.roles -> 1
+        track.matchBasis == TimedTextMatchBasis.ExactStem -> 2
+        track.matchBasis == TimedTextMatchBasis.LanguageSuffix -> 3
+        else -> 4
     }
 
 private fun timedTextRole(value: String): TimedTextRole? =

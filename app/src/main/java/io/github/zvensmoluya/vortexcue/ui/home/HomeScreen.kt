@@ -1744,7 +1744,7 @@ private fun MediaLibraryState.hasSuggestedSubtitleFor(media: MediaSourceRef): Bo
         config.hasTimedTextTracks(media)
 
 private fun MediaLibraryState.hasSubtitleFor(media: MediaSourceRef): Boolean =
-    config.activePrimarySubtitleSource(media) != null
+    config.activeTextTrack(media, TextTrackSlot.Primary)?.toSubtitleSourceRef() != null
 
 private fun collectionDetail(items: List<MediaSourceRef>): String {
     val audioCount = items.count { it.kind == MediaKind.Audio }

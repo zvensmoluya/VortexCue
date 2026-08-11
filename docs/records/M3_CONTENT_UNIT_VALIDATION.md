@@ -1,5 +1,7 @@
 # M3.2b 稳定内容单元与文字轨目录真机验收
 
+> 历史记录：本文记录当时开发 schema 的迁移演练，不构成当前兼容承诺。自 Library version 6 起，首个正式 release 前只支持当前 schema；`SubtitleAssociation`、Legacy 轨及 v4→v5 迁移代码已删除。
+
 > 日期：2026-08-10
 >
 > 设备：Xiaomi M2012K11AC，Android 13 / API 33，1080 × 2400

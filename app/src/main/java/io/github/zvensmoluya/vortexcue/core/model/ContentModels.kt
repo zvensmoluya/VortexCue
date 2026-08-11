@@ -27,7 +27,6 @@ enum class TimedTextMatchBasis {
     ExactStem,
     LanguageSuffix,
     EmbeddedMetadata,
-    Legacy,
 }
 
 enum class TimedTextReadiness {

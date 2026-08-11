@@ -104,7 +104,7 @@ internal object ContentUnitJson {
             matchBasis =
                 enumValueOrDefault(
                     json.optString("matchBasis"),
-                    TimedTextMatchBasis.Legacy,
+                    TimedTextMatchBasis.UserSelected,
                 ),
             readiness =
                 enumValueOrDefault(

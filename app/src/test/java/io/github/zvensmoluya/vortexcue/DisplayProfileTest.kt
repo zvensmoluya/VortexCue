@@ -6,7 +6,7 @@ import org.junit.Test
 
 class DisplayProfileTest {
     @Test
-    fun `restores legacy preset when independent values are absent`() {
+    fun `uses named preset when independent values are absent`() {
         val restored =
             DisplayProfile.restore(
                 name = DisplayProfile.Soft.name,
