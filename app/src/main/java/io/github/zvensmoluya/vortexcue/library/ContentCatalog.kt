@@ -661,6 +661,9 @@ internal fun LibraryConfig.contentUnitFor(media: MediaSourceRef): PlayableConten
         }
     }
 
+internal fun LibraryConfig.resolveActiveMedia(media: MediaSourceRef): MediaSourceRef =
+    contentUnitFor(media)?.media ?: media
+
 internal fun LibraryConfig.activeTextTrack(
     media: MediaSourceRef,
     slot: TextTrackSlot,

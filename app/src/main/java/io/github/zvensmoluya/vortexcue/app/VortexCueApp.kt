@@ -685,16 +685,21 @@ fun VortexCueApp(
 
         val storedLast = stored.lastSession
         if (storedLast != null) {
+            val restoredConfig = libraryStateHolder.state.config
+            val restoredMedia = restoredConfig.resolveActiveMedia(storedLast.media)
+            val restoredQueue =
+                storedLast.queue
+                    .map(restoredConfig::resolveActiveMedia)
+                    .ifEmpty { listOf(restoredMedia) }
             val mediaError =
                 runCatching {
-                    ensureMediaReadable(contentResolver, storedLast.media)
+                    ensureMediaReadable(contentResolver, restoredMedia)
                 }.exceptionOrNull()
-            val restoredConfig = libraryStateHolder.state.config
             val primaryTrack =
-                restoredConfig.activeTextTrack(storedLast.media, TextTrackSlot.Primary)
+                restoredConfig.activeTextTrack(restoredMedia, TextTrackSlot.Primary)
             val primarySource = primaryTrack?.toSubtitleSourceRef()
             val secondaryTrack =
-                restoredConfig.activeTextTrack(storedLast.media, TextTrackSlot.Secondary)
+                restoredConfig.activeTextTrack(restoredMedia, TextTrackSlot.Secondary)
             val secondarySource = secondaryTrack?.toSubtitleSourceRef()
             val primaryResult =
                 primarySource?.let { source ->
@@ -708,7 +713,7 @@ fun VortexCueApp(
                 primaryResult?.fold(
                     onSuccess = { loaded ->
                         libraryStateHolder.updateTextTrackReadiness(
-                            media = storedLast.media,
+                            media = restoredMedia,
                             trackId = track.stableId,
                             readiness = TimedTextReadiness.Ready,
                             resolvedSource = loaded.source,
@@ -717,7 +722,7 @@ fun VortexCueApp(
                     onFailure = { error ->
                         val failure = subtitleFailure(error)
                         libraryStateHolder.updateTextTrackReadiness(
-                            media = storedLast.media,
+                            media = restoredMedia,
                             trackId = track.stableId,
                             readiness = failure.readiness,
                             failureMessage = failure.message,
@@ -729,7 +734,7 @@ fun VortexCueApp(
                 secondaryResult?.fold(
                     onSuccess = { loaded ->
                         libraryStateHolder.updateTextTrackReadiness(
-                            media = storedLast.media,
+                            media = restoredMedia,
                             trackId = track.stableId,
                             readiness = TimedTextReadiness.Ready,
                             resolvedSource = loaded.source,
@@ -738,7 +743,7 @@ fun VortexCueApp(
                     onFailure = { error ->
                         val failure = subtitleFailure(error)
                         libraryStateHolder.updateTextTrackReadiness(
-                            media = storedLast.media,
+                            media = restoredMedia,
                             trackId = track.stableId,
                             readiness = failure.readiness,
                             failureMessage = failure.message,
@@ -752,18 +757,18 @@ fun VortexCueApp(
                 RestorableSession(
                     session =
                         ActiveSession(
-                            media = storedLast.media,
+                            media = restoredMedia,
                             subtitle = loadedSubtitle,
                             secondarySubtitle = loadedSecondarySubtitle,
                             subtitleOffsetMs =
-                                restoredConfig.subtitleOffsetFor(storedLast.media),
+                                restoredConfig.subtitleOffsetFor(restoredMedia),
                         ),
                     positionMs = storedLast.positionMs,
                     durationMs = storedLast.durationMs,
                     playbackSpeed = storedLast.playbackSpeed,
-                    queue = storedLast.queue,
+                    queue = restoredQueue,
                     currentIndex =
-                        storedLast.currentIndex.coerceIn(storedLast.queue.indices),
+                        storedLast.currentIndex.coerceIn(restoredQueue.indices),
                     shuffleEnabled = storedLast.shuffleEnabled,
                     repeatMode = storedLast.repeatMode,
                     lastSurface = storedLast.lastSurface,
@@ -773,7 +778,7 @@ fun VortexCueApp(
                         } ?: MediaAvailability.Ready,
                 )
             libraryStateHolder.updateMediaAvailability(
-                storedLast.media,
+                restoredMedia,
                 if (mediaError == null) {
                     ContentAvailability.Available
                 } else {
@@ -781,14 +786,15 @@ fun VortexCueApp(
                 },
             )
             lastSession = restored
-            if (initialSession?.media?.uri == storedLast.media.uri) {
+            sessionStore.saveLastSession(restored)
+            if (initialSession?.let { restoredConfig.sameContent(it.media, restoredMedia) } == true) {
                 if (mediaError == null) {
                     activeSession =
                         initialSession.copy(
                             subtitle = loadedSubtitle,
                             secondarySubtitle = loadedSecondarySubtitle,
                             subtitleOffsetMs =
-                                restoredConfig.subtitleOffsetFor(storedLast.media),
+                                restoredConfig.subtitleOffsetFor(restoredMedia),
                         )
                     player.setPlaybackSpeed(storedLast.playbackSpeed)
                     playerSurface =

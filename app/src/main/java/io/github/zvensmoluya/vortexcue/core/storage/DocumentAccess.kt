@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.provider.DocumentsContract
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 
@@ -26,6 +27,38 @@ fun ContentResolver.displayName(uri: Uri): String {
             }
         }.getOrNull()
     return name?.takeIf(String::isNotBlank) ?: uri.lastPathSegment ?: "未命名文件"
+}
+
+fun ContentResolver.treeDisplayName(uri: Uri): String {
+    val documentId =
+        runCatching { DocumentsContract.getTreeDocumentId(uri) }
+            .getOrNull()
+            ?.let(Uri::decode)
+    return readableDocumentTreeName(
+        queriedName = displayName(uri).let(Uri::decode),
+        documentId = documentId,
+    )
+}
+
+internal fun readableDocumentTreeName(
+    queriedName: String?,
+    documentId: String?,
+): String {
+    val query = queriedName?.trim().orEmpty()
+    val decodedDocumentId = documentId?.trim().orEmpty()
+    val fallback =
+        decodedDocumentId
+            .substringAfterLast('/')
+            .substringAfterLast(':')
+            .takeIf(String::isNotBlank)
+    return if (
+        query.isBlank() ||
+            (decodedDocumentId.isNotBlank() && query == decodedDocumentId)
+    ) {
+        fallback ?: query.ifBlank { "已授权文件夹" }
+    } else {
+        query
+    }
 }
 
 fun ContentResolver.readSubtitleBytes(uri: Uri): ByteArray {

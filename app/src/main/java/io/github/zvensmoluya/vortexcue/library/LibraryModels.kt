@@ -79,6 +79,20 @@ data class LibraryScanBatch(
     val subtitleSuggestions: List<TimedTextTrackCandidate> = emptyList(),
 )
 
+internal data class LibraryScanScope(
+    val includeSystemLibrary: Boolean,
+    val folderIds: Set<String>?,
+) {
+    fun includesFolder(folderId: String): Boolean = folderIds?.contains(folderId) != false
+
+    companion object {
+        val All = LibraryScanScope(includeSystemLibrary = true, folderIds = null)
+
+        fun folder(folderId: String) =
+            LibraryScanScope(includeSystemLibrary = false, folderIds = setOf(folderId))
+    }
+}
+
 object LibrarySourceIds {
     const val SystemLibrary = "system-library"
     const val LooseFiles = "loose-files"

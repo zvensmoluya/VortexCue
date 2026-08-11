@@ -19,6 +19,7 @@ import io.github.zvensmoluya.vortexcue.core.model.stableMediaLocatorId
 import io.github.zvensmoluya.vortexcue.core.storage.displayName
 import io.github.zvensmoluya.vortexcue.core.storage.OrderedStateWriter
 import io.github.zvensmoluya.vortexcue.core.storage.persistReadPermission
+import io.github.zvensmoluya.vortexcue.core.storage.treeDisplayName
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -62,6 +63,13 @@ internal class LibraryStateHolder(
     }
 
     fun scan(config: LibraryConfig = state.config) {
+        startScan(config, LibraryScanScope.All)
+    }
+
+    private fun startScan(
+        config: LibraryConfig,
+        scope: LibraryScanScope,
+    ) {
         scanRequestId += 1L
         val requestId = scanRequestId
         scanJob?.cancel()
@@ -81,7 +89,7 @@ internal class LibraryStateHolder(
             coroutineScope.launch {
                 val scanned = mutableListOf<MediaSourceRef>()
                 val sources = mutableListOf<LibrarySourceState>()
-                if (hasSystemAccess) {
+                if (scope.includeSystemLibrary && hasSystemAccess) {
                     val audioResult =
                         if (hasAudioAccess) runCatching { scanner.scanSystemAudio() }
                         else Result.success(emptyList())
@@ -108,7 +116,12 @@ internal class LibraryStateHolder(
                             id = LibrarySourceIds.SystemLibrary,
                             kind = LibrarySourceKind.SystemLibrary,
                             displayName = "设备媒体库",
-                            hasAccess = false,
+                            itemCount =
+                                config.catalogItems.count {
+                                    it.sourceId == LibrarySourceIds.SystemLibrary
+                                },
+                            hasAccess = hasSystemAccess,
+                            isScanned = false,
                         )
                 }
 
@@ -116,6 +129,17 @@ internal class LibraryStateHolder(
                 val folderScanResults =
                     mutableMapOf<String, Pair<Boolean, Set<String>>>()
                 config.folders.forEach { folder ->
+                    if (!scope.includesFolder(folder.id)) {
+                        sources +=
+                            LibrarySourceState(
+                                id = folder.id,
+                                kind = LibrarySourceKind.Folder,
+                                displayName = folder.displayName,
+                                itemCount = config.catalogItems.count { it.sourceId == folder.id },
+                                isScanned = false,
+                            )
+                        return@forEach
+                    }
                     val result = runCatching { scanner.scanFolder(folder) }
                     val batch = result.getOrDefault(LibraryScanBatch())
                     scanned += batch.media
@@ -164,6 +188,11 @@ internal class LibraryStateHolder(
                 val latestConfig = state.config
                 val successfullyScannedFolderIds =
                     folderScanResults.filterValues { it.first }.keys
+                val previouslySuggestedMediaUris =
+                    latestConfig.catalogItems
+                        .filter { it.sourceId in successfullyScannedFolderIds }
+                        .map { it.uri.toString() }
+                        .toSet()
                 val retainedCatalogItems =
                     latestConfig.catalogItems.filterNot {
                         it.sourceId?.let(successfullyScannedFolderIds::contains) == true
@@ -192,6 +221,11 @@ internal class LibraryStateHolder(
                         fallback = updatedConfig.retainedMediaSnapshots(),
                     )
                 val partition = partitionLibrary(catalogItems, updatedConfig)
+                val updatedSuggestions =
+                    (state.suggestedTextTracks.filterNot {
+                        it.mediaUriValue in previouslySuggestedMediaUris
+                    } + subtitleSuggestions)
+                        .distinctBy { "${it.mediaUriValue}|${it.track.stableId}" }
                 state =
                     state.copy(
                         items = partition.included,
@@ -199,7 +233,7 @@ internal class LibraryStateHolder(
                         ignoredItems = partition.ignored,
                         config = updatedConfig,
                         sources = sources,
-                        suggestedTextTracks = subtitleSuggestions,
+                        suggestedTextTracks = updatedSuggestions,
                         isLoading = false,
                         hasAudioAccess = hasAudioAccess,
                         videoAccess = videoAccess,
@@ -278,12 +312,12 @@ internal class LibraryStateHolder(
 
     fun addFolder(uri: Uri) {
         contentResolver.persistReadPermission(uri)
-        val folder = LibraryFolderRef(uri, contentResolver.displayName(uri))
+        val folder = LibraryFolderRef(uri, contentResolver.treeDisplayName(uri))
         val config = state.config
-        updateConfig(
-            config.copy(folders = listOf(folder) + config.folders.filterNot { it.uri == uri }),
-            rescan = true,
-        )
+        val updatedConfig =
+            config.copy(folders = listOf(folder) + config.folders.filterNot { it.uri == uri })
+        updateConfig(updatedConfig)
+        startScan(updatedConfig, LibraryScanScope.folder(folder.id))
     }
 
     fun removeFolder(folderId: String) {
@@ -301,7 +335,7 @@ internal class LibraryStateHolder(
                 .filter { it.sourceId == folderId }
         val removedUris = removedItems.map { it.uri.toString() }.toSet()
         val retainedUris = config.retainedContentUriValues()
-        updateConfig(
+        val updatedConfig =
             config.copy(
                 folders = config.folders.filterNot { it.id == folderId },
                 catalogItems = config.catalogItems.filterNot { it.sourceId == folderId },
@@ -311,9 +345,16 @@ internal class LibraryStateHolder(
                         shortcut.type == LibraryShortcutType.Folder &&
                             shortcut.key.startsWith("$folderId|")
                     },
-            ).withSourceRemoved(folderId, retainedUris),
-            rescan = true,
+            ).withSourceRemoved(folderId, retainedUris)
+        updateConfig(
+            updatedConfig,
+            repartition = true,
         )
+        state =
+            state.copy(
+                sources = state.sources.filterNot { it.id == folderId },
+                errorMessage = null,
+            )
     }
 
     fun clearLooseFiles() {

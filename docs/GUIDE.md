@@ -668,7 +668,7 @@ ui        首次体验、Home、Player 和主题
 
 本切片不删除已实现的 secondary 轨，不引入媒体全文哈希、文件移动或完整的 Home / Source 信息架构重做。“我的内容”列表、Folder Source 表面和新发现 Inbox 仍属于 M3.3。
 
-状态：代码实现完成，真机补充验证待执行。单文件导入现在会在媒体确认后建立内容，导入草稿可分别选择、移除和并行读取可选 primary / secondary 外挂字幕；每次手动选择先完成内容目录写入再更新草稿状态，同一字幕文件不会同时占用两个显示槽。更换媒体按新内容恢复，启动只从内容目录恢复字幕，目录写入按操作顺序串行化。Library version 7 将 `PlayableContentUnit` 改为稳定内容 ID、`1..N` 个媒体 locator 与 active locator；SAF authority + document ID 作为强等价身份，单文件 URI 与 Tree URI 可以复用文字轨、选择和 offset，文件名、大小与时长不参与静默合并。明确重新定位只增加 locator，不再更换内容或文字轨 ID；Folder 刷新与移除只更新 locator 可用性，仍被 Recent、Collection、Playlist 或当前会话引用的内容事实继续保留。Session version 2 不再单独持久化 offset。相关代码与领域单元测试已完成，真机交叉入口、双草稿字幕、授权移除和进程重建仍待验证；M3.3 可以开始。
+状态：代码实现、自动化检查与 Android 13 真机验收完成。单文件导入现在会在媒体确认后建立内容，导入草稿可分别选择、移除和并行读取可选 primary / secondary 外挂字幕；每次手动选择先完成内容目录写入再更新草稿状态，同一字幕文件不会同时占用两个显示槽。更换媒体按新内容恢复，启动只从内容目录恢复字幕，目录写入按操作顺序串行化。Library version 7 将 `PlayableContentUnit` 改为稳定内容 ID、`1..N` 个媒体 locator 与 active locator；SAF authority + document ID 作为强等价身份，单文件 URI 与 Tree URI 可以复用文字轨、选择和 offset，文件名、大小与时长不参与静默合并。明确重新定位只增加 locator，不再更换内容或文字轨 ID；Folder 刷新与移除只更新 locator 可用性，仍被 Recent、Collection、Playlist 或当前会话引用的内容事实继续保留。Session version 2 不再单独持久化 offset。详见 [`records/M3_IMPORT_HOME_VALIDATION.md`](records/M3_IMPORT_HOME_VALIDATION.md)。
 
 ### M3.3 建立我的内容与来源
 
@@ -694,7 +694,7 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 6. “新发现”和“来源”从 Home 直接进入各自页面，已忽略内容留在“新发现”的次级入口，设备媒体库只在来源页请求或刷新；
 7. 相同 `PlayableContentUnit` 在 Home、已收录、最近和搜索中只显示一次，并使用当前 active locator；不可用条目保留可见状态。
 
-状态：代码实现与自动化检查已完成，真机 UI 和系统选择器往返验证待执行。M3.3 尚未结束；Folder 扫描结果直接播放、逐项与批量忽略，以及单个 Source 的进入、刷新和状态细节继续留在后续切片。
+状态：代码实现、自动化检查与 Android 13 真机 UI / 系统选择器往返验证完成。M3.3 尚未结束；Folder 扫描结果直接播放、逐项与批量忽略，以及单个 Source 的进入、刷新和状态细节继续留在后续切片。
 
 ### M3.4 建立今晚
 
