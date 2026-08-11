@@ -584,7 +584,7 @@ ui        首次体验、Home、Player 和主题
 1. 以本文替换“资源库优先”和“资源库仅是底层支撑”两个不完整极端；
 2. 还原并记录一次产生强烈正向体验的 Golden Session；
 3. Golden Session 至少记录近似版本、内容类型、文字轨、单双语、亮度、设备、距离、环境光和退出后的感受；
-4. 真机验证开始时建立 M3 记录，不把计划预先写成“已验证”。
+4. 真机验证开始时建立 M3 记录，不把计划预先写成“已验证”；设备前置检查、厂商差异和证据规则遵循 [`records/ANDROID_DEVICE_VALIDATION.md`](records/ANDROID_DEVICE_VALIDATION.md)。
 
 ### M3.1 恢复核心路径
 
@@ -766,6 +766,8 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 - 广泛扫描不会由普通冷启动触发。
 
 ### 真机验证
+
+通用设备前置检查、厂商差异、SAF 边界、生命周期回归和夹具清理规则见 [`records/ANDROID_DEVICE_VALIDATION.md`](records/ANDROID_DEVICE_VALIDATION.md)；本轮 MIUI 观察见 [`records/MIUI_VALIDATION_NOTES.md`](records/MIUI_VALIDATION_NOTES.md)。
 
 涉及以下行为必须使用真实 Android 设备：
 
