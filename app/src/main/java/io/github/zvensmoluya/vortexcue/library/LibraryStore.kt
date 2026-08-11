@@ -103,7 +103,7 @@ class LibraryStore(context: Context) {
         )
 
     private companion object {
-        const val CurrentVersion = 6
+        const val CurrentVersion = 7
         val StateKey = stringPreferencesKey("state_json")
     }
 }

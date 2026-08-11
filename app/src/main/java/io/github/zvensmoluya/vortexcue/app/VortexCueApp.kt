@@ -167,7 +167,10 @@ fun VortexCueApp(
     }
 
     fun currentRestorableSession(session: ActiveSession): RestorableSession {
-        val previous = lastSession?.takeIf { it.session.media.uri == session.media.uri }
+        val previous =
+            lastSession?.takeIf {
+                libraryStateHolder.state.config.sameContent(it.session.media, session.media)
+            }
         val queue =
             (0 until player.mediaItemCount)
                 .mapNotNull { index ->
@@ -686,7 +689,8 @@ fun VortexCueApp(
                             media = storedLast.media,
                             subtitle = loadedSubtitle,
                             secondarySubtitle = loadedSecondarySubtitle,
-                            subtitleOffsetMs = storedLast.subtitleOffsetMs,
+                            subtitleOffsetMs =
+                                restoredConfig.subtitleOffsetFor(storedLast.media),
                         ),
                     positionMs = storedLast.positionMs,
                     durationMs = storedLast.durationMs,
@@ -717,7 +721,8 @@ fun VortexCueApp(
                         initialSession.copy(
                             subtitle = loadedSubtitle,
                             secondarySubtitle = loadedSecondarySubtitle,
-                            subtitleOffsetMs = storedLast.subtitleOffsetMs,
+                            subtitleOffsetMs =
+                                restoredConfig.subtitleOffsetFor(storedLast.media),
                         )
                     player.setPlaybackSpeed(storedLast.playbackSpeed)
                     playerSurface =
@@ -879,12 +884,20 @@ fun VortexCueApp(
                             ?: lastSession?.queue?.firstOrNull { it.uri == decoded.uri }
                             ?: decoded
                     val updated =
-                        if (session?.media?.uri == media.uri) {
+                        if (
+                            session != null &&
+                                libraryStateHolder.state.config.sameContent(session.media, media)
+                        ) {
                             session.copy(media = media)
                         } else {
                             cancelTrackLoad(TextTrackSlot.Primary)
                             cancelTrackLoad(TextTrackSlot.Secondary)
-                            ActiveSession(media = media, subtitle = null)
+                            ActiveSession(
+                                media = media,
+                                subtitle = null,
+                                subtitleOffsetMs =
+                                    libraryStateHolder.state.config.subtitleOffsetFor(media),
+                            )
                         }
                     activeSession = updated
                     draft = updated.toDraft()
@@ -1041,17 +1054,32 @@ fun VortexCueApp(
                                 media = media,
                                 subtitle =
                                     activeSession
-                                        ?.takeIf { it.media.uri == media.uri }
+                                        ?.takeIf {
+                                            libraryStateHolder.state.config.sameContent(
+                                                it.media,
+                                                media,
+                                            )
+                                        }
                                         ?.subtitle,
                                 secondarySubtitle =
                                     activeSession
-                                        ?.takeIf { it.media.uri == media.uri }
+                                        ?.takeIf {
+                                            libraryStateHolder.state.config.sameContent(
+                                                it.media,
+                                                media,
+                                            )
+                                        }
                                         ?.secondarySubtitle,
                                 subtitleOffsetMs =
                                     activeSession
-                                        ?.takeIf { it.media.uri == media.uri }
+                                        ?.takeIf {
+                                            libraryStateHolder.state.config.sameContent(
+                                                it.media,
+                                                media,
+                                            )
+                                        }
                                         ?.subtitleOffsetMs
-                                        ?: 0L,
+                                        ?: libraryStateHolder.state.config.subtitleOffsetFor(media),
                             )
                         activeSession = session
                         draft = session.toDraft()
@@ -1091,7 +1119,12 @@ fun VortexCueApp(
                         )
                     }
                     draft = draft.copy(subtitle = DraftSubtitle.None)
-                    if (media != null && activeSession?.media?.uri == media.uri) {
+                    if (
+                        media != null &&
+                            activeSession?.let {
+                                libraryStateHolder.state.config.sameContent(it.media, media)
+                            } == true
+                    ) {
                         restoreAssociatedTextTracks(media)
                     }
                 },
@@ -1119,16 +1152,23 @@ fun VortexCueApp(
                         }
                         val preservedOffsetMs =
                             activeSession
-                                ?.takeIf { it.media.uri == media.uri }
+                                ?.takeIf {
+                                    libraryStateHolder.state.config.sameContent(it.media, media)
+                                }
                                 ?.subtitleOffsetMs
-                                ?: 0L
+                                ?: libraryStateHolder.state.config.subtitleOffsetFor(media)
                         val applied =
                             ActiveSession(
                                 media = media,
                                 subtitle = loadedSubtitle,
                                 secondarySubtitle =
                                     activeSession
-                                        ?.takeIf { it.media.uri == media.uri }
+                                        ?.takeIf {
+                                            libraryStateHolder.state.config.sameContent(
+                                                it.media,
+                                                media,
+                                            )
+                                        }
                                         ?.secondarySubtitle,
                                 subtitleOffsetMs = preservedOffsetMs,
                             )
@@ -1150,14 +1190,22 @@ fun VortexCueApp(
                     if (
                         saved?.mediaAvailability is MediaAvailability.Unavailable &&
                             (currentSession == null ||
-                                currentSession.media.uri == saved.session.media.uri)
+                                libraryStateHolder.state.config.sameContent(
+                                    currentSession.media,
+                                    saved.session.media,
+                                ))
                     ) {
                         mediaPickTarget = MediaPickTarget.LastSession
                         mediaPicker.launch(arrayOf("audio/*", "video/*"))
                     } else if (currentSession != null) {
                         val lastSurface =
                             saved
-                                ?.takeIf { it.session.media.uri == currentSession.media.uri }
+                                ?.takeIf {
+                                    libraryStateHolder.state.config.sameContent(
+                                        it.session.media,
+                                        currentSession.media,
+                                    )
+                                }
                                 ?.lastSurface
                                 ?: PlayerSurface.Normal
                         playerSurface =
@@ -1264,6 +1312,7 @@ fun VortexCueApp(
                     onSubtitleOffsetChanged = { offsetMs ->
                         val updated = session.copy(subtitleOffsetMs = offsetMs)
                         activeSession = updated
+                        libraryStateHolder.updateSubtitleOffset(session.media, offsetMs)
                         persistSession(updated)
                     },
                     onSetSleepTimer = { durationMs ->

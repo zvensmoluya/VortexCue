@@ -15,6 +15,7 @@ import io.github.zvensmoluya.vortexcue.core.model.TextTrackSlot
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextReadiness
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextTrack
 import io.github.zvensmoluya.vortexcue.core.model.displayTitle
+import io.github.zvensmoluya.vortexcue.core.model.stableMediaLocatorId
 import io.github.zvensmoluya.vortexcue.core.storage.displayName
 import io.github.zvensmoluya.vortexcue.core.storage.OrderedStateWriter
 import io.github.zvensmoluya.vortexcue.core.storage.persistReadPermission
@@ -112,11 +113,15 @@ internal class LibraryStateHolder(
                 }
 
                 val subtitleSuggestions = mutableListOf<TimedTextTrackCandidate>()
+                val folderScanResults =
+                    mutableMapOf<String, Pair<Boolean, Set<String>>>()
                 config.folders.forEach { folder ->
                     val result = runCatching { scanner.scanFolder(folder) }
                     val batch = result.getOrDefault(LibraryScanBatch())
                     scanned += batch.media
                     subtitleSuggestions += batch.subtitleSuggestions
+                    folderScanResults[folder.id] =
+                        result.isSuccess to batch.media.map { it.uri.toString() }.toSet()
                     sources +=
                         LibrarySourceState(
                             id = folder.id,
@@ -154,22 +159,37 @@ internal class LibraryStateHolder(
                 if (requestId != scanRequestId) return@launch
                 val freshItems =
                     scanned
-                        .distinctBy { it.uri.toString() }
+                        .distinctBy { stableMediaLocatorId(it.uri.toString(), it.sourceId) }
                         .sortedBy { it.displayTitle.lowercase() }
                 val latestConfig = state.config
-                val updatedConfig =
+                val successfullyScannedFolderIds =
+                    folderScanResults.filterValues { it.first }.keys
+                val retainedCatalogItems =
+                    latestConfig.catalogItems.filterNot {
+                        it.sourceId?.let(successfullyScannedFolderIds::contains) == true
+                    }
+                var updatedConfig =
                     latestConfig.copy(
                         catalogItems =
                             mergeCatalogItems(
                                 preferred = freshItems,
-                                fallback = latestConfig.catalogItems,
+                                fallback = retainedCatalogItems,
                             ),
                     ).withMediaSnapshots(freshItems, ContentAvailability.Available)
                         .withTimedTextCandidates(subtitleSuggestions)
+                folderScanResults.forEach { (sourceId, scanResult) ->
+                    updatedConfig =
+                        updatedConfig.withSourceScanResult(
+                            sourceId = sourceId,
+                            seenUriValues = scanResult.second,
+                            sourceAvailable = scanResult.first,
+                            retainedUriValues = updatedConfig.retainedContentUriValues(),
+                        )
+                }
                 val catalogItems =
                     mergeCatalogItems(
                         preferred = updatedConfig.catalogItems,
-                        fallback = updatedConfig.playlists.flatMap(LibraryPlaylist::items),
+                        fallback = updatedConfig.retainedMediaSnapshots(),
                     )
                 val partition = partitionLibrary(catalogItems, updatedConfig)
                 state =
@@ -197,22 +217,19 @@ internal class LibraryStateHolder(
             } else {
                 source
             }
-        val membership =
-            LibraryMembershipState(
-                recentUriValues = config.recentItems.map { it.uri.toString() },
-                includedUriValues = config.includedUris,
-                ignoredUriValues = config.ignoredUris,
-            ).recordOpenedUri(
-                uriValue = recentSource.uri.toString(),
-                maxRecentItems = MaxRecentItems,
-            )
-        val recentSourcesByUri =
-            (config.recentItems + recentSource).associateBy { it.uri.toString() }
+        val withMedia =
+            config.withMediaSnapshots(listOf(recentSource), ContentAvailability.Available)
+        val contentId = withMedia.contentUnitFor(recentSource)?.stableId
         val updatedConfig =
-            config.copy(
+            withMedia.copy(
                 recentItems =
-                    membership.recentUriValues.mapNotNull(recentSourcesByUri::get),
-            ).withMediaSnapshots(listOf(recentSource), ContentAvailability.Available)
+                    (listOf(recentSource) +
+                        config.recentItems.filterNot { existing ->
+                            existing.uri == recentSource.uri ||
+                                (contentId != null &&
+                                    withMedia.contentUnitFor(existing)?.stableId == contentId)
+                        }).take(MaxRecentItems),
+            )
         state = state.copy(config = updatedConfig)
         configWriter.submit(updatedConfig)
     }
@@ -226,14 +243,17 @@ internal class LibraryStateHolder(
             }
         val uriValue = collected.uri.toString()
         val config = state.config
+        val withMedia =
+            config.withMediaSnapshots(listOf(collected), ContentAvailability.Available)
+        val relatedUris = withMedia.relatedLocatorUriValues(setOf(uriValue))
         val membership =
             LibraryMembershipState(
                 recentUriValues = config.recentItems.map { it.uri.toString() },
-                includedUriValues = config.includedUris,
-                ignoredUriValues = config.ignoredUris,
+                includedUriValues = config.includedUris.filterNot(relatedUris::contains),
+                ignoredUriValues = config.ignoredUris.filterNot(relatedUris::contains),
             ).collectUri(uriValue)
         updateConfig(
-            config.copy(
+            withMedia.copy(
                 catalogItems =
                     mergeCatalogItems(
                         preferred = listOf(collected),
@@ -247,7 +267,7 @@ internal class LibraryStateHolder(
                     } else {
                         config.homeShortcuts
                     },
-            ).withMediaSnapshots(listOf(collected), ContentAvailability.Available),
+            ),
             repartition = true,
         )
     }
@@ -277,23 +297,21 @@ internal class LibraryStateHolder(
         }
         val removedItems =
             (config.catalogItems + state.allDiscoveredItems())
-                .distinctBy { it.uri.toString() }
+                .distinctBy { stableMediaLocatorId(it.uri.toString(), it.sourceId) }
                 .filter { it.sourceId == folderId }
         val removedUris = removedItems.map { it.uri.toString() }.toSet()
+        val retainedUris = config.retainedContentUriValues()
         updateConfig(
             config.copy(
                 folders = config.folders.filterNot { it.id == folderId },
                 catalogItems = config.catalogItems.filterNot { it.sourceId == folderId },
-                recentItems = config.recentItems.filterNot { it.sourceId == folderId },
-                includedUris = config.includedUris.filterNot(removedUris::contains),
                 ignoredUris = config.ignoredUris.filterNot(removedUris::contains),
                 homeShortcuts =
                     config.homeShortcuts.filterNot { shortcut ->
                         shortcut.type == LibraryShortcutType.Folder &&
                             shortcut.key.startsWith("$folderId|")
                     },
-                playlists = config.playlists.withoutItems(removedUris),
-            ).withoutContentUris(removedUris),
+            ).withSourceRemoved(folderId, retainedUris),
             rescan = true,
         )
     }
@@ -305,25 +323,20 @@ internal class LibraryStateHolder(
                 .filter { it.sourceId == LibrarySourceIds.LooseFiles }
                 .map { it.uri.toString() }
                 .toSet()
+        val retainedUris = config.retainedContentUriValues()
         updateConfig(
             config.copy(
                 catalogItems =
                     config.catalogItems.filterNot {
                         it.sourceId == LibrarySourceIds.LooseFiles
                     },
-                recentItems =
-                    config.recentItems.filterNot {
-                        it.sourceId == LibrarySourceIds.LooseFiles
-                    },
-                includedUris = config.includedUris.filterNot(looseUris::contains),
                 ignoredUris = config.ignoredUris.filterNot(looseUris::contains),
                 homeShortcuts =
                     config.homeShortcuts.filterNot { shortcut ->
                         shortcut.type == LibraryShortcutType.Folder &&
                             shortcut.key.startsWith("${LibrarySourceIds.LooseFiles}|")
                     },
-                playlists = config.playlists.withoutItems(looseUris),
-            ).withoutContentUris(looseUris),
+            ).withSourceRemoved(LibrarySourceIds.LooseFiles, retainedUris),
             rescan = true,
         )
     }
@@ -331,10 +344,12 @@ internal class LibraryStateHolder(
     fun acceptCandidates(uriValues: Set<String>) {
         if (uriValues.isEmpty()) return
         val config = state.config
+        val relatedUris = config.relatedLocatorUriValues(uriValues)
         updateConfig(
             config.copy(
-                includedUris = (config.includedUris + uriValues).distinct(),
-                ignoredUris = config.ignoredUris.filterNot(uriValues::contains),
+                includedUris =
+                    (config.includedUris.filterNot(relatedUris::contains) + uriValues).distinct(),
+                ignoredUris = config.ignoredUris.filterNot(relatedUris::contains),
             ),
             repartition = true,
         )
@@ -343,10 +358,12 @@ internal class LibraryStateHolder(
     fun ignoreCandidates(uriValues: Set<String>) {
         if (uriValues.isEmpty()) return
         val config = state.config
+        val relatedUris = config.relatedLocatorUriValues(uriValues)
         updateConfig(
             config.copy(
-                includedUris = config.includedUris.filterNot(uriValues::contains),
-                ignoredUris = (config.ignoredUris + uriValues).distinct(),
+                includedUris = config.includedUris.filterNot(relatedUris::contains),
+                ignoredUris =
+                    (config.ignoredUris.filterNot(relatedUris::contains) + uriValues).distinct(),
             ),
             repartition = true,
         )
@@ -355,16 +372,17 @@ internal class LibraryStateHolder(
     fun removeIncluded(uriValues: Set<String>) {
         if (uriValues.isEmpty()) return
         val config = state.config
+        val relatedUris = config.relatedLocatorUriValues(uriValues)
         val membership =
             LibraryMembershipState(
                 recentUriValues = config.recentItems.map { it.uri.toString() },
                 includedUriValues = config.includedUris,
                 ignoredUriValues = config.ignoredUris,
-            ).uncollectUris(uriValues)
+            ).uncollectUris(relatedUris)
         updateConfig(
             config.copy(
                 includedUris = membership.includedUriValues,
-                playlists = config.playlists.withoutItems(uriValues),
+                playlists = config.playlists.withoutItems(relatedUris),
             ),
             repartition = true,
         )
@@ -373,8 +391,9 @@ internal class LibraryStateHolder(
     fun restoreIgnored(uriValues: Set<String>) {
         if (uriValues.isEmpty()) return
         val config = state.config
+        val relatedUris = config.relatedLocatorUriValues(uriValues)
         updateConfig(
-            config.copy(ignoredUris = config.ignoredUris.filterNot(uriValues::contains)),
+            config.copy(ignoredUris = config.ignoredUris.filterNot(relatedUris::contains)),
             repartition = true,
         )
     }
@@ -424,7 +443,10 @@ internal class LibraryStateHolder(
         val config = state.config
         val playlists =
             config.playlists.map { playlist ->
-                if (playlist.id != playlistId || playlist.items.any { it.uri == item.uri }) {
+                if (
+                    playlist.id != playlistId ||
+                        playlist.items.any { config.sameContent(it, item) || it.uri == item.uri }
+                ) {
                     playlist
                 } else {
                     playlist.copy(items = playlist.items + item)
@@ -548,6 +570,15 @@ internal class LibraryStateHolder(
         if (updatedConfig != config) updateConfig(updatedConfig)
     }
 
+    fun updateSubtitleOffset(
+        media: MediaSourceRef,
+        offsetMs: Long,
+    ) {
+        val config = state.config
+        val updatedConfig = config.withSubtitleOffset(media, offsetMs)
+        if (updatedConfig != config) updateConfig(updatedConfig)
+    }
+
     fun relinkMedia(
         previous: MediaSourceRef,
         replacement: MediaSourceRef,
@@ -572,7 +603,7 @@ internal class LibraryStateHolder(
                 val catalogItems =
                     mergeCatalogItems(
                         preferred = config.catalogItems,
-                        fallback = config.playlists.flatMap(LibraryPlaylist::items),
+                        fallback = config.retainedMediaSnapshots(),
                     )
                 val partition = partitionLibrary(catalogItems, config)
                 state.copy(

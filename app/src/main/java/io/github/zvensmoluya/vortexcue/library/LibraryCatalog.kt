@@ -1,6 +1,8 @@
 package io.github.zvensmoluya.vortexcue.library
 
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
+import io.github.zvensmoluya.vortexcue.core.model.PlayableContentUnit
+import io.github.zvensmoluya.vortexcue.core.model.stableMediaLocatorId
 
 internal data class LibraryPartition(
     val included: List<MediaSourceRef>,
@@ -78,31 +80,79 @@ internal fun partitionLibrary(
                 },
         )
     val ignoredUris = config.ignoredUris.toSet()
+    val contentItems =
+        discovered
+            .groupBy { media ->
+                config.contentUnitFor(media)?.stableId ?: "uri:${media.uri}"
+            }.values
+            .map { locators ->
+                config.contentUnitFor(locators.first())?.media ?: locators.first()
+            }
     return LibraryPartition(
         included =
-            discovered.filter {
-                decideLibraryUri(it.uri.toString(), explicitUris, ignoredUris) ==
-                    LibraryDecision.Included
+            contentItems.filter {
+                config.decideMedia(it, explicitUris, ignoredUris) == LibraryDecision.Included
             },
         candidates =
-            discovered.filter {
-                decideLibraryUri(it.uri.toString(), explicitUris, ignoredUris) ==
-                    LibraryDecision.Candidate
+            contentItems.filter {
+                config.decideMedia(it, explicitUris, ignoredUris) == LibraryDecision.Candidate
             },
         ignored =
-            discovered.filter {
-                decideLibraryUri(it.uri.toString(), explicitUris, ignoredUris) ==
-                    LibraryDecision.Ignored
+            contentItems.filter {
+                config.decideMedia(it, explicitUris, ignoredUris) == LibraryDecision.Ignored
             },
     )
 }
 
-internal fun LibraryConfig.isCollected(media: MediaSourceRef): Boolean =
-    media.uri.toString() in
+internal fun LibraryConfig.isCollected(media: MediaSourceRef): Boolean {
+    val explicitUris =
         resolveCollectedUriValues(
             includedUriValues = includedUris,
             playlistUriValues = playlists.flatMap { it.items }.map { it.uri.toString() },
         )
+    return decideMedia(media, explicitUris, ignoredUris.toSet()) == LibraryDecision.Included
+}
+
+internal fun LibraryConfig.retainedContentUriValues(): Set<String> =
+    resolveCollectedUriValues(
+        includedUriValues = recentItems.map { it.uri.toString() } + includedUris,
+        playlistUriValues = playlists.flatMap { it.items }.map { it.uri.toString() },
+    )
+
+internal fun LibraryConfig.retainedMediaSnapshots(): List<MediaSourceRef> {
+    val retainedUris = retainedContentUriValues()
+    val locatorSnapshots =
+        contentUnits.flatMap { unit ->
+            unit.mediaLocators
+                .filter { locator -> locator.media.uri.toString() in retainedUris }
+                .map { locator -> locator.media }
+        }
+    return (recentItems + playlists.flatMap(LibraryPlaylist::items) + locatorSnapshots)
+        .distinctBy { it.uri.toString() }
+}
+
+internal fun LibraryConfig.relatedLocatorUriValues(uriValues: Set<String>): Set<String> {
+    val relatedContentIds =
+        contentUnits
+            .filter { unit ->
+                unit.mediaLocators.any { it.media.uri.toString() in uriValues }
+            }.map(PlayableContentUnit::stableId)
+            .toSet()
+    return uriValues +
+        contentUnits
+            .filter { it.stableId in relatedContentIds }
+            .flatMap { unit -> unit.mediaLocators.map { it.media.uri.toString() } }
+}
+
+internal fun LibraryConfig.sameContent(
+    first: MediaSourceRef,
+    second: MediaSourceRef,
+): Boolean {
+    if (first.uri == second.uri) return true
+    val firstUnit = contentUnitFor(first)
+    val secondUnit = contentUnitFor(second)
+    return firstUnit != null && firstUnit.stableId == secondUnit?.stableId
+}
 
 internal fun restoreCachedLibraryState(
     config: LibraryConfig,
@@ -112,11 +162,12 @@ internal fun restoreCachedLibraryState(
     val cachedItems =
         mergeCatalogItems(
             preferred = config.catalogItems,
-            fallback = config.playlists.flatMap(LibraryPlaylist::items),
+            fallback = config.retainedMediaSnapshots(),
         )
     val partition = partitionLibrary(cachedItems, config)
     val hasSystemAccess = hasAudioAccess || videoAccess != VideoLibraryAccess.None
-    val systemItemCount = cachedItems.count { it.sourceId == LibrarySourceIds.SystemLibrary }
+    val systemItemCount =
+        config.catalogItems.count { it.sourceId == LibrarySourceIds.SystemLibrary }
     val sources =
         buildList {
             add(
@@ -135,12 +186,13 @@ internal fun restoreCachedLibraryState(
                         id = folder.id,
                         kind = LibrarySourceKind.Folder,
                         displayName = folder.displayName,
-                        itemCount = cachedItems.count { it.sourceId == folder.id },
+                        itemCount = config.catalogItems.count { it.sourceId == folder.id },
                         isScanned = false,
                     ),
                 )
             }
-            val looseItemCount = cachedItems.count { it.sourceId == LibrarySourceIds.LooseFiles }
+            val looseItemCount =
+                config.catalogItems.count { it.sourceId == LibrarySourceIds.LooseFiles }
             if (looseItemCount > 0) {
                 add(
                     LibrarySourceState(
@@ -170,7 +222,28 @@ internal fun mergeCatalogItems(
     preferred: List<MediaSourceRef>,
     fallback: List<MediaSourceRef>,
 ): List<MediaSourceRef> =
-    (preferred + fallback).distinctBy { it.uri.toString() }
+    (preferred + fallback).distinctBy {
+        stableMediaLocatorId(it.uri.toString(), it.sourceId)
+    }
+
+private fun LibraryConfig.decideMedia(
+    media: MediaSourceRef,
+    explicitUris: Set<String>,
+    ignoredUris: Set<String>,
+): LibraryDecision {
+    val unit = contentUnitFor(media)
+    val isIncluded =
+        media.uri.toString() in explicitUris ||
+            unit?.mediaLocators?.any { it.media.uri.toString() in explicitUris } == true
+    val isIgnored =
+        media.uri.toString() in ignoredUris ||
+            unit?.mediaLocators?.any { it.media.uri.toString() in ignoredUris } == true
+    return when {
+        isIncluded -> LibraryDecision.Included
+        isIgnored -> LibraryDecision.Ignored
+        else -> LibraryDecision.Candidate
+    }
+}
 
 internal fun List<LibraryPlaylist>.withoutItems(
     uriValues: Set<String>,

@@ -23,7 +23,7 @@ internal fun buildEmbeddedTextTrackCandidate(
 ): TimedTextTrackCandidate? {
     if (isGraphicalEmbeddedTextMimeType(metadata.mimeType)) return null
 
-    val contentId = stableContentId(mediaUriValue)
+    val contentId = stableContentId(mediaIdentityKey(mediaUriValue))
     val embeddedTrackId = embeddedTextTrackIdentity(metadata)
     val displayName =
         metadata.label?.takeIf(String::isNotBlank)

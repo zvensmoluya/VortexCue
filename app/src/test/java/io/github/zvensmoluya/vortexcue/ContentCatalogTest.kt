@@ -10,9 +10,11 @@ import org.junit.Test
 class ContentCatalogTest {
     @Test
     fun `content and text ids are deterministic and namespaced`() {
-        val first = stableContentId("content://media/item/1")
-        val repeated = stableContentId("content://media/item/1")
-        val different = stableContentId("content://media/item/2")
+        val firstIdentity = mediaIdentityKey("content://media/item/1")
+        val differentIdentity = mediaIdentityKey("content://media/item/2")
+        val first = stableContentId(firstIdentity)
+        val repeated = stableContentId(firstIdentity)
+        val different = stableContentId(differentIdentity)
         val track =
             stableTimedTextTrackId(
                 contentId = first,
@@ -24,6 +26,85 @@ class ContentCatalogTest {
         assertFalse(first == different)
         assertTrue(first.startsWith("content-"))
         assertTrue(track.startsWith("text-"))
+    }
+
+    @Test
+    fun `document and tree uris share strong identity but remain separate locators`() {
+        val documentUri =
+            "content://com.android.externalstorage.documents/" +
+                "document/primary%3AMovies%2Fsample.mp4"
+        val treeUri =
+            "content://com.android.externalstorage.documents/" +
+                "tree/primary%3AMovies/document/primary%3aMovies%2fsample.mp4"
+
+        val documentIdentity = mediaIdentityKey(documentUri)
+        val treeIdentity = mediaIdentityKey(treeUri)
+
+        assertEquals(documentIdentity, treeIdentity)
+        assertEquals(stableContentId(documentIdentity), stableContentId(treeIdentity))
+        assertFalse(
+            stableMediaLocatorId(documentUri, "loose-files") ==
+                stableMediaLocatorId(treeUri, "folder:movies"),
+        )
+    }
+
+    @Test
+    fun `lookalike uris do not merge without provider identity`() {
+        val first = mediaIdentityKey("content://downloads/files/sample.mp4")
+        val second = mediaIdentityKey("content://archive/files/sample.mp4")
+
+        assertFalse(first == second)
+        assertFalse(stableContentId(first) == stableContentId(second))
+    }
+
+    @Test
+    fun `locator loss keeps referenced content or an available alternative`() {
+        assertTrue(
+            shouldRetainContentAfterLocatorLoss(
+                hasRetainedReference = true,
+                hasAvailableLocator = false,
+            ),
+        )
+        assertTrue(
+            shouldRetainContentAfterLocatorLoss(
+                hasRetainedReference = false,
+                hasAvailableLocator = true,
+            ),
+        )
+        assertFalse(
+            shouldRetainContentAfterLocatorLoss(
+                hasRetainedReference = false,
+                hasAvailableLocator = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `an unavailable active locator falls back without losing the last known route`() {
+        assertEquals(
+            "folder",
+            resolveActiveMediaLocatorId(
+                locatorAvailability =
+                    listOf(
+                        "single" to ContentAvailability.Unavailable,
+                        "folder" to ContentAvailability.Available,
+                    ),
+                currentActiveId = "single",
+                preferredActiveId = null,
+            ),
+        )
+        assertEquals(
+            "single",
+            resolveActiveMediaLocatorId(
+                locatorAvailability =
+                    listOf(
+                        "single" to ContentAvailability.Unavailable,
+                        "folder" to ContentAvailability.Unavailable,
+                    ),
+                currentActiveId = "single",
+                preferredActiveId = null,
+            ),
+        )
     }
 
     @Test
@@ -344,7 +425,7 @@ class ContentCatalogTest {
     }
 
     @Test
-    fun `relinking content rekeys tracks and keeps primary secondary and rejection decisions`() {
+    fun `rekeying a merged catalog keeps primary secondary and rejection decisions`() {
         val primary = track("primary", TimedTextMatchBasis.UserSelected)
         val secondary = track("secondary", TimedTextMatchBasis.LanguageSuffix)
         val rejected = track("rejected", TimedTextMatchBasis.LanguageSuffix)

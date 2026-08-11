@@ -14,25 +14,34 @@ internal object ContentUnitJson {
     private fun encode(unit: PlayableContentUnit): JSONObject =
         JSONObject()
             .put("stableId", unit.stableId)
-            .put("media", MediaSourceJson.encode(unit.media))
-            .putNullable("sourceId", unit.sourceId)
-            .put("availability", unit.availability.name)
+            .put(
+                "mediaLocators",
+                JSONArray().apply { unit.mediaLocators.forEach { put(encodeLocator(it)) } },
+            )
+            .put("activeMediaLocatorId", unit.activeMediaLocatorId)
             .put(
                 "timedTextTracks",
                 JSONArray().apply { unit.timedTextTracks.forEach { put(encodeTrack(it)) } },
             )
             .put("activeText", encodeActiveText(unit.activeText))
+            .put("subtitleOffsetMs", unit.subtitleOffsetMs)
 
     private fun decode(json: JSONObject): PlayableContentUnit {
-        val media = MediaSourceJson.decode(json.getJSONObject("media"))
-        val stableId =
-            json.optString("stableId").ifBlank {
-                stableContentId(media.uri.toString())
-            }
+        val stableId = json.getString("stableId").takeIf(String::isNotBlank)
+            ?: throw IllegalArgumentException("Content ID is empty")
+        val mediaLocators =
+            json.getJSONArray("mediaLocators")
+                .mapObjects(::decodeLocator)
+                .distinctBy(MediaLocator::stableId)
+        val activeMediaLocatorId =
+            json.optString("activeMediaLocatorId")
+                .takeIf { candidate -> mediaLocators.any { it.stableId == candidate } }
+                ?: mediaLocators.firstOrNull()?.stableId
+                ?: throw IllegalArgumentException("Content has no media locator")
         return PlayableContentUnit(
             stableId = stableId,
-            media = media,
-            sourceId = json.nullableString("sourceId") ?: media.sourceId,
+            mediaLocators = mediaLocators,
+            activeMediaLocatorId = activeMediaLocatorId,
             timedTextTracks =
                 json.optJSONArray("timedTextTracks")
                     .mapObjects { decodeTrack(it, stableId) }
@@ -40,6 +49,24 @@ internal object ContentUnitJson {
             activeText =
                 json.optJSONObject("activeText")?.let(::decodeActiveText)
                     ?: ActiveTextSelection(),
+            subtitleOffsetMs =
+                json.optLong("subtitleOffsetMs").coerceIn(-60_000L, 60_000L),
+        )
+    }
+
+    private fun encodeLocator(locator: MediaLocator): JSONObject =
+        JSONObject()
+            .put("stableId", locator.stableId)
+            .put("identityKey", locator.identityKey)
+            .put("media", MediaSourceJson.encode(locator.media))
+            .put("availability", locator.availability.name)
+
+    private fun decodeLocator(json: JSONObject): MediaLocator {
+        val media = MediaSourceJson.decode(json.getJSONObject("media"))
+        return MediaLocator(
+            stableId = json.getString("stableId"),
+            identityKey = json.getString("identityKey"),
+            media = media,
             availability =
                 enumValueOrDefault(
                     json.optString("availability"),

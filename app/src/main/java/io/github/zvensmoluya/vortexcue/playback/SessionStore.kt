@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.first
 import org.json.JSONObject
 
 private val Context.sessionDataStore by preferencesDataStore(name = "session_state")
-private const val CurrentSessionSchemaVersion = 1
+private const val CurrentSessionSchemaVersion = 2
 
 data class StoredAppState(
     val draft: StoredDraft,
@@ -36,7 +36,6 @@ data class StoredLastSession(
     val positionMs: Long,
     val durationMs: Long,
     val playbackSpeed: Float,
-    val subtitleOffsetMs: Long,
     val queue: List<MediaSourceRef>,
     val currentIndex: Int,
     val shuffleEnabled: Boolean,
@@ -72,8 +71,6 @@ class SessionStore(context: Context) {
                         (preferences[Keys.LastSpeed] ?: 1f)
                             .takeIf { it.isFinite() && it in 0.25f..4f }
                             ?: 1f,
-                    subtitleOffsetMs =
-                        (preferences[Keys.LastOffset] ?: 0L).coerceIn(-60_000L, 60_000L),
                     queue = decodeQueue(preferences[Keys.LastQueue], media),
                     currentIndex = (preferences[Keys.LastQueueIndex] ?: 0).coerceAtLeast(0),
                     shuffleEnabled = preferences[Keys.LastShuffle] ?: false,
@@ -120,8 +117,6 @@ class SessionStore(context: Context) {
                 session.playbackSpeed
                     .takeIf { it.isFinite() && it in 0.25f..4f }
                     ?: 1f
-            preferences[Keys.LastOffset] =
-                session.session.subtitleOffsetMs.coerceIn(-60_000L, 60_000L)
             preferences[Keys.LastQueue] =
                 JSONObject()
                     .put("items", MediaSourceJson.encodeList(session.queue))
@@ -258,7 +253,6 @@ class SessionStore(context: Context) {
         val LastPosition = longPreferencesKey("last_position_ms")
         val LastDuration = longPreferencesKey("last_duration_ms")
         val LastSpeed = floatPreferencesKey("last_speed")
-        val LastOffset = longPreferencesKey("last_subtitle_offset_ms")
         val LastQueue = stringPreferencesKey("last_queue_json")
         val LastQueueIndex = intPreferencesKey("last_queue_index")
         val LastShuffle = booleanPreferencesKey("last_shuffle")

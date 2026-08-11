@@ -56,7 +56,7 @@ internal fun buildSidecarTextTrackCandidate(
 ): TimedTextTrackCandidate? {
     val metadata =
         resolveSidecarTrackMetadata(media.displayName, subtitle.displayName) ?: return null
-    val contentId = stableContentId(media.uri.toString())
+    val contentId = stableContentId(mediaIdentityKey(media.uri.toString()))
     val locator = subtitle.toTimedTextLocator()
     val origin =
         if (metadata.format == "lrc") TimedTextOrigin.Lyrics else TimedTextOrigin.Sidecar
@@ -278,35 +278,45 @@ internal fun upsertPlayableContentUnits(
     mediaSnapshots: List<MediaSourceRef>,
     availability: ContentAvailability?,
 ): List<PlayableContentUnit> {
-    val unitsById = LinkedHashMap<String, PlayableContentUnit>()
-    existing.forEach { unitsById[it.stableId] = it }
-    mediaSnapshots.distinctBy { it.uri.toString() }.forEach { media ->
-        val stableId = stableContentId(media.uri.toString())
-        val priorEntry =
-            unitsById.entries.firstOrNull {
-                it.key == stableId || it.value.media.uri == media.uri
-            }
-        val prior = priorEntry?.value
-        if (priorEntry != null && priorEntry.key != stableId) {
-            unitsById.remove(priorEntry.key)
-        }
-        unitsById[stableId] =
-            if (prior == null) {
-                PlayableContentUnit(
-                    stableId = stableId,
-                    media = media,
-                    availability = availability ?: ContentAvailability.Unchecked,
-                )
+    val units = existing.toMutableList()
+    mediaSnapshots
+        .distinctBy { stableMediaLocatorId(it.uri.toString(), it.sourceId) }
+        .forEach { media ->
+            val locatorId = stableMediaLocatorId(media.uri.toString(), media.sourceId)
+            val identityKey = mediaIdentityKey(media.uri.toString())
+            val priorIndex =
+                units.indexOfFirst { unit ->
+                    unit.mediaLocators.any { locator ->
+                        locator.stableId == locatorId || locator.identityKey == identityKey
+                    }
+                }
+            if (priorIndex < 0) {
+                val locator =
+                    media.toMediaLocator(
+                        availability = availability ?: ContentAvailability.Unchecked,
+                    )
+                units +=
+                    PlayableContentUnit(
+                        stableId = stableContentId(identityKey),
+                        mediaLocators = listOf(locator),
+                        activeMediaLocatorId = locator.stableId,
+                    )
             } else {
-                prior.copy(
-                    stableId = stableId,
-                    media = media,
-                    sourceId = media.sourceId ?: prior.sourceId,
-                    availability = availability ?: prior.availability,
-                )
+                val prior = units[priorIndex]
+                val priorLocator = prior.mediaLocators.firstOrNull { it.stableId == locatorId }
+                units[priorIndex] =
+                    prior.withMediaLocator(
+                        media.toMediaLocator(
+                            availability =
+                                availability
+                                    ?: priorLocator?.availability
+                                    ?: ContentAvailability.Unchecked,
+                        ),
+                        makeActive = true,
+                    )
             }
-    }
-    return unitsById.values.distinctBy { it.stableId }
+        }
+    return units.distinctBy(PlayableContentUnit::stableId)
 }
 
 internal fun LibraryConfig.withMediaSnapshots(
@@ -325,14 +335,29 @@ internal fun LibraryConfig.withMediaSnapshots(
 internal fun LibraryConfig.withMediaAvailability(
     media: MediaSourceRef,
     availability: ContentAvailability,
-): LibraryConfig =
-    withMediaSnapshots(listOf(media), availability)
+): LibraryConfig {
+    val unit = contentUnitFor(media)
+        ?: return withMediaSnapshots(listOf(media), availability)
+    return copy(
+        contentUnits =
+            contentUnits.map { current ->
+                if (current.stableId == unit.stableId) {
+                    current.withMediaAvailability(media, availability)
+                } else {
+                    current
+                }
+            },
+    )
+}
 
 internal fun LibraryConfig.relinkMedia(
     previous: MediaSourceRef,
     replacement: MediaSourceRef,
 ): LibraryConfig {
-    if (previous.uri == replacement.uri) {
+    if (
+        stableMediaLocatorId(previous.uri.toString(), previous.sourceId) ==
+            stableMediaLocatorId(replacement.uri.toString(), replacement.sourceId)
+    ) {
         return withMediaSnapshots(listOf(replacement), ContentAvailability.Available)
     }
     val previousUriValue = previous.uri.toString()
@@ -342,25 +367,40 @@ internal fun LibraryConfig.relinkMedia(
     val relocatedUnit =
         when {
             previousUnit != null -> {
-                val relocated = previousUnit.relinkTo(replacement)
-                replacementUnit?.let { existing ->
-                    relocated.withTextCatalogState(
-                        relocated.textCatalogState().mergeTracks(existing.timedTextTracks),
+                var relocated =
+                    previousUnit.withMediaAvailability(
+                        previous,
+                        ContentAvailability.Unavailable,
                     )
-                } ?: relocated
+                if (replacementUnit != null && replacementUnit.stableId != previousUnit.stableId) {
+                    replacementUnit.mediaLocators.forEach { locator ->
+                        relocated = relocated.withMediaLocator(locator, makeActive = false)
+                    }
+                    val replacementCatalog =
+                        replacementUnit.textCatalogState().rekeyForContent(previousUnit.stableId)
+                    relocated =
+                        relocated.withTextCatalogState(
+                            relocated.textCatalogState().mergeTracks(replacementCatalog.tracks),
+                        )
+                }
+                relocated.withMediaLocator(
+                    replacement.toMediaLocator(ContentAvailability.Available),
+                    makeActive = true,
+                )
             }
             replacementUnit != null ->
-                replacementUnit.copy(
-                    media = replacement,
-                    sourceId = replacement.sourceId,
-                    availability = ContentAvailability.Available,
+                replacementUnit.withMediaLocator(
+                    replacement.toMediaLocator(ContentAvailability.Available),
+                    makeActive = true,
                 )
-            else ->
+            else -> {
+                val locator = replacement.toMediaLocator(ContentAvailability.Available)
                 PlayableContentUnit(
-                    stableId = stableContentId(replacementUriValue),
-                    media = replacement,
-                    availability = ContentAvailability.Available,
+                    stableId = stableContentId(locator.identityKey),
+                    mediaLocators = listOf(locator),
+                    activeMediaLocatorId = locator.stableId,
                 )
+            }
         }
     val wasIncluded = previousUriValue in includedUris
     val wasIgnored = previousUriValue in ignoredUris
@@ -384,7 +424,8 @@ internal fun LibraryConfig.relinkMedia(
     return copy(
         contentUnits =
             contentUnits.filterNot {
-                it.media.uri == previous.uri || it.media.uri == replacement.uri
+                it.stableId == previousUnit?.stableId ||
+                    it.stableId == replacementUnit?.stableId
             } + relocatedUnit,
         catalogItems = catalogItems.replaceMedia(previous, replacement),
         recentItems = recentItems.replaceMedia(previous, replacement),
@@ -405,8 +446,13 @@ internal fun LibraryConfig.withTimedTextCandidates(
     return copy(
         contentUnits =
             contentUnits.map { unit ->
-                val tracks = candidatesByMedia[unit.media.uri.toString()]?.map { it.track }
-                    ?: return@map unit
+                val tracks =
+                    unit.mediaLocators
+                        .flatMap { locator ->
+                            candidatesByMedia[locator.media.uri.toString()].orEmpty()
+                        }.map { candidate -> candidate.track.rekeyForContent(unit.stableId) }
+                        .distinctBy(TimedTextTrack::stableId)
+                if (tracks.isEmpty()) return@map unit
                 unit.withTextCatalogState(unit.textCatalogState().mergeTracks(tracks))
             },
     )
@@ -417,15 +463,16 @@ internal fun LibraryConfig.withEmbeddedTextCandidates(
     candidates: List<TimedTextTrackCandidate>,
 ): LibraryConfig {
     val withMedia = withMediaSnapshots(listOf(media), ContentAvailability.Available)
+    val contentUnit = withMedia.contentUnitFor(media) ?: return withMedia
     val embeddedTracks =
         candidates
             .filter { it.mediaUriValue == media.uri.toString() }
-            .map(TimedTextTrackCandidate::track)
+            .map { candidate -> candidate.track.rekeyForContent(contentUnit.stableId) }
             .filter { it.origin == TimedTextOrigin.Embedded }
     return withMedia.copy(
         contentUnits =
             withMedia.contentUnits.map { unit ->
-                if (unit.media.uri != media.uri) return@map unit
+                if (unit.stableId != contentUnit.stableId) return@map unit
                 unit.withTextCatalogState(
                     unit.textCatalogState().reconcileEmbeddedTracks(embeddedTracks),
                 )
@@ -439,7 +486,8 @@ internal fun LibraryConfig.withManualTextSource(
     subtitle: SubtitleSourceRef?,
 ): LibraryConfig {
     val withMedia = withMediaSnapshots(listOf(media), ContentAvailability.Available)
-    val contentId = stableContentId(media.uri.toString())
+    val contentUnit = withMedia.contentUnitFor(media) ?: return withMedia
+    val contentId = contentUnit.stableId
     return withMedia.copy(
         contentUnits =
             withMedia.contentUnits.map { unit ->
@@ -448,6 +496,24 @@ internal fun LibraryConfig.withManualTextSource(
                 unit.withTextCatalogState(
                     unit.textCatalogState().selectManualTrack(slot, track),
                 )
+            },
+    )
+}
+
+internal fun LibraryConfig.withSubtitleOffset(
+    media: MediaSourceRef,
+    offsetMs: Long,
+): LibraryConfig {
+    val unit = contentUnitFor(media) ?: return this
+    val normalizedOffset = offsetMs.coerceIn(-60_000L, 60_000L)
+    return copy(
+        contentUnits =
+            contentUnits.map { current ->
+                if (current.stableId == unit.stableId) {
+                    current.copy(subtitleOffsetMs = normalizedOffset)
+                } else {
+                    current
+                }
             },
     )
 }
@@ -511,11 +577,89 @@ internal fun LibraryConfig.withTextTrackReadiness(
     )
 }
 
-internal fun LibraryConfig.withoutContentUris(uriValues: Set<String>): LibraryConfig =
-    copy(contentUnits = contentUnits.filterNot { it.media.uri.toString() in uriValues })
+internal fun LibraryConfig.withSourceScanResult(
+    sourceId: String,
+    seenUriValues: Set<String>,
+    sourceAvailable: Boolean,
+    retainedUriValues: Set<String>,
+): LibraryConfig =
+    copy(
+        contentUnits =
+            contentUnits.mapNotNull { unit ->
+                val affectedLocators =
+                    unit.mediaLocators.filter { it.media.sourceId == sourceId }
+                if (affectedLocators.isEmpty()) return@mapNotNull unit
+                val updated =
+                    unit.withSourceLocatorAvailability(
+                        sourceId = sourceId,
+                        seenUriValues = seenUriValues,
+                        sourceAvailable = sourceAvailable,
+                    )
+                val hasMissingLocator =
+                    sourceAvailable &&
+                        affectedLocators.any {
+                            it.media.uri.toString() !in seenUriValues
+                        }
+                val isReferenced =
+                    unit.mediaLocators.any { it.media.uri.toString() in retainedUriValues }
+                val hasAvailableLocator =
+                    updated.mediaLocators.any {
+                        it.availability == ContentAvailability.Available
+                    }
+                updated.takeUnless {
+                    hasMissingLocator &&
+                        !shouldRetainContentAfterLocatorLoss(
+                            hasRetainedReference = isReferenced,
+                            hasAvailableLocator = hasAvailableLocator,
+                        )
+                }
+            },
+    )
+
+internal fun LibraryConfig.withSourceRemoved(
+    sourceId: String,
+    retainedUriValues: Set<String>,
+): LibraryConfig =
+    copy(
+        contentUnits =
+            contentUnits.mapNotNull { unit ->
+                if (unit.mediaLocators.none { it.media.sourceId == sourceId }) {
+                    return@mapNotNull unit
+                }
+                val updated =
+                    unit.withSourceLocatorAvailability(
+                        sourceId = sourceId,
+                        seenUriValues = emptySet(),
+                        sourceAvailable = false,
+                    )
+                val isReferenced =
+                    unit.mediaLocators.any { it.media.uri.toString() in retainedUriValues }
+                val hasAvailableLocator =
+                    updated.mediaLocators.any {
+                        it.availability == ContentAvailability.Available
+                    }
+                updated.takeIf {
+                    shouldRetainContentAfterLocatorLoss(
+                        hasRetainedReference = isReferenced,
+                        hasAvailableLocator = hasAvailableLocator,
+                    )
+                }
+            },
+    )
+
+internal fun shouldRetainContentAfterLocatorLoss(
+    hasRetainedReference: Boolean,
+    hasAvailableLocator: Boolean,
+): Boolean = hasRetainedReference || hasAvailableLocator
 
 internal fun LibraryConfig.contentUnitFor(media: MediaSourceRef): PlayableContentUnit? =
-    contentUnits.firstOrNull { it.media.uri == media.uri }
+    contentUnits.firstOrNull { unit ->
+        val locatorId = stableMediaLocatorId(media.uri.toString(), media.sourceId)
+        val identityKey = mediaIdentityKey(media.uri.toString())
+        unit.mediaLocators.any { locator ->
+            locator.stableId == locatorId || locator.identityKey == identityKey
+        }
+    }
 
 internal fun LibraryConfig.activeTextTrack(
     media: MediaSourceRef,
@@ -531,10 +675,10 @@ internal fun LibraryConfig.activeTextTrack(
 }
 
 internal fun LibraryConfig.hasTimedTextTracks(media: MediaSourceRef): Boolean =
-    contentUnits
-        .firstOrNull { it.media.uri == media.uri }
-        ?.timedTextTracks
-        ?.isNotEmpty() == true
+    contentUnitFor(media)?.timedTextTracks?.isNotEmpty() == true
+
+internal fun LibraryConfig.subtitleOffsetFor(media: MediaSourceRef): Long =
+    contentUnitFor(media)?.subtitleOffsetMs ?: 0L
 
 private fun PlayableContentUnit.textCatalogState(): TextTrackCatalogState =
     TextTrackCatalogState(timedTextTracks, activeText)
@@ -544,31 +688,118 @@ private fun PlayableContentUnit.withTextCatalogState(
 ): PlayableContentUnit =
     copy(timedTextTracks = state.tracks, activeText = state.activeText)
 
-private fun PlayableContentUnit.relinkTo(replacement: MediaSourceRef): PlayableContentUnit {
-    val replacementContentId = stableContentId(replacement.uri.toString())
-    val remappedCatalog = textCatalogState().rekeyForContent(replacementContentId)
-    return copy(
-        stableId = replacementContentId,
-        media = replacement,
-        sourceId = replacement.sourceId,
-        timedTextTracks = remappedCatalog.tracks,
-        activeText = remappedCatalog.activeText,
-        availability = ContentAvailability.Available,
+private fun MediaSourceRef.toMediaLocator(
+    availability: ContentAvailability,
+): MediaLocator =
+    MediaLocator(
+        stableId = stableMediaLocatorId(uri.toString(), sourceId),
+        identityKey = mediaIdentityKey(uri.toString()),
+        media = this,
+        availability = availability,
     )
+
+private fun PlayableContentUnit.withMediaLocator(
+    locator: MediaLocator,
+    makeActive: Boolean,
+): PlayableContentUnit {
+    val updatedLocators =
+        mediaLocators.filterNot { it.stableId == locator.stableId } + locator
+    return withNormalizedMediaLocators(
+        locators = updatedLocators,
+        preferredActiveId = locator.stableId.takeIf { makeActive },
+    )
+}
+
+private fun PlayableContentUnit.withMediaAvailability(
+    media: MediaSourceRef,
+    availability: ContentAvailability,
+): PlayableContentUnit {
+    val locatorId = stableMediaLocatorId(media.uri.toString(), media.sourceId)
+    val exactLocator = mediaLocators.firstOrNull { it.stableId == locatorId }
+    val targetLocatorIds =
+        exactLocator?.let { setOf(it.stableId) }
+            ?: mediaLocators
+                .filter { it.media.uri == media.uri }
+                .map(MediaLocator::stableId)
+                .toSet()
+    if (targetLocatorIds.isEmpty()) {
+        return withMediaLocator(
+            locator = media.toMediaLocator(availability),
+            makeActive = availability == ContentAvailability.Available,
+        )
+    }
+    return withNormalizedMediaLocators(
+        locators =
+            mediaLocators.map { locator ->
+                if (locator.stableId in targetLocatorIds) {
+                    locator.copy(
+                        media = media.takeIf { locator.stableId == locatorId } ?: locator.media,
+                        availability = availability,
+                    )
+                } else {
+                    locator
+                }
+            },
+    )
+}
+
+private fun PlayableContentUnit.withSourceLocatorAvailability(
+    sourceId: String,
+    seenUriValues: Set<String>,
+    sourceAvailable: Boolean,
+): PlayableContentUnit =
+    withNormalizedMediaLocators(
+        locators =
+            mediaLocators.map { locator ->
+                if (locator.media.sourceId != sourceId) return@map locator
+                val availability =
+                    if (sourceAvailable && locator.media.uri.toString() in seenUriValues) {
+                        ContentAvailability.Available
+                    } else {
+                        ContentAvailability.Unavailable
+                    }
+                locator.copy(availability = availability)
+            },
+    )
+
+private fun PlayableContentUnit.withNormalizedMediaLocators(
+    locators: List<MediaLocator>,
+    preferredActiveId: String? = null,
+): PlayableContentUnit {
+    val distinctLocators = locators.distinctBy(MediaLocator::stableId)
+    val activeId =
+        resolveActiveMediaLocatorId(
+            locatorAvailability =
+                distinctLocators.map { it.stableId to it.availability },
+            currentActiveId = activeMediaLocatorId,
+            preferredActiveId = preferredActiveId,
+        )
+    return copy(
+        mediaLocators = distinctLocators,
+        activeMediaLocatorId = activeId,
+    )
+}
+
+internal fun resolveActiveMediaLocatorId(
+    locatorAvailability: List<Pair<String, ContentAvailability>>,
+    currentActiveId: String,
+    preferredActiveId: String?,
+): String {
+    require(locatorAvailability.isNotEmpty())
+    val preferred =
+        locatorAvailability.firstOrNull { it.first == preferredActiveId }
+            ?.takeUnless { it.second == ContentAvailability.Unavailable }
+    val current = locatorAvailability.firstOrNull { it.first == currentActiveId }
+    return preferred?.first
+        ?: current?.takeUnless { it.second == ContentAvailability.Unavailable }?.first
+        ?: locatorAvailability.firstOrNull { it.second == ContentAvailability.Available }?.first
+        ?: current?.first
+        ?: locatorAvailability.first().first
 }
 
 internal fun TextTrackCatalogState.rekeyForContent(contentId: String): TextTrackCatalogState {
     val remappedTracks =
-        tracks.map { track ->
-            track.copy(
-                stableId =
-                    stableTimedTextTrackId(
-                        contentId = contentId,
-                        origin = track.origin,
-                        locatorIdentity = track.locator.stableIdentity,
-                    ),
-            )
-        }
+        tracks.map { track -> track.rekeyForContent(contentId) }
     val remappedIds =
         tracks.map(TimedTextTrack::stableId).zip(remappedTracks.map(TimedTextTrack::stableId)).toMap()
     val remappedSelection =
@@ -583,6 +814,16 @@ internal fun TextTrackCatalogState.rekeyForContent(contentId: String): TextTrack
         activeText = remappedSelection,
     )
 }
+
+private fun TimedTextTrack.rekeyForContent(contentId: String): TimedTextTrack =
+    copy(
+        stableId =
+            stableTimedTextTrackId(
+                contentId = contentId,
+                origin = origin,
+                locatorIdentity = locator.stableIdentity,
+            ),
+    )
 
 private fun SubtitleSourceRef.toTimedTextLocator(): TimedTextLocator =
     TimedTextLocator(

@@ -275,6 +275,7 @@ internal fun HomeScreen(
                             session = session,
                             activeSession = activeSession,
                             lastSession = lastSession,
+                            libraryConfig = library.config,
                             playback = playback,
                             onContinue = onContinue,
                             onPlayPause = onPlayPause,
@@ -379,7 +380,7 @@ internal fun HomeScreen(
     mediaActionTarget?.let { item ->
         MediaActionDialog(
             item = item,
-            canRemoveFromLibrary = library.items.any { it.uri == item.uri },
+            canRemoveFromLibrary = library.config.isCollected(item),
             onDismiss = { mediaActionTarget = null },
             onPlayNext = {
                 onPlayNext(item)
@@ -573,6 +574,7 @@ private fun LibraryLanding(
                     session = session,
                     activeSession = activeSession,
                     lastSession = lastSession,
+                    libraryConfig = library.config,
                     playback = playback,
                     onContinue = onContinue,
                     onPlayPause = onPlayPause,
@@ -1250,13 +1252,14 @@ private fun ContinueSection(
     session: ActiveSession,
     activeSession: ActiveSession?,
     lastSession: RestorableSession?,
+    libraryConfig: LibraryConfig,
     playback: PlaybackSnapshot,
     onContinue: () -> Unit,
     onPlayPause: () -> Unit,
 ) {
     val lastSurface =
         lastSession
-            ?.takeIf { it.session.media.uri == session.media.uri }
+            ?.takeIf { libraryConfig.sameContent(it.session.media, session.media) }
             ?.lastSurface
             ?.asLastSurface()
             ?: PlayerSurface.Normal
@@ -1269,6 +1272,7 @@ private fun ContinueSection(
             session = session,
             activeSession = activeSession,
             lastSession = lastSession,
+            libraryConfig = libraryConfig,
             playback = playback,
             onContinue = onContinue,
             onPlayPause = onPlayPause,
@@ -1281,13 +1285,14 @@ private fun NowPlayingBar(
     session: ActiveSession,
     activeSession: ActiveSession?,
     lastSession: RestorableSession?,
+    libraryConfig: LibraryConfig,
     playback: PlaybackSnapshot,
     onContinue: () -> Unit,
     onPlayPause: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val matchingLastSession =
-        lastSession?.takeIf { it.session.media.uri == session.media.uri }
+        lastSession?.takeIf { libraryConfig.sameContent(it.session.media, session.media) }
     val availability =
         matchingLastSession?.mediaAvailability
             ?: if (activeSession != null) MediaAvailability.Ready else null
