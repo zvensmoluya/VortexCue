@@ -91,6 +91,8 @@ fun VortexCueApp(
     val sessionStore = remember(context) { SessionStore(context) }
     val libraryStateHolder =
         remember(context, coroutineScope) { LibraryStateHolder(context, coroutineScope) }
+    val tonightStateHolder =
+        remember(context, coroutineScope) { TonightQueueStateHolder(context, coroutineScope) }
     val subtitleCache = remember(context) { SubtitleCache(context) }
     val initialSession = remember(player) { player.currentMediaItem?.toActiveSession() }
 
@@ -126,6 +128,7 @@ fun VortexCueApp(
     var pendingAutoPlay by rememberSaveable { mutableStateOf(false) }
     var folderPickTargetId by rememberSaveable { mutableStateOf<String?>(null) }
     val libraryState = libraryStateHolder.state
+    val tonight = tonightStateHolder.state
     val selectedEmbeddedTrackId =
         activeSession?.media?.let { media ->
             TextTrackSlot.entries
@@ -170,6 +173,123 @@ fun VortexCueApp(
         if (player.isPlaying) player.pause() else playWithNotificationPermission()
     }
 
+    fun tonightContentId(media: MediaSourceRef): String =
+        libraryStateHolder.state.config.contentUnitFor(media)?.stableId
+            ?: "uri:${media.uri}"
+
+    fun resolveTonightMedia(entry: TonightQueueEntry): MediaSourceRef? {
+        val config = libraryStateHolder.state.config
+        return config.contentUnits.firstOrNull { it.stableId == entry.contentId }?.media
+            ?: config.resolveActiveMedia(entry.media)
+    }
+
+    fun runtimeMatchesTonightOrder(plan: TonightQueue = tonightStateHolder.state): Boolean {
+        if (!plan.started || plan.entries.isEmpty()) return false
+        val planIds = plan.entries.map(TonightQueueEntry::contentId)
+        val runtimeIds =
+            (0 until player.mediaItemCount).mapNotNull { index ->
+                player.getMediaItemAt(index).toMediaSourceRef()?.let(::tonightContentId)
+            }
+        return runtimeIds == planIds
+    }
+
+    fun isTonightRuntimeActive(plan: TonightQueue = tonightStateHolder.state): Boolean {
+        if (!runtimeMatchesTonightOrder(plan)) return false
+        val runtimeMedia = player.currentMediaItem?.toMediaSourceRef() ?: return false
+        return plan.current?.contentId == tonightContentId(runtimeMedia)
+    }
+
+    fun persistTonightProgress() {
+        val plan = tonightStateHolder.state
+        if (!isTonightRuntimeActive(plan)) return
+        val index = player.currentMediaItemIndex
+        if (index !in plan.entries.indices) return
+        tonightStateHolder.updateProgress(
+            index = index,
+            positionMs = player.currentPosition,
+            durationMs = maxOf(plan.entries[index].durationMs, playback.durationMs),
+        )
+    }
+
+    fun addToTonight(media: MediaSourceRef) {
+        val resolved = libraryStateHolder.state.config.resolveActiveMedia(media)
+        val existing = tonightStateHolder.state.entries.any {
+            it.contentId == tonightContentId(resolved)
+        }
+        if (existing) return
+        val wasRuntimeActive = isTonightRuntimeActive()
+        val priorProgress =
+            lastSession?.takeIf {
+                libraryStateHolder.state.config.sameContent(it.session.media, resolved)
+            }
+        val knownDurationMs = maxOf(priorProgress?.durationMs ?: 0L, resolved.durationMs)
+        tonightStateHolder.add(
+            TonightQueueEntry(
+                contentId = tonightContentId(resolved),
+                media = resolved,
+                positionMs =
+                    resolveTonightStartPosition(
+                        positionMs = priorProgress?.positionMs ?: 0L,
+                        durationMs = knownDurationMs,
+                    ),
+                durationMs = knownDurationMs,
+            ),
+        )
+        if (wasRuntimeActive) {
+            player.addMediaItem(resolved.toMediaItem())
+        }
+    }
+
+    fun removeFromTonight(index: Int) {
+        val plan = tonightStateHolder.state
+        if (index !in plan.entries.indices) return
+        val wasRuntimeActive = isTonightRuntimeActive(plan)
+        val keepPlaying = player.isPlaying
+        val currentItem = player.currentMediaItem
+        val currentPosition = player.currentPosition.coerceAtLeast(0L)
+        if (wasRuntimeActive) persistTonightProgress()
+        tonightStateHolder.removeAt(index)
+        if (!wasRuntimeActive || index >= player.mediaItemCount) return
+        if (plan.entries.size == 1 && currentItem != null) {
+            player.setMediaItems(listOf(currentItem), 0, currentPosition)
+            player.prepare()
+            if (keepPlaying) playWithNotificationPermission()
+        } else {
+            player.removeMediaItem(index)
+        }
+    }
+
+    fun moveTonight(fromIndex: Int, toIndex: Int) {
+        val plan = tonightStateHolder.state
+        if (fromIndex !in plan.entries.indices || toIndex !in plan.entries.indices) return
+        val wasRuntimeActive = isTonightRuntimeActive(plan)
+        if (wasRuntimeActive) persistTonightProgress()
+        tonightStateHolder.move(fromIndex, toIndex)
+        if (
+            wasRuntimeActive &&
+                fromIndex < player.mediaItemCount &&
+                toIndex < player.mediaItemCount
+        ) {
+            player.moveMediaItem(fromIndex, toIndex)
+        }
+    }
+
+    fun clearTonight() {
+        val plan = tonightStateHolder.state
+        if (plan.isEmpty) return
+        val keepPlaying = player.isPlaying
+        val currentItem = player.currentMediaItem
+        val currentPosition = player.currentPosition.coerceAtLeast(0L)
+        val wasRuntimeActive = isTonightRuntimeActive(plan)
+        if (wasRuntimeActive) persistTonightProgress()
+        tonightStateHolder.clear()
+        if (wasRuntimeActive && currentItem != null) {
+            player.setMediaItems(listOf(currentItem), 0, currentPosition)
+            player.prepare()
+            if (keepPlaying) playWithNotificationPermission()
+        }
+    }
+
     fun currentRestorableSession(session: ActiveSession): RestorableSession {
         val previous =
             lastSession?.takeIf {
@@ -211,6 +331,47 @@ fun VortexCueApp(
         val saved = currentRestorableSession(session)
         lastSession = saved
         coroutineScope.launch { sessionStore.saveLastSession(saved) }
+    }
+
+    fun startTonight() {
+        val plan = tonightStateHolder.state
+        val resolvedEntries =
+            plan.entries.mapNotNull { entry -> resolveTonightMedia(entry)?.let { entry to it } }
+        if (resolvedEntries.isEmpty()) return
+        val index = plan.currentIndex.coerceIn(resolvedEntries.indices)
+        val queue = resolvedEntries.map { it.second }
+        val selectedEntry = resolvedEntries[index].first
+        val position =
+            resolveTonightStartPosition(
+                positionMs = selectedEntry.positionMs,
+                durationMs = maxOf(selectedEntry.durationMs, selectedEntry.media.durationMs),
+            )
+        tonightStateHolder.startAt(index)
+        player.setMediaItems(queue.map { it.toMediaItem() }, index, position)
+        player.prepare()
+        player.shuffleModeEnabled = false
+        player.repeatMode = Player.REPEAT_MODE_OFF
+        val media = queue[index]
+        val previousSession = activeSession
+        val session =
+            ActiveSession(
+                media = media,
+                subtitle =
+                    previousSession
+                        ?.takeIf { libraryStateHolder.state.config.sameContent(it.media, media) }
+                        ?.subtitle,
+                secondarySubtitle =
+                    previousSession
+                        ?.takeIf { libraryStateHolder.state.config.sameContent(it.media, media) }
+                        ?.secondarySubtitle,
+                subtitleOffsetMs = libraryStateHolder.state.config.subtitleOffsetFor(media),
+            )
+        activeSession = session
+        draft = session.toDraft()
+        playerSurface = PlayerSurface.Normal
+        destination = AppDestination.Player
+        persistSession(session)
+        playWithNotificationPermission()
     }
 
     fun resumeSession(saved: RestorableSession) {
@@ -696,6 +857,7 @@ fun VortexCueApp(
 
     LaunchedEffect(Unit) {
         libraryStateHolder.restoreConfig()
+        tonightStateHolder.restore()
         val stored =
             runCatching { sessionStore.load() }
                 .getOrElse {
@@ -713,10 +875,37 @@ fun VortexCueApp(
         if (storedLast != null) {
             val restoredConfig = libraryStateHolder.state.config
             val restoredMedia = restoredConfig.resolveActiveMedia(storedLast.media)
+            val storedTonight = tonightStateHolder.state
+            val tonightQueueItems = storedTonight.entries.mapNotNull(::resolveTonightMedia)
+            val storedTonightMatchesLast =
+                storedTonight.current
+                    ?.let(::resolveTonightMedia)
+                    ?.let { current -> restoredConfig.sameContent(storedLast.media, current) }
+                    ?: false
+            val shouldRestoreTonight =
+                storedTonight.started &&
+                    tonightQueueItems.size == storedTonight.entries.size &&
+                    storedTonightMatchesLast
             val restoredQueue =
-                storedLast.queue
-                    .map(restoredConfig::resolveActiveMedia)
-                    .ifEmpty { listOf(restoredMedia) }
+                if (shouldRestoreTonight) {
+                    tonightQueueItems
+                } else {
+                    storedLast.queue
+                        .map(restoredConfig::resolveActiveMedia)
+                        .ifEmpty { listOf(restoredMedia) }
+                }
+            val restoredIndex =
+                if (shouldRestoreTonight) {
+                    storedTonight.currentIndex.coerceIn(restoredQueue.indices)
+                } else {
+                    storedLast.currentIndex.coerceIn(restoredQueue.indices)
+                }
+            val restoredPosition =
+                if (shouldRestoreTonight) {
+                    storedTonight.current?.positionMs?.takeIf { it > 0L } ?: storedLast.positionMs
+                } else {
+                    storedLast.positionMs
+                }
             val mediaError =
                 runCatching {
                     ensureMediaReadable(contentResolver, restoredMedia)
@@ -789,12 +978,11 @@ fun VortexCueApp(
                             subtitleOffsetMs =
                                 restoredConfig.subtitleOffsetFor(restoredMedia),
                         ),
-                    positionMs = storedLast.positionMs,
+                    positionMs = restoredPosition,
                     durationMs = storedLast.durationMs,
                     playbackSpeed = storedLast.playbackSpeed,
                     queue = restoredQueue,
-                    currentIndex =
-                        storedLast.currentIndex.coerceIn(restoredQueue.indices),
+                    currentIndex = restoredIndex,
                     shuffleEnabled = storedLast.shuffleEnabled,
                     repeatMode = storedLast.repeatMode,
                     lastSurface = storedLast.lastSurface,
@@ -918,11 +1106,19 @@ fun VortexCueApp(
         while (true) {
             delay(5_000L)
             persistSession(session)
+            persistTonightProgress()
         }
     }
+    LaunchedEffect(tonight.entries.map(TonightQueueEntry::contentId)) {
+        libraryStateHolder.retainContentIds(
+            tonight.entries.mapTo(linkedSetOf(), TonightQueueEntry::contentId),
+        )
+    }
+
     LaunchedEffect(restorationCompleted, playback.isPlaying) {
         if (restorationCompleted && !playback.isPlaying) {
             activeSession?.let(::persistSession)
+            persistTonightProgress()
         }
     }
     LaunchedEffect(restorationCompleted, playback.speed) {
@@ -941,6 +1137,22 @@ fun VortexCueApp(
                     newPosition: Player.PositionInfo,
                     reason: Int,
                 ) {
+                    val plan = tonightStateHolder.state
+                    val oldPlanIndex = oldPosition.mediaItemIndex
+                    if (
+                        runtimeMatchesTonightOrder(plan) &&
+                            oldPlanIndex in plan.entries.indices
+                    ) {
+                        tonightStateHolder.updateProgress(
+                            index = oldPlanIndex,
+                            positionMs = oldPosition.positionMs,
+                            durationMs =
+                                maxOf(
+                                    plan.entries[oldPlanIndex].durationMs,
+                                    playback.durationMs,
+                                ),
+                        )
+                    }
                     if (
                         restorationCompleted &&
                             session != null &&
@@ -977,6 +1189,26 @@ fun VortexCueApp(
                     reason: Int,
                 ) {
                     val decoded = mediaItem?.toMediaSourceRef() ?: return
+                    val planBeforeTransition = tonightStateHolder.state
+                    val newPlanIndex = player.currentMediaItemIndex
+                    if (
+                        runtimeMatchesTonightOrder(planBeforeTransition) &&
+                            newPlanIndex != planBeforeTransition.currentIndex
+                    ) {
+                        if (
+                            reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
+                                reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT
+                        ) {
+                            tonightStateHolder.completeAt(planBeforeTransition.currentIndex)
+                        } else {
+                            tonightStateHolder.startAt(newPlanIndex)
+                        }
+                        tonightStateHolder.state.entries
+                            .getOrNull(newPlanIndex)
+                            ?.positionMs
+                            ?.takeIf { it > 0L }
+                            ?.let { position -> player.seekTo(position) }
+                    }
                     val media =
                         libraryState.items.firstOrNull { it.uri == decoded.uri }
                             ?: lastSession?.queue?.firstOrNull { it.uri == decoded.uri }
@@ -1007,6 +1239,27 @@ fun VortexCueApp(
                         restoreAssociatedTextTracks(media)
                     }
                 }
+
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    val plan = tonightStateHolder.state
+                    val currentEntry = plan.entries.getOrNull(player.currentMediaItemIndex)
+                    val knownDurationMs =
+                        maxOf(
+                            currentEntry?.durationMs ?: 0L,
+                            currentEntry?.media?.durationMs ?: 0L,
+                            playback.durationMs,
+                            player.duration.coerceAtLeast(0L),
+                        )
+                    if (
+                        playbackState == Player.STATE_ENDED &&
+                            isTonightRuntimeActive(plan) &&
+                            player.currentMediaItemIndex == player.mediaItemCount - 1 &&
+                            isConfirmedTonightEnd(player.currentPosition, knownDurationMs)
+                    ) {
+                        persistTonightProgress()
+                        tonightStateHolder.completeAt(plan.currentIndex)
+                    }
+                }
             }
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
@@ -1021,6 +1274,7 @@ fun VortexCueApp(
                     coroutineScope.launch {
                         sessionStore.saveDraft(draft)
                         libraryStateHolder.awaitPendingWrites()
+                        tonightStateHolder.awaitPendingWrites()
                         sessionStore.saveDisplayProfile(displayProfile)
                     }
                 }
@@ -1124,6 +1378,8 @@ fun VortexCueApp(
                 draft = draft,
                 activeSession = activeSession,
                 lastSession = lastSession,
+                tonight = tonight,
+                tonightActive = isTonightRuntimeActive(tonight),
                 playback = playback,
                 displayProfile = displayProfile,
                 library = libraryState,
@@ -1215,18 +1471,11 @@ fun VortexCueApp(
                         }
                     }
                 },
-                onPlayNext = { media ->
-                    val targetIndex =
-                        if (player.mediaItemCount == 0) {
-                            0
-                        } else {
-                            (player.currentMediaItemIndex + 1).coerceAtMost(player.mediaItemCount)
-                        }
-                    player.addMediaItem(targetIndex, media.toMediaItem())
-                },
-                onAddToQueue = { media ->
-                    player.addMediaItem(media.toMediaItem())
-                },
+                onAddToTonight = ::addToTonight,
+                onRemoveFromTonight = ::removeFromTonight,
+                onMoveTonight = ::moveTonight,
+                onClearTonight = ::clearTonight,
+                onStartTonight = ::startTonight,
                 onCreatePlaylist = libraryStateHolder::createPlaylist,
                 onAddToPlaylist = libraryStateHolder::addToPlaylist,
                 onRemoveFromPlaylist = libraryStateHolder::removeFromPlaylist,
@@ -1291,6 +1540,9 @@ fun VortexCueApp(
                     sleepTimer = sleepTimer,
                     showGestureHint = !glowGestureHintSeen,
                     isCollected = libraryState.config.isCollected(session.media),
+                    isInTonight =
+                        tonight.entries.any { it.contentId == tonightContentId(session.media) },
+                    isTonightPlaying = isTonightRuntimeActive(tonight),
                     contentUnit = libraryState.config.contentUnitFor(session.media),
                     embeddedCueTrackId = embeddedTextRuntime.cueTrackId,
                     embeddedCueText = embeddedTextRuntime.cueText,
@@ -1348,6 +1600,42 @@ fun VortexCueApp(
                             libraryStateHolder.collectMedia(session.media)
                         }
                     },
+                    onAddToTonight = { addToTonight(session.media) },
+                    onOpenTonight = {
+                        homeSection = HomeSection.Tonight
+                        destination = AppDestination.Home
+                    },
+                    onQueueSelect = { index ->
+                        if (index in 0 until player.mediaItemCount) {
+                            val position =
+                                tonight
+                                    .takeIf(::isTonightRuntimeActive)
+                                    ?.entries
+                                    ?.getOrNull(index)
+                                    ?.positionMs
+                                    ?: 0L
+                            if (isTonightRuntimeActive(tonight)) tonightStateHolder.startAt(index)
+                            player.seekTo(index, position.coerceAtLeast(0L))
+                            playWithNotificationPermission()
+                        }
+                    },
+                    onQueueMove = { fromIndex, toIndex ->
+                        if (isTonightRuntimeActive(tonight)) {
+                            moveTonight(fromIndex, toIndex)
+                        } else if (
+                            fromIndex in 0 until player.mediaItemCount &&
+                                toIndex in 0 until player.mediaItemCount
+                        ) {
+                            player.moveMediaItem(fromIndex, toIndex)
+                        }
+                    },
+                    onQueueRemove = { index ->
+                        if (isTonightRuntimeActive(tonight)) {
+                            removeFromTonight(index)
+                        } else if (index in 0 until player.mediaItemCount) {
+                            player.removeMediaItem(index)
+                        }
+                    },
                     onSelectTextTrack = ::selectSessionTrack,
                     onRestoreAutomaticTextTrack = ::restoreAutomaticSessionTrack,
                     onAddTextTrack = { slot ->
@@ -1370,6 +1658,10 @@ fun VortexCueApp(
                     },
                     onStopAfterCurrent = {
                         player.stopAfterCurrentItem()
+                        sleepTimerRevision += 1
+                    },
+                    onStopAfterTonight = {
+                        player.stopAfterTonight()
                         sleepTimerRevision += 1
                     },
                     onCancelSleepTimer = {

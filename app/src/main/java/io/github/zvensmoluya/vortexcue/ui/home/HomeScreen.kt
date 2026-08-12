@@ -52,12 +52,14 @@ import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 import io.github.zvensmoluya.vortexcue.core.model.*
 import io.github.zvensmoluya.vortexcue.library.*
+import io.github.zvensmoluya.vortexcue.playback.TonightQueue
 import io.github.zvensmoluya.vortexcue.ui.player.PlaybackSnapshot
 import io.github.zvensmoluya.vortexcue.ui.player.formatTime
 import io.github.zvensmoluya.vortexcue.ui.theme.*
 
 internal enum class HomeSection {
     Home,
+    Tonight,
     MyContent,
     Discoveries,
     Sources,
@@ -77,6 +79,8 @@ internal fun HomeScreen(
     draft: SessionDraft,
     activeSession: ActiveSession?,
     lastSession: RestorableSession?,
+    tonight: TonightQueue,
+    tonightActive: Boolean,
     playback: PlaybackSnapshot,
     displayProfile: DisplayProfile,
     library: MediaLibraryState,
@@ -96,8 +100,11 @@ internal fun HomeScreen(
     onRestoreIgnored: (Set<String>) -> Unit,
     onCollectMedia: (MediaSourceRef) -> Unit,
     onPlayLibraryItems: (List<MediaSourceRef>, Int) -> Unit,
-    onPlayNext: (MediaSourceRef) -> Unit,
-    onAddToQueue: (MediaSourceRef) -> Unit,
+    onAddToTonight: (MediaSourceRef) -> Unit,
+    onRemoveFromTonight: (Int) -> Unit,
+    onMoveTonight: (Int, Int) -> Unit,
+    onClearTonight: () -> Unit,
+    onStartTonight: () -> Unit,
     onCreatePlaylist: (String, MediaSourceRef?) -> Unit,
     onAddToPlaylist: (String, MediaSourceRef) -> Unit,
     onRemoveFromPlaylist: (String, MediaSourceRef) -> Unit,
@@ -190,7 +197,8 @@ internal fun HomeScreen(
 
     BackHandler(
         enabled =
-            (section == HomeSection.MyContent &&
+            section == HomeSection.Tonight ||
+                (section == HomeSection.MyContent &&
                 (searchVisible || selectedPlaylistId != null)) ||
                 (section == HomeSection.Discoveries && showingIgnored) ||
                 (section == HomeSection.Sources && selectedSourceId != null),
@@ -204,6 +212,7 @@ internal fun HomeScreen(
             }
             section == HomeSection.Discoveries -> showingIgnored = false
             section == HomeSection.Sources && selectedSourceId != null -> selectedSourceId = null
+            section == HomeSection.Tonight -> onSectionChanged(HomeSection.Home)
         }
     }
 
@@ -235,6 +244,7 @@ internal fun HomeScreen(
                         showingIgnored = false
                     section == HomeSection.Sources && selectedSourceId != null ->
                         selectedSourceId = null
+                    section == HomeSection.Tonight -> onSectionChanged(HomeSection.Home)
                     section != HomeSection.Home -> onSectionChanged(HomeSection.Home)
                 }
             },
@@ -253,6 +263,8 @@ internal fun HomeScreen(
                     resumableSession = resumableSession,
                     activeSession = activeSession,
                     lastSession = lastSession,
+                    tonight = tonight,
+                    tonightActive = tonightActive,
                     playback = playback,
                     onOpenMyContent = {
                         myContentTab = defaultMyContentTab(library.items.size)
@@ -262,6 +274,7 @@ internal fun HomeScreen(
                         showingIgnored = false
                         onSectionChanged(HomeSection.Discoveries)
                     },
+                    onOpenTonight = { onSectionChanged(HomeSection.Tonight) },
                     onOpenSources = { onSectionChanged(HomeSection.Sources) },
                     onPlayLibraryItems = onPlayLibraryItems,
                     onOpenMediaActions = { mediaActionTarget = it },
@@ -272,7 +285,19 @@ internal fun HomeScreen(
                     },
                     onContinue = onContinue,
                     onPlayPause = onPlayPause,
+                    onStartTonight = onStartTonight,
                     bottomPadding = 8.dp,
+                    modifier = Modifier.weight(1f),
+                )
+            HomeSection.Tonight ->
+                TonightEditor(
+                    tonight = tonight,
+                    library = library,
+                    onStartTonight = onStartTonight,
+                    onRemove = onRemoveFromTonight,
+                    onMove = onMoveTonight,
+                    onClear = onClearTonight,
+                    onOpenMediaActions = { mediaActionTarget = it },
                     modifier = Modifier.weight(1f),
                 )
             HomeSection.MyContent ->
@@ -365,6 +390,7 @@ internal fun HomeScreen(
                             reviewSelection -= uri
                         },
                         onPlay = { media -> onPlayLibraryItems(listOf(media), 0) },
+                        onOpenMediaActions = { mediaActionTarget = it },
                         onIgnore = { uri ->
                             reviewSelection -= uri
                             onIgnoreCandidates(setOf(uri))
@@ -451,12 +477,8 @@ internal fun HomeScreen(
             item = item,
             isCollected = library.config.isCollected(item),
             onDismiss = { mediaActionTarget = null },
-            onPlayNext = {
-                onPlayNext(item)
-                mediaActionTarget = null
-            },
-            onAddToQueue = {
-                onAddToQueue(item)
+            onAddToTonight = {
+                onAddToTonight(item)
                 mediaActionTarget = null
             },
             onChoosePlaylist = {
@@ -576,6 +598,7 @@ private fun HomeHeader(
             selectedPlaylist != null -> selectedPlaylist.name
             selectedSource != null -> selectedSource.displayName
             section == HomeSection.MyContent -> "我的内容"
+            section == HomeSection.Tonight -> "今晚"
             section == HomeSection.Discoveries && showingIgnored -> "已忽略"
             section == HomeSection.Discoveries -> "新发现"
             section == HomeSection.Sources -> "来源"
@@ -640,9 +663,12 @@ private fun HomeLanding(
     resumableSession: ActiveSession?,
     activeSession: ActiveSession?,
     lastSession: RestorableSession?,
+    tonight: TonightQueue,
+    tonightActive: Boolean,
     playback: PlaybackSnapshot,
     onOpenMyContent: () -> Unit,
     onOpenDiscoveries: () -> Unit,
+    onOpenTonight: () -> Unit,
     onOpenSources: () -> Unit,
     onPlayLibraryItems: (List<MediaSourceRef>, Int) -> Unit,
     onOpenMediaActions: (MediaSourceRef) -> Unit,
@@ -650,6 +676,7 @@ private fun HomeLanding(
     onOpenFile: () -> Unit,
     onContinue: () -> Unit,
     onPlayPause: () -> Unit,
+    onStartTonight: () -> Unit,
     bottomPadding: Dp,
     modifier: Modifier = Modifier,
 ) {
@@ -657,7 +684,7 @@ private fun HomeLanding(
     val collectedItems =
         remember(library.items, library.config) { orderedCollectedItems(library, recentItems) }
     val firstUse =
-        shouldShowFirstUseHome(
+        tonight.isEmpty && shouldShowFirstUseHome(
             hasResumableSession = resumableSession != null,
             collectedCount = collectedItems.size,
             recentCount = recentItems.size,
@@ -690,17 +717,30 @@ private fun HomeLanding(
                 }
             }
         } else {
-            resumableSession?.let { session ->
-                item(key = "continue") {
-                    ContinueSection(
-                        session = session,
+            if (tonight.entries.isNotEmpty()) {
+                item(key = "tonight") {
+                    TonightPreview(
+                        tonight = tonight,
+                        tonightActive = tonightActive,
                         activeSession = activeSession,
-                        lastSession = lastSession,
-                        libraryConfig = library.config,
                         playback = playback,
-                        onContinue = onContinue,
-                        onPlayPause = onPlayPause,
+                        onOpen = onOpenTonight,
+                        onStart = onStartTonight,
                     )
+                }
+            } else {
+                resumableSession?.let { session ->
+                    item(key = "continue") {
+                        ContinueSection(
+                            session = session,
+                            activeSession = activeSession,
+                            lastSession = lastSession,
+                            libraryConfig = library.config,
+                            playback = playback,
+                            onContinue = onContinue,
+                            onPlayPause = onPlayPause,
+                        )
+                    }
                 }
             }
             item(key = "my-content-heading") {
@@ -1028,6 +1068,7 @@ private fun CandidateReview(
     onAccept: () -> Unit,
     onAcceptOne: (String) -> Unit,
     onPlay: (MediaSourceRef) -> Unit,
+    onOpenMediaActions: (MediaSourceRef) -> Unit,
     onIgnore: (String) -> Unit,
     onIgnoreSelected: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1121,6 +1162,7 @@ private fun CandidateReview(
                         },
                         onAccept = { onAcceptOne(uriValue) },
                         onPlay = { onPlay(media) },
+                        onOpenMediaActions = { onOpenMediaActions(media) },
                         onIgnore = { onIgnore(uriValue) },
                     )
                 }
@@ -1159,6 +1201,7 @@ private fun CandidateRow(
     onToggle: () -> Unit,
     onAccept: () -> Unit,
     onPlay: () -> Unit,
+    onOpenMediaActions: () -> Unit,
     onIgnore: () -> Unit,
 ) {
     Column(
@@ -1210,6 +1253,9 @@ private fun CandidateRow(
             }
             TextButton(onClick = onAccept, enabled = !isUnavailable) {
                 Text("收录", color = AppSecondaryText, fontSize = 11.sp)
+            }
+            TextButton(onClick = onOpenMediaActions, enabled = !isUnavailable) {
+                Text("操作", color = AppSecondaryText, fontSize = 11.sp)
             }
             TextButton(onClick = onIgnore) {
                 Text("忽略", color = AppMutedText, fontSize = 11.sp)
@@ -1520,6 +1566,140 @@ private fun ContinueSection(
             onContinue = onContinue,
             onPlayPause = onPlayPause,
         )
+    }
+}
+
+@Composable
+private fun TonightPreview(
+    tonight: TonightQueue,
+    tonightActive: Boolean,
+    activeSession: ActiveSession?,
+    playback: PlaybackSnapshot,
+    onOpen: () -> Unit,
+    onStart: () -> Unit,
+) {
+    val current = tonight.current
+    val next = tonight.entries.drop(tonight.currentIndex + 1).firstOrNull { !it.completed }
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        ManagerEntry(
+            title = if (tonight.started) "今晚继续" else "今晚",
+            detail = "${tonight.entries.size} 项 · ${tonight.remainingCount} 项未完成",
+            action = "编辑",
+            onClick = onOpen,
+        )
+        current?.let { entry ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(entry.media.displayTitle, color = AppPrimaryText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        listOfNotNull(
+                            if (entry.completed) "已完成" else "第 ${tonight.currentIndex + 1} / ${tonight.entries.size} 项",
+                            formatTime(
+                            if (tonightActive && activeSession != null) playback.positionMs
+                                else entry.positionMs,
+                            ).takeIf { entry.positionMs > 0L || (tonightActive && activeSession != null) },
+                            next?.media?.displayTitle?.let { "接下来：$it" },
+                        ).joinToString(" · "),
+                        color = AppMutedText,
+                        fontSize = 11.sp,
+                    )
+                }
+                TextButton(onClick = onStart) {
+                    Text(if (tonight.started) "继续今晚" else "开始今晚", color = AppAccent, fontSize = 12.sp)
+                }
+            }
+        }
+        Hairline()
+    }
+}
+
+@Composable
+private fun TonightEditor(
+    tonight: TonightQueue,
+    library: MediaLibraryState,
+    onStartTonight: () -> Unit,
+    onRemove: (Int) -> Unit,
+    onMove: (Int, Int) -> Unit,
+    onClear: () -> Unit,
+    onOpenMediaActions: (MediaSourceRef) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (tonight.isEmpty) "还没有安排今晚的内容" else "${tonight.entries.size} 项 · ${tonight.remainingCount} 项未完成",
+                color = AppSecondaryText,
+                fontSize = 12.sp,
+            )
+            Row {
+                TextButton(onClick = onStartTonight, enabled = !tonight.isEmpty) {
+                    Text(if (tonight.started) "继续今晚" else "开始今晚", color = AppAccent, fontSize = 12.sp)
+                }
+                TextButton(onClick = onClear, enabled = !tonight.isEmpty) {
+                    Text("清空", color = AppMutedText, fontSize = 12.sp)
+                }
+            }
+        }
+        if (tonight.isEmpty) {
+            StatusText("可以在“我的内容”或“新发现”中打开条目操作，加入今晚。")
+            return@Column
+        }
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            itemsIndexed(
+                items = tonight.entries,
+                key = { index, entry -> "tonight-$index-${entry.contentId}" },
+            ) { index, entry ->
+                val media = library.config.resolveActiveMedia(entry.media)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(
+                            media.displayTitle,
+                            color = if (index == tonight.currentIndex) AppAccent else AppPrimaryText,
+                            fontSize = 14.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            listOfNotNull(
+                                if (entry.completed) "已完成" else if (index == tonight.currentIndex) "当前项" else "待播放",
+                                formatTime(entry.positionMs).takeIf { entry.positionMs > 0L },
+                            ).joinToString(" · "),
+                            color = AppMutedText,
+                            fontSize = 10.sp,
+                        )
+                    }
+                    TextButton(onClick = { onOpenMediaActions(media) }) {
+                        Text("操作", color = AppSecondaryText, fontSize = 11.sp)
+                    }
+                    TextButton(onClick = { onMove(index, index - 1) }, enabled = index > 0) {
+                        Text("↑", color = if (index > 0) AppSecondaryText else AppHairline, fontSize = 12.sp)
+                    }
+                    TextButton(onClick = { onMove(index, index + 1) }, enabled = index < tonight.entries.lastIndex) {
+                        Text("↓", color = if (index < tonight.entries.lastIndex) AppSecondaryText else AppHairline, fontSize = 12.sp)
+                    }
+                    TextButton(onClick = { onRemove(index) }) {
+                        Text("移除", color = AppMutedText, fontSize = 11.sp)
+                    }
+                }
+                Hairline()
+            }
+        }
     }
 }
 
@@ -1922,8 +2102,7 @@ private fun MediaActionDialog(
     item: MediaSourceRef,
     isCollected: Boolean,
     onDismiss: () -> Unit,
-    onPlayNext: () -> Unit,
-    onAddToQueue: () -> Unit,
+    onAddToTonight: () -> Unit,
     onChoosePlaylist: () -> Unit,
     onAddToMyContent: () -> Unit,
     onRemoveFromLibrary: () -> Unit,
@@ -1933,8 +2112,7 @@ private fun MediaActionDialog(
         title = { Text(item.displayTitle, color = AppPrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                TextButton(onClick = onPlayNext) { Text("下一项播放", color = AppPrimaryText) }
-                TextButton(onClick = onAddToQueue) { Text("添加到队列末尾", color = AppPrimaryText) }
+                TextButton(onClick = onAddToTonight) { Text("加入今晚", color = AppPrimaryText) }
                 TextButton(onClick = onChoosePlaylist) { Text("添加到播放列表", color = AppPrimaryText) }
                 if (isCollected) {
                     TextButton(onClick = onRemoveFromLibrary) {

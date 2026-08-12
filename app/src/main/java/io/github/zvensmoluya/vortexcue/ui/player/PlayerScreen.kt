@@ -76,6 +76,8 @@ internal fun PlayerScreen(
     sleepTimer: SleepTimerState,
     showGestureHint: Boolean,
     isCollected: Boolean,
+    isInTonight: Boolean,
+    isTonightPlaying: Boolean,
     contentUnit: PlayableContentUnit?,
     embeddedCueTrackId: String?,
     embeddedCueText: String?,
@@ -85,6 +87,11 @@ internal fun PlayerScreen(
     onOpenSources: () -> Unit,
     onRelinkMedia: () -> Unit,
     onToggleCollected: () -> Unit,
+    onAddToTonight: () -> Unit,
+    onOpenTonight: () -> Unit,
+    onQueueSelect: (Int) -> Unit,
+    onQueueMove: (Int, Int) -> Unit,
+    onQueueRemove: (Int) -> Unit,
     onSelectTextTrack: (TextTrackSlot, String?) -> Unit,
     onRestoreAutomaticTextTrack: (TextTrackSlot) -> Unit,
     onAddTextTrack: (TextTrackSlot) -> Unit,
@@ -94,10 +101,12 @@ internal fun PlayerScreen(
     onGestureHintSeen: () -> Unit,
     onSetSleepTimer: (Long) -> Unit,
     onStopAfterCurrent: () -> Unit,
+    onStopAfterTonight: () -> Unit,
     onCancelSleepTimer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var textTracksVisible by rememberSaveable { mutableStateOf(false) }
+    var timerVisible by rememberSaveable { mutableStateOf(false) }
     val cuePositionMs =
         (playback.positionMs + session.subtitleOffsetMs).coerceAtLeast(0L)
     val currentCue =
@@ -155,18 +164,23 @@ internal fun PlayerScreen(
                 hasSecondaryText = hasSecondaryText,
                 sleepTimer = sleepTimer,
                 isCollected = isCollected,
+                isInTonight = isInTonight,
+                isTonightPlaying = isTonightPlaying,
                 onPlayPause = onPlayPause,
                 onBackToLibrary = onBackToLibrary,
                 onOpenSources = onOpenSources,
                 onRelinkMedia = onRelinkMedia,
                 onToggleCollected = onToggleCollected,
+                onAddToTonight = onAddToTonight,
+                onOpenTonight = onOpenTonight,
+                onQueueSelect = onQueueSelect,
+                onQueueMove = onQueueMove,
+                onQueueRemove = onQueueRemove,
                 onManageTextTracks = { textTracksVisible = true },
                 onEnterGlow = { onSurfaceChanged(PlayerSurface.Glow) },
                 onEnterCalibration = { onSurfaceChanged(PlayerSurface.Calibration) },
                 onSubtitleOffsetChanged = onSubtitleOffsetChanged,
-                onSetSleepTimer = onSetSleepTimer,
-                onStopAfterCurrent = onStopAfterCurrent,
-                onCancelSleepTimer = onCancelSleepTimer,
+                onShowTimer = { timerVisible = true },
                 modifier = modifier,
             )
         PlayerSurface.Calibration ->
@@ -195,6 +209,7 @@ internal fun PlayerScreen(
                 onManageTextTracks = { textTracksVisible = true },
                 onSubtitleOffsetChanged = onSubtitleOffsetChanged,
                 onGestureHintSeen = onGestureHintSeen,
+                onShowTimer = { timerVisible = true },
                 modifier = modifier,
             )
     }
@@ -209,6 +224,29 @@ internal fun PlayerScreen(
                 textTracksVisible = false
                 onAddTextTrack(slot)
             },
+        )
+    }
+    if (timerVisible) {
+        SleepTimerDialog(
+            state = sleepTimer,
+            onSetDuration = {
+                onSetSleepTimer(it)
+                timerVisible = false
+            },
+            onEndOfItem = {
+                onStopAfterCurrent()
+                timerVisible = false
+            },
+            showEndOfTonight = isTonightPlaying,
+            onEndOfTonight = {
+                onStopAfterTonight()
+                timerVisible = false
+            },
+            onCancelTimer = {
+                onCancelSleepTimer()
+                timerVisible = false
+            },
+            onDismiss = { timerVisible = false },
         )
     }
 }
@@ -364,23 +402,27 @@ private fun NormalPlayer(
     hasSecondaryText: Boolean,
     sleepTimer: SleepTimerState,
     isCollected: Boolean,
+    isInTonight: Boolean,
+    isTonightPlaying: Boolean,
     onPlayPause: () -> Unit,
     onBackToLibrary: () -> Unit,
     onOpenSources: () -> Unit,
     onRelinkMedia: () -> Unit,
     onToggleCollected: () -> Unit,
+    onAddToTonight: () -> Unit,
+    onOpenTonight: () -> Unit,
+    onQueueSelect: (Int) -> Unit,
+    onQueueMove: (Int, Int) -> Unit,
+    onQueueRemove: (Int) -> Unit,
     onManageTextTracks: () -> Unit,
     onEnterGlow: () -> Unit,
     onEnterCalibration: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
-    onSetSleepTimer: (Long) -> Unit,
-    onStopAfterCurrent: () -> Unit,
-    onCancelSleepTimer: () -> Unit,
+    onShowTimer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = subtitleContext(session.subtitle?.timeline, cuePositionMs, currentCue)
     var queueVisible by rememberSaveable { mutableStateOf(false) }
-    var timerVisible by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier =
@@ -437,6 +479,13 @@ private fun NormalPlayer(
                             else -> "字幕"
                         },
                     color = AppSecondaryText,
+                    fontSize = 12.sp,
+                )
+            }
+            TextButton(onClick = if (isInTonight) onOpenTonight else onAddToTonight) {
+                Text(
+                    text = if (isInTonight) "查看今晚" else "加入今晚",
+                    color = if (isInTonight) AppMutedText else AppSecondaryText,
                     fontSize = 12.sp,
                 )
             }
@@ -550,8 +599,9 @@ private fun NormalPlayer(
             player = player,
             playback = playback,
             sleepTimer = sleepTimer,
+            isTonightPlaying = isTonightPlaying,
             onShowQueue = { queueVisible = true },
-            onShowTimer = { timerVisible = true },
+            onShowTimer = onShowTimer,
         )
 
         Row(
@@ -587,27 +637,12 @@ private fun NormalPlayer(
 
     if (queueVisible) {
         QueueDialog(
-            player = player,
             playback = playback,
+            isTonight = isTonightPlaying,
+            onSelect = onQueueSelect,
+            onMove = onQueueMove,
+            onRemove = onQueueRemove,
             onDismiss = { queueVisible = false },
-        )
-    }
-    if (timerVisible) {
-        SleepTimerDialog(
-            state = sleepTimer,
-            onSetDuration = {
-                onSetSleepTimer(it)
-                timerVisible = false
-            },
-            onEndOfItem = {
-                onStopAfterCurrent()
-                timerVisible = false
-            },
-            onCancelTimer = {
-                onCancelSleepTimer()
-                timerVisible = false
-            },
-            onDismiss = { timerVisible = false },
         )
     }
 }
@@ -868,6 +903,7 @@ private fun GlowPlayer(
     onManageTextTracks: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
     onGestureHintSeen: () -> Unit,
+    onShowTimer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var controlsVisible by rememberSaveable { mutableStateOf(false) }
@@ -1064,12 +1100,8 @@ private fun GlowPlayer(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (sleepTimer.isActive) {
-                        Text(
-                            text = sleepTimerLabel(sleepTimer),
-                            color = controlColor,
-                            fontSize = 11.sp,
-                        )
+                    TextButton(onClick = onShowTimer) {
+                        Text(sleepTimerLabel(sleepTimer), color = controlColor, fontSize = 11.sp)
                     }
                     TextButton(onClick = { controlsVisible = false }) {
                         Text("锁定", color = controlColor)
@@ -1278,6 +1310,7 @@ private fun PlayerOptions(
     player: Player,
     playback: PlaybackSnapshot,
     sleepTimer: SleepTimerState,
+    isTonightPlaying: Boolean,
     onShowQueue: () -> Unit,
     onShowTimer: () -> Unit,
 ) {
@@ -1286,18 +1319,26 @@ private fun PlayerOptions(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = { player.shuffleModeEnabled = !playback.shuffleEnabled }) {
-            Text(
-                "随机",
-                color = if (playback.shuffleEnabled) AppAccent else AppMutedText,
-                fontSize = 12.sp,
-            )
-        }
-        TextButton(onClick = { player.repeatMode = nextRepeatMode(playback.repeatMode) }) {
-            Text(repeatModeLabel(playback.repeatMode), color = AppMutedText, fontSize = 12.sp)
+        if (isTonightPlaying) {
+            Text("按今晚顺序", color = AppMutedText, fontSize = 12.sp)
+        } else {
+            TextButton(onClick = { player.shuffleModeEnabled = !playback.shuffleEnabled }) {
+                Text(
+                    "随机",
+                    color = if (playback.shuffleEnabled) AppAccent else AppMutedText,
+                    fontSize = 12.sp,
+                )
+            }
+            TextButton(onClick = { player.repeatMode = nextRepeatMode(playback.repeatMode) }) {
+                Text(repeatModeLabel(playback.repeatMode), color = AppMutedText, fontSize = 12.sp)
+            }
         }
         TextButton(onClick = onShowQueue) {
-            Text("队列 ${playback.queue.size}", color = AppMutedText, fontSize = 12.sp)
+            Text(
+                "${if (isTonightPlaying) "今晚" else "队列"} ${playback.queue.size}",
+                color = AppMutedText,
+                fontSize = 12.sp,
+            )
         }
         TextButton(onClick = onShowTimer) {
             Text(
@@ -1311,13 +1352,16 @@ private fun PlayerOptions(
 
 @Composable
 private fun QueueDialog(
-    player: Player,
     playback: PlaybackSnapshot,
+    isTonight: Boolean,
+    onSelect: (Int) -> Unit,
+    onMove: (Int, Int) -> Unit,
+    onRemove: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("播放队列", color = AppPrimaryText) },
+        title = { Text(if (isTonight) "今晚" else "播放队列", color = AppPrimaryText) },
         text = {
             LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
                 itemsIndexed(
@@ -1336,8 +1380,7 @@ private fun QueueDialog(
                             ) {
                                 TextButton(
                                     onClick = {
-                                        player.seekToDefaultPosition(index)
-                                        player.play()
+                                        onSelect(index)
                                     },
                                 ) {
                                     Column {
@@ -1359,13 +1402,13 @@ private fun QueueDialog(
                                 }
                             }
                             TextButton(
-                                onClick = { player.moveMediaItem(index, index - 1) },
+                                onClick = { onMove(index, index - 1) },
                                 enabled = index > 0,
                             ) {
                                 Text("↑", color = if (index > 0) AppSecondaryText else AppMutedText)
                             }
                             TextButton(
-                                onClick = { player.moveMediaItem(index, index + 1) },
+                                onClick = { onMove(index, index + 1) },
                                 enabled = index < playback.queue.lastIndex,
                             ) {
                                 Text(
@@ -1379,13 +1422,17 @@ private fun QueueDialog(
                                 )
                             }
                             TextButton(
-                                onClick = { player.removeMediaItem(index) },
-                                enabled = playback.queue.size > 1,
+                                onClick = { onRemove(index) },
+                                enabled = isTonight || playback.queue.size > 1,
                             ) {
                                 Text(
                                     "移除",
                                     color =
-                                        if (playback.queue.size > 1) AppMutedText else AppHairline,
+                                        if (isTonight || playback.queue.size > 1) {
+                                            AppMutedText
+                                        } else {
+                                            AppHairline
+                                        },
                                     fontSize = 11.sp,
                                 )
                             }
@@ -1413,6 +1460,8 @@ private fun SleepTimerDialog(
     state: SleepTimerState,
     onSetDuration: (Long) -> Unit,
     onEndOfItem: () -> Unit,
+    showEndOfTonight: Boolean,
+    onEndOfTonight: () -> Unit,
     onCancelTimer: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1435,6 +1484,11 @@ private fun SleepTimerDialog(
                 }
                 TextButton(onClick = onEndOfItem) {
                     Text("当前内容结束后停止", color = AppPrimaryText)
+                }
+                if (showEndOfTonight) {
+                    TextButton(onClick = onEndOfTonight) {
+                        Text("今晚结束后停止", color = AppPrimaryText)
+                    }
                 }
                 if (state.isActive) {
                     TextButton(onClick = onCancelTimer) {
@@ -1612,6 +1666,7 @@ private fun sleepTimerLabel(state: SleepTimerState): String =
     when (state.mode) {
         SleepTimerMode.None -> "定时"
         SleepTimerMode.EndOfItem -> "本曲结束"
+        SleepTimerMode.EndOfTonight -> "今晚结束"
         SleepTimerMode.Duration -> {
             val minutes = ((state.remainingMs + 59_999L) / 60_000L).coerceAtLeast(1L)
             "剩余 $minutes 分"

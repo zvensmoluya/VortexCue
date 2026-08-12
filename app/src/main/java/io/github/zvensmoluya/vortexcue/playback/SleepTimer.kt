@@ -20,6 +20,7 @@ enum class SleepTimerMode {
     None,
     Duration,
     EndOfItem,
+    EndOfTonight,
 }
 
 data class SleepTimerState(
@@ -34,6 +35,7 @@ internal object SleepTimerCommands {
     const val ActionGet = "io.github.zvensmoluya.vortexcue.SLEEP_TIMER_GET"
     const val ActionSetDuration = "io.github.zvensmoluya.vortexcue.SLEEP_TIMER_SET_DURATION"
     const val ActionEndOfItem = "io.github.zvensmoluya.vortexcue.SLEEP_TIMER_END_OF_ITEM"
+    const val ActionEndOfTonight = "io.github.zvensmoluya.vortexcue.SLEEP_TIMER_END_OF_TONIGHT"
     const val ActionCancel = "io.github.zvensmoluya.vortexcue.SLEEP_TIMER_CANCEL"
     const val DurationMs = "duration_ms"
     const val Mode = "mode"
@@ -42,8 +44,9 @@ internal object SleepTimerCommands {
     val Get = SessionCommand(ActionGet, Bundle.EMPTY)
     val SetDuration = SessionCommand(ActionSetDuration, Bundle.EMPTY)
     val EndOfItem = SessionCommand(ActionEndOfItem, Bundle.EMPTY)
+    val EndOfTonight = SessionCommand(ActionEndOfTonight, Bundle.EMPTY)
     val Cancel = SessionCommand(ActionCancel, Bundle.EMPTY)
-    val All = listOf(Get, SetDuration, EndOfItem, Cancel)
+    val All = listOf(Get, SetDuration, EndOfItem, EndOfTonight, Cancel)
 }
 
 @Composable
@@ -71,6 +74,10 @@ internal fun MediaController.setSleepTimer(durationMs: Long) {
 
 internal fun MediaController.stopAfterCurrentItem() {
     sendCustomCommand(SleepTimerCommands.EndOfItem, Bundle.EMPTY)
+}
+
+internal fun MediaController.stopAfterTonight() {
+    sendCustomCommand(SleepTimerCommands.EndOfTonight, Bundle.EMPTY)
 }
 
 internal fun MediaController.cancelSleepTimer() {

@@ -40,6 +40,7 @@ internal class LibraryStateHolder(
     private val scanJobs = mutableMapOf<String, Job>()
     private val scanRequestIds = mutableMapOf<String, Long>()
     private var nextScanRequestId = 0L
+    private var externallyRetainedContentIds: Set<String> = emptySet()
 
     var state by mutableStateOf(MediaLibraryState())
         private set
@@ -56,6 +57,18 @@ internal class LibraryStateHolder(
     }
 
     suspend fun inspectMedia(source: MediaSourceRef): MediaSourceRef = scanner.inspect(source)
+
+    /** Keeps independent session plans from being mistaken for unreferenced catalog data. */
+    fun retainContentIds(contentIds: Set<String>) {
+        externallyRetainedContentIds = contentIds.filterTo(linkedSetOf(), String::isNotBlank)
+    }
+
+    private fun externalRetainedUriValues(config: LibraryConfig): Set<String> =
+        config.contentUnits
+            .filter { it.stableId in externallyRetainedContentIds }
+            .flatMapTo(linkedSetOf()) { unit ->
+                unit.mediaLocators.map { it.media.uri.toString() }
+            }
 
     fun cancelScan(sourceId: String? = null) {
         val sourceIds = sourceId?.let(::setOf) ?: scanJobs.keys.toSet()
@@ -276,7 +289,10 @@ internal class LibraryStateHolder(
                 sourceId = sourceId,
                 seenUriValues = freshItems.map { it.uri.toString() }.toSet(),
                 sourceAvailable = result.locatorSourceAvailable,
-                retainedUriValues = updatedConfig.retainedContentUriValues() + cachedSourceUris,
+                retainedUriValues =
+                    updatedConfig.retainedContentUriValues() +
+                        externalRetainedUriValues(updatedConfig) +
+                        cachedSourceUris,
             )
         val catalogItems =
             mergeCatalogItems(
@@ -449,7 +465,8 @@ internal class LibraryStateHolder(
                 .distinctBy { stableMediaLocatorId(it.uri.toString(), it.sourceId) }
                 .filter { it.sourceId == folderId }
         val removedUris = removedItems.map { it.uri.toString() }.toSet()
-        val retainedUris = config.retainedContentUriValues()
+        val retainedUris =
+            config.retainedContentUriValues() + externalRetainedUriValues(config)
         val updatedConfig =
             config.copy(
                 folders = config.folders.filterNot { it.id == folderId },
@@ -486,7 +503,9 @@ internal class LibraryStateHolder(
                         it.sourceId == LibrarySourceIds.LooseFiles
                     },
             )
-        val retainedUris = configWithoutLooseRecent.retainedContentUriValues()
+        val retainedUris =
+            configWithoutLooseRecent.retainedContentUriValues() +
+                externalRetainedUriValues(configWithoutLooseRecent)
         updateConfig(
             configWithoutLooseRecent.copy(
                 catalogItems =

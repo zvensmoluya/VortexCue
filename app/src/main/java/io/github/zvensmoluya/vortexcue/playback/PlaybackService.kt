@@ -33,6 +33,7 @@ class PlaybackService : MediaSessionService() {
     private var timerJob: Job? = null
     private var timerDeadlineMs = 0L
     private var stopAfterCurrentItem = false
+    private var stopAfterTonight = false
 
     private val sleepTimerListener =
         object : Player.Listener {
@@ -48,10 +49,28 @@ class PlaybackService : MediaSessionService() {
                     playbackPlayer?.pause()
                     clearSleepTimer()
                 }
+                if (
+                    stopAfterTonight &&
+                        reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT
+                ) {
+                    playbackPlayer?.pause()
+                    clearSleepTimer()
+                }
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (stopAfterCurrentItem && playbackState == Player.STATE_ENDED) {
+                val player = playbackPlayer
+                if (
+                    (stopAfterCurrentItem || stopAfterTonight) &&
+                        playbackState == Player.STATE_ENDED &&
+                        player != null &&
+                        player.currentMediaItemIndex == player.mediaItemCount - 1 &&
+                        isConfirmedTonightEnd(
+                            positionMs = player.currentPosition,
+                            durationMs = player.duration.takeUnless { it == C.TIME_UNSET } ?: 0L,
+                        )
+                ) {
+                    player.pause()
                     clearSleepTimer()
                 }
             }
@@ -113,6 +132,7 @@ class PlaybackService : MediaSessionService() {
     private fun setDurationTimer(durationMs: Long) {
         timerJob?.cancel()
         stopAfterCurrentItem = false
+        stopAfterTonight = false
         timerDeadlineMs = SystemClock.elapsedRealtime() + durationMs
         timerJob =
             serviceScope.launch {
@@ -127,6 +147,16 @@ class PlaybackService : MediaSessionService() {
         timerJob = null
         timerDeadlineMs = 0L
         stopAfterCurrentItem = true
+        stopAfterTonight = false
+    }
+
+    private fun setEndOfTonightTimer() {
+        timerJob?.cancel()
+        timerJob = null
+        timerDeadlineMs = 0L
+        stopAfterCurrentItem = false
+        stopAfterTonight = true
+        playbackPlayer?.repeatMode = Player.REPEAT_MODE_OFF
     }
 
     private fun clearSleepTimer() {
@@ -134,12 +164,14 @@ class PlaybackService : MediaSessionService() {
         timerJob = null
         timerDeadlineMs = 0L
         stopAfterCurrentItem = false
+        stopAfterTonight = false
     }
 
     private fun sleepTimerResult(): SessionResult {
         val mode =
             when {
                 stopAfterCurrentItem -> SleepTimerMode.EndOfItem
+                stopAfterTonight -> SleepTimerMode.EndOfTonight
                 timerDeadlineMs > 0L -> SleepTimerMode.Duration
                 else -> SleepTimerMode.None
             }
@@ -210,6 +242,10 @@ class PlaybackService : MediaSessionService() {
                     }
                     SleepTimerCommands.ActionEndOfItem -> {
                         setEndOfItemTimer()
+                        sleepTimerResult()
+                    }
+                    SleepTimerCommands.ActionEndOfTonight -> {
+                        setEndOfTonightTimer()
                         sleepTimerResult()
                     }
                     SleepTimerCommands.ActionCancel -> {
