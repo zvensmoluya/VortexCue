@@ -124,7 +124,7 @@ fun VortexCueApp(
     }
     var notificationPermissionRequested by rememberSaveable { mutableStateOf(false) }
     var pendingAutoPlay by rememberSaveable { mutableStateOf(false) }
-    var openImportOnHome by rememberSaveable { mutableStateOf(false) }
+    var folderPickTargetId by rememberSaveable { mutableStateOf<String?>(null) }
     val libraryState = libraryStateHolder.state
     val selectedEmbeddedTrackId =
         activeSession?.media?.let { media ->
@@ -414,12 +414,38 @@ fun VortexCueApp(
                     when (target) {
                         MediaPickTarget.Draft -> {
                             libraryStateHolder.rememberRecentMedia(readySource)
-                            draft =
-                                SessionDraft(
-                                    media = DraftMedia.Ready(readySource),
-                                    subtitle = DraftSubtitle.None,
+                            val previous =
+                                activeSession?.takeIf {
+                                    libraryStateHolder.state.config.sameContent(it.media, readySource)
+                                }
+                            val mediaChanged =
+                                player.currentMediaItem?.localConfiguration?.uri != readySource.uri
+                            if (mediaChanged) {
+                                player.setMediaItem(readySource.toMediaItem())
+                            }
+                            if (mediaChanged || player.playbackState == Player.STATE_IDLE) {
+                                player.prepare()
+                            }
+                            if (!mediaChanged && player.playbackState == Player.STATE_ENDED) {
+                                player.seekTo(0L)
+                            }
+                            val session =
+                                ActiveSession(
+                                    media = readySource,
+                                    subtitle = previous?.subtitle,
+                                    secondarySubtitle = previous?.secondarySubtitle,
+                                    subtitleOffsetMs =
+                                        previous?.subtitleOffsetMs
+                                            ?: libraryStateHolder.state.config.subtitleOffsetFor(
+                                                readySource,
+                                            ),
                                 )
-                            restoreDraftSubtitles(readySource)
+                            activeSession = session
+                            draft = session.toDraft()
+                            playerSurface = PlayerSurface.Normal
+                            destination = AppDestination.Player
+                            playWithNotificationPermission()
+                            persistSession(session)
                         }
                         MediaPickTarget.LastSession ->
                             relinkedSession?.let { session ->
@@ -1015,7 +1041,15 @@ fun VortexCueApp(
         }
     val folderPicker =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-            uri?.let(libraryStateHolder::addFolder)
+            val targetId = folderPickTargetId
+            folderPickTargetId = null
+            uri?.let { selectedUri ->
+                if (targetId == null) {
+                    libraryStateHolder.addFolder(selectedUri)
+                } else {
+                    libraryStateHolder.replaceFolder(targetId, selectedUri)
+                }
+            }
         }
     val libraryPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -1031,8 +1065,14 @@ fun VortexCueApp(
             if (glowActive) displayProfile.glowWindowBrightness else null,
         )
     }
-    LaunchedEffect(destination, playback.isPlaying) {
-        onPlaybackActiveChanged(destination == AppDestination.Player && playback.isPlaying)
+    LaunchedEffect(destination, playerSurface, playback.isPlaying) {
+        onPlaybackActiveChanged(
+            shouldKeepPlaybackScreenOn(
+                isPlayerDestination = destination == AppDestination.Player,
+                surface = playerSurface,
+                isPlaying = playback.isPlaying,
+            ),
+        )
     }
     DisposableEffect(Unit) {
         onDispose {
@@ -1087,19 +1127,13 @@ fun VortexCueApp(
                 playback = playback,
                 displayProfile = displayProfile,
                 library = libraryState,
-                openImportRequested = openImportOnHome,
-                onImportRequestConsumed = { openImportOnHome = false },
                 onPickMedia = {
                     mediaPickTarget = MediaPickTarget.Draft
                     mediaPicker.launch(arrayOf("audio/*", "video/*"))
                 },
-                onPickSubtitle = { slot ->
-                    subtitlePickTarget =
-                        when (slot) {
-                            TextTrackSlot.Primary -> SubtitlePickTarget.DraftPrimary
-                            TextTrackSlot.Secondary -> SubtitlePickTarget.DraftSecondary
-                        }
-                    subtitlePicker.launch(arrayOf("*/*"))
+                onCancelMediaOpen = {
+                    cancelMediaLoad()
+                    draft = activeSession?.toDraft() ?: SessionDraft()
                 },
                 onRequestLibraryAccess = {
                     val permissions = mediaLibraryPermissionsToRequest(context)
@@ -1110,7 +1144,16 @@ fun VortexCueApp(
                     }
                 },
                 onRefreshLibrary = { libraryStateHolder.scan() },
-                onAddFolder = { folderPicker.launch(null) },
+                onRefreshSource = libraryStateHolder::refreshSource,
+                onCancelScan = { sourceId -> libraryStateHolder.cancelScan(sourceId) },
+                onAddFolder = {
+                    folderPickTargetId = null
+                    folderPicker.launch(null)
+                },
+                onRelinkFolder = { sourceId ->
+                    folderPickTargetId = sourceId
+                    folderPicker.launch(null)
+                },
                 onRemoveFolder = libraryStateHolder::removeFolder,
                 onClearLooseFiles = libraryStateHolder::clearLooseFiles,
                 onAcceptCandidates = libraryStateHolder::acceptCandidates,
@@ -1119,9 +1162,12 @@ fun VortexCueApp(
                 onRestoreIgnored = libraryStateHolder::restoreIgnored,
                 onCollectMedia = libraryStateHolder::collectMedia,
                 onPlayLibraryItems = { items, index ->
-                    items.getOrNull(index)?.let { media ->
+                    val config = libraryStateHolder.state.config
+                    val resolvedItems = items.map(config::resolveActiveMedia)
+                    resolvedItems.getOrNull(index)?.let { media ->
+                        libraryStateHolder.rememberRecentMedia(media)
                         player.setMediaItems(
-                            items.map { it.toMediaItem() },
+                            resolvedItems.map { it.toMediaItem() },
                             index,
                             0L,
                         )
@@ -1185,76 +1231,6 @@ fun VortexCueApp(
                 onAddToPlaylist = libraryStateHolder::addToPlaylist,
                 onRemoveFromPlaylist = libraryStateHolder::removeFromPlaylist,
                 onDeletePlaylist = libraryStateHolder::deletePlaylist,
-                onRemoveSubtitle = { slot ->
-                    cancelDraftSubtitleLoad(slot)
-                    val media = (draft.media as? DraftMedia.Ready)?.source
-                    if (media != null) {
-                        libraryStateHolder.updateManualTextSource(
-                            media = media,
-                            slot = slot,
-                            subtitle = null,
-                        )
-                    }
-                    draft = draft.withSubtitle(slot, DraftSubtitle.None)
-                    if (
-                        media != null &&
-                            activeSession?.let {
-                                libraryStateHolder.state.config.sameContent(it.media, media)
-                            } == true
-                    ) {
-                        restoreAssociatedTextTracks(media)
-                    }
-                },
-                onClearDraft = {
-                    cancelMediaLoad()
-                    cancelDraftSubtitleLoads()
-                    draft = SessionDraft()
-                },
-                onApplyDraft = {
-                    (draft.media as? DraftMedia.Ready)?.source?.let { media ->
-                        val loadedSubtitle =
-                            (draft.subtitle as? DraftSubtitle.Ready)?.subtitle
-                        val loadedSecondarySubtitle =
-                            (draft.secondarySubtitle as? DraftSubtitle.Ready)?.subtitle
-                        val mediaChanged =
-                            player.currentMediaItem
-                                ?.localConfiguration
-                                ?.uri != media.uri
-                        if (mediaChanged) {
-                            player.setMediaItem(media.toMediaItem())
-                        }
-                        if (mediaChanged || player.playbackState == Player.STATE_IDLE) {
-                            player.prepare()
-                        }
-                        if (!mediaChanged && player.playbackState == Player.STATE_ENDED) {
-                            player.seekTo(0L)
-                        }
-                        val preservedOffsetMs =
-                            activeSession
-                                ?.takeIf {
-                                    libraryStateHolder.state.config.sameContent(it.media, media)
-                                }
-                                ?.subtitleOffsetMs
-                                ?: libraryStateHolder.state.config.subtitleOffsetFor(media)
-                        val applied =
-                            ActiveSession(
-                                media = media,
-                                subtitle = loadedSubtitle,
-                                secondarySubtitle = loadedSecondarySubtitle,
-                                subtitleOffsetMs = preservedOffsetMs,
-                            )
-                        libraryStateHolder.rememberRecentMedia(media)
-                        activeSession = applied
-                        if (loadedSubtitle == null) {
-                            restoreAssociatedTextTracks(media)
-                        }
-                        draft = applied.toDraft()
-                        playerSurface = PlayerSurface.Normal
-                        destination = AppDestination.Player
-                        playWithNotificationPermission()
-                        persistSession(applied)
-                    }
-                },
                 onContinue = {
                     val currentSession = activeSession
                     val saved = lastSession
@@ -1282,6 +1258,8 @@ fun VortexCueApp(
                         playerSurface =
                             resolveResumeSurface(lastSurface, glowCalibrationCompleted)
                         destination = AppDestination.Player
+                        playWithNotificationPermission()
+                        persistSession(currentSession)
                     } else {
                         saved?.let { restorable ->
                             when (restorable.mediaAvailability) {

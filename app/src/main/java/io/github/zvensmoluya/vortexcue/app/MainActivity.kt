@@ -115,6 +115,7 @@ class MainActivity : ComponentActivity() {
     private fun setImmersiveMode(enabled: Boolean) {
         if (immersiveMode == enabled) return
         immersiveMode = enabled
+        setImmersive(enabled)
         applySystemBars()
     }
 

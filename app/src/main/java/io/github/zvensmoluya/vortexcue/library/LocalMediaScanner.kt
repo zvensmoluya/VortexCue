@@ -12,6 +12,8 @@ import io.github.zvensmoluya.vortexcue.core.model.*
 import java.io.File
 import java.util.ArrayDeque
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 class LocalMediaScanner(private val context: Context) {
@@ -70,6 +72,7 @@ class LocalMediaScanner(private val context: Context) {
 
                 buildList {
                     while (cursor.moveToNext()) {
+                        currentCoroutineContext().ensureActive()
                         val id = cursor.getLong(idIndex)
                         val displayName = cursor.stringOrNull(nameIndex) ?: "未命名媒体"
                         val rawPath = cursor.stringOrNull(pathIndex)
@@ -153,6 +156,7 @@ class LocalMediaScanner(private val context: Context) {
 
                 buildList {
                     while (cursor.moveToNext()) {
+                        currentCoroutineContext().ensureActive()
                         val id = cursor.getLong(idIndex)
                         val displayName = cursor.stringOrNull(nameIndex) ?: "未命名视频"
                         val rawPath = cursor.stringOrNull(pathIndex)
@@ -192,6 +196,7 @@ class LocalMediaScanner(private val context: Context) {
             val subtitles = mutableListOf<DiscoveredSubtitle>()
 
             while (pending.isNotEmpty()) {
+                currentCoroutineContext().ensureActive()
                 val current = pending.removeFirst()
                 val childrenUri =
                     DocumentsContract.buildChildDocumentsUriUsingTree(folder.uri, current.documentId)
@@ -207,6 +212,7 @@ class LocalMediaScanner(private val context: Context) {
                     val sizeIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
 
                     while (cursor.moveToNext()) {
+                        currentCoroutineContext().ensureActive()
                         val documentId = cursor.getString(idIndex)
                         val name = cursor.getString(nameIndex) ?: "未命名媒体"
                         val mime = cursor.getString(mimeIndex)

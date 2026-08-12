@@ -2,6 +2,7 @@ package io.github.zvensmoluya.vortexcue.library
 
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
 import io.github.zvensmoluya.vortexcue.core.model.PlayableContentUnit
+import io.github.zvensmoluya.vortexcue.core.model.displayTitle
 import io.github.zvensmoluya.vortexcue.core.model.stableMediaLocatorId
 
 internal data class LibraryPartition(
@@ -105,12 +106,16 @@ internal fun partitionLibrary(
 }
 
 internal fun LibraryConfig.isCollected(media: MediaSourceRef): Boolean {
+    return decisionFor(media) == LibraryDecision.Included
+}
+
+internal fun LibraryConfig.decisionFor(media: MediaSourceRef): LibraryDecision {
     val explicitUris =
         resolveCollectedUriValues(
             includedUriValues = includedUris,
             playlistUriValues = playlists.flatMap { it.items }.map { it.uri.toString() },
         )
-    return decideMedia(media, explicitUris, ignoredUris.toSet()) == LibraryDecision.Included
+    return decideMedia(media, explicitUris, ignoredUris.toSet())
 }
 
 internal fun LibraryConfig.retainedContentUriValues(): Set<String> =
@@ -130,6 +135,12 @@ internal fun LibraryConfig.retainedMediaSnapshots(): List<MediaSourceRef> {
     return (recentItems + playlists.flatMap(LibraryPlaylist::items) + locatorSnapshots)
         .distinctBy { it.uri.toString() }
 }
+
+internal fun LibraryConfig.cachedSourceItems(sourceId: String): List<MediaSourceRef> =
+    (catalogItems + recentItems + retainedMediaSnapshots())
+        .filter { it.sourceId == sourceId }
+        .distinctBy { stableMediaLocatorId(it.uri.toString(), it.sourceId) }
+        .sortedBy { it.displayTitle.lowercase() }
 
 internal fun LibraryConfig.relatedLocatorUriValues(uriValues: Set<String>): Set<String> {
     val relatedContentIds =
@@ -166,8 +177,7 @@ internal fun restoreCachedLibraryState(
         )
     val partition = partitionLibrary(cachedItems, config)
     val hasSystemAccess = hasAudioAccess || videoAccess != VideoLibraryAccess.None
-    val systemItemCount =
-        config.catalogItems.count { it.sourceId == LibrarySourceIds.SystemLibrary }
+    val systemItemCount = config.cachedSourceItems(LibrarySourceIds.SystemLibrary).size
     val sources =
         buildList {
             add(
@@ -186,13 +196,12 @@ internal fun restoreCachedLibraryState(
                         id = folder.id,
                         kind = LibrarySourceKind.Folder,
                         displayName = folder.displayName,
-                        itemCount = config.catalogItems.count { it.sourceId == folder.id },
+                        itemCount = config.cachedSourceItems(folder.id).size,
                         isScanned = false,
                     ),
                 )
             }
-            val looseItemCount =
-                config.catalogItems.count { it.sourceId == LibrarySourceIds.LooseFiles }
+            val looseItemCount = config.cachedSourceItems(LibrarySourceIds.LooseFiles).size
             if (looseItemCount > 0) {
                 add(
                     LibrarySourceState(

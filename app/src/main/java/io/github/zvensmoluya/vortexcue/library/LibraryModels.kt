@@ -60,6 +60,7 @@ data class MediaLibraryState(
     val sources: List<LibrarySourceState> = emptyList(),
     val suggestedTextTracks: List<TimedTextTrackCandidate> = emptyList(),
     val isLoading: Boolean = false,
+    val scanningSourceIds: Set<String> = emptySet(),
     val hasAudioAccess: Boolean = false,
     val videoAccess: VideoLibraryAccess = VideoLibraryAccess.None,
     val errorMessage: String? = null,
@@ -88,10 +89,24 @@ internal data class LibraryScanScope(
     companion object {
         val All = LibraryScanScope(includeSystemLibrary = true, folderIds = null)
 
+        val SystemLibrary =
+            LibraryScanScope(includeSystemLibrary = true, folderIds = emptySet())
+
         fun folder(folderId: String) =
             LibraryScanScope(includeSystemLibrary = false, folderIds = setOf(folderId))
     }
 }
+
+internal fun isAuthoritativeSystemScan(
+    hasAudioAccess: Boolean,
+    videoAccess: VideoLibraryAccess,
+    audioScanSucceeded: Boolean,
+    videoScanSucceeded: Boolean,
+): Boolean =
+    hasAudioAccess &&
+        videoAccess == VideoLibraryAccess.Full &&
+        audioScanSucceeded &&
+        videoScanSucceeded
 
 object LibrarySourceIds {
     const val SystemLibrary = "system-library"

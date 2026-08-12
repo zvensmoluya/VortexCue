@@ -949,7 +949,8 @@ private fun GlowPlayer(
                         },
                         onLongPress = { showControls() },
                     )
-                },
+                }
+                .safeDrawingPadding(),
     ) {
         Column(
             modifier =

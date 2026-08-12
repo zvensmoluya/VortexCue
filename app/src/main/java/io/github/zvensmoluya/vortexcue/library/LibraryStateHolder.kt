@@ -21,6 +21,7 @@ import io.github.zvensmoluya.vortexcue.core.storage.OrderedStateWriter
 import io.github.zvensmoluya.vortexcue.core.storage.persistReadPermission
 import io.github.zvensmoluya.vortexcue.core.storage.treeDisplayName
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -36,8 +37,9 @@ internal class LibraryStateHolder(
     private val appContext = context.applicationContext
     private val contentResolver = appContext.contentResolver
     private val configWriter = OrderedStateWriter(coroutineScope, store::save)
-    private var scanJob: Job? = null
-    private var scanRequestId = 0L
+    private val scanJobs = mutableMapOf<String, Job>()
+    private val scanRequestIds = mutableMapOf<String, Long>()
+    private var nextScanRequestId = 0L
 
     var state by mutableStateOf(MediaLibraryState())
         private set
@@ -55,192 +57,257 @@ internal class LibraryStateHolder(
 
     suspend fun inspectMedia(source: MediaSourceRef): MediaSourceRef = scanner.inspect(source)
 
-    fun cancelScan() {
-        scanRequestId += 1L
-        scanJob?.cancel()
-        scanJob = null
-        if (state.isLoading) state = state.copy(isLoading = false)
+    fun cancelScan(sourceId: String? = null) {
+        val sourceIds = sourceId?.let(::setOf) ?: scanJobs.keys.toSet()
+        if (sourceIds.isEmpty()) return
+        sourceIds.forEach { id ->
+            scanRequestIds.remove(id)
+            scanJobs.remove(id)?.cancel()
+        }
+        val remainingSourceIds = state.scanningSourceIds - sourceIds
+        state =
+            state.copy(
+                isLoading = remainingSourceIds.isNotEmpty(),
+                scanningSourceIds = remainingSourceIds,
+            )
     }
 
     fun scan(config: LibraryConfig = state.config) {
         startScan(config, LibraryScanScope.All)
     }
 
+    fun refreshSource(sourceId: String) {
+        when {
+            sourceId == LibrarySourceIds.SystemLibrary ->
+                startScan(state.config, LibraryScanScope.SystemLibrary)
+            state.config.folders.any { it.id == sourceId } ->
+                startScan(state.config, LibraryScanScope.folder(sourceId))
+        }
+    }
+
     private fun startScan(
         config: LibraryConfig,
         scope: LibraryScanScope,
     ) {
-        scanRequestId += 1L
-        val requestId = scanRequestId
-        scanJob?.cancel()
         val hasAudioAccess = appContext.hasAudioLibraryPermission()
         val videoAccess = appContext.videoLibraryAccess()
         val hasVideoAccess = videoAccess != VideoLibraryAccess.None
         val hasSystemAccess = hasAudioAccess || hasVideoAccess
+        val currentSystemSource =
+            state.sources.firstOrNull { it.id == LibrarySourceIds.SystemLibrary }
+                ?: LibrarySourceState(
+                    id = LibrarySourceIds.SystemLibrary,
+                    kind = LibrarySourceKind.SystemLibrary,
+                    displayName = "设备媒体库",
+                    itemCount = config.cachedSourceItems(LibrarySourceIds.SystemLibrary).size,
+                    isScanned = false,
+                )
         state =
             state.copy(
                 config = config,
-                isLoading = true,
                 hasAudioAccess = hasAudioAccess,
                 videoAccess = videoAccess,
                 errorMessage = null,
+                sources =
+                    state.sources.withSourceState(
+                        currentSystemSource.copy(hasAccess = hasSystemAccess),
+                    ),
             )
-        scanJob =
+        if (scope.includeSystemLibrary) {
+            if (hasSystemAccess) {
+                startSystemScan(hasAudioAccess, videoAccess)
+            } else {
+                cancelScan(LibrarySourceIds.SystemLibrary)
+            }
+        }
+        config.folders.filter { scope.includesFolder(it.id) }.forEach(::startFolderScan)
+    }
+
+    private fun startSystemScan(
+        hasAudioAccess: Boolean,
+        videoAccess: VideoLibraryAccess,
+    ) {
+        val hasVideoAccess = videoAccess != VideoLibraryAccess.None
+        launchSourceScan(
+            sourceId = LibrarySourceIds.SystemLibrary,
+            initialSource =
+                state.sources.firstOrNull { it.id == LibrarySourceIds.SystemLibrary }
+                    ?: LibrarySourceState(
+                        id = LibrarySourceIds.SystemLibrary,
+                        kind = LibrarySourceKind.SystemLibrary,
+                        displayName = "设备媒体库",
+                    ),
+        ) {
+            val audioResult =
+                if (hasAudioAccess) scanSafely { scanner.scanSystemAudio() }
+                else Result.success(emptyList())
+            val videoResult =
+                if (hasVideoAccess) scanSafely { scanner.scanSystemVideo() }
+                else Result.success(emptyList())
+            val media = audioResult.getOrDefault(emptyList()) + videoResult.getOrDefault(emptyList())
+            val authoritative =
+                isAuthoritativeSystemScan(
+                    hasAudioAccess = hasAudioAccess,
+                    videoAccess = videoAccess,
+                    audioScanSucceeded = audioResult.isSuccess,
+                    videoScanSucceeded = videoResult.isSuccess,
+                )
+            SourceScanResult(
+                source =
+                    LibrarySourceState(
+                        id = LibrarySourceIds.SystemLibrary,
+                        kind = LibrarySourceKind.SystemLibrary,
+                        displayName = "设备媒体库",
+                        itemCount = media.size,
+                        errorMessage =
+                            (audioResult.exceptionOrNull() ?: videoResult.exceptionOrNull())
+                                ?.let { "无法完整读取系统媒体目录" },
+                    ),
+                media = media,
+                replaceCachedItems = authoritative,
+                locatorSourceAvailable = true,
+            )
+        }
+    }
+
+    private fun startFolderScan(folder: LibraryFolderRef) {
+        launchSourceScan(
+            sourceId = folder.id,
+            initialSource =
+                state.sources.firstOrNull { it.id == folder.id }
+                    ?: LibrarySourceState(
+                        id = folder.id,
+                        kind = LibrarySourceKind.Folder,
+                        displayName = folder.displayName,
+                        itemCount = state.config.cachedSourceItems(folder.id).size,
+                        isScanned = false,
+                    ),
+        ) {
+            val result = scanSafely { scanner.scanFolder(folder) }
+            val batch = result.getOrDefault(LibraryScanBatch())
+            SourceScanResult(
+                source =
+                    LibrarySourceState(
+                        id = folder.id,
+                        kind = LibrarySourceKind.Folder,
+                        displayName = folder.displayName,
+                        itemCount = batch.media.size,
+                        hasAccess = result.isSuccess,
+                        errorMessage =
+                            result.exceptionOrNull()?.let {
+                                "文件夹授权已失效或暂时不可用"
+                            },
+                    ),
+                media = batch.media,
+                subtitleSuggestions = batch.subtitleSuggestions,
+                replaceCachedItems = result.isSuccess,
+                locatorSourceAvailable = result.isSuccess,
+            )
+        }
+    }
+
+    private fun launchSourceScan(
+        sourceId: String,
+        initialSource: LibrarySourceState,
+        scan: suspend () -> SourceScanResult,
+    ) {
+        cancelScan(sourceId)
+        val requestId = ++nextScanRequestId
+        scanRequestIds[sourceId] = requestId
+        state =
+            state.copy(
+                isLoading = true,
+                scanningSourceIds = state.scanningSourceIds + sourceId,
+                sources = state.sources.withSourceState(initialSource),
+            )
+        scanJobs[sourceId] =
             coroutineScope.launch {
-                val scanned = mutableListOf<MediaSourceRef>()
-                val sources = mutableListOf<LibrarySourceState>()
-                if (scope.includeSystemLibrary && hasSystemAccess) {
-                    val audioResult =
-                        if (hasAudioAccess) runCatching { scanner.scanSystemAudio() }
-                        else Result.success(emptyList())
-                    val videoResult =
-                        if (hasVideoAccess) runCatching { scanner.scanSystemVideo() }
-                        else Result.success(emptyList())
-                    val audioItems = audioResult.getOrDefault(emptyList())
-                    val videoItems = videoResult.getOrDefault(emptyList())
-                    scanned += audioItems
-                    scanned += videoItems
-                    sources +=
-                        LibrarySourceState(
-                            id = LibrarySourceIds.SystemLibrary,
-                            kind = LibrarySourceKind.SystemLibrary,
-                            displayName = "设备媒体库",
-                            itemCount = audioItems.size + videoItems.size,
-                            errorMessage =
-                                (audioResult.exceptionOrNull() ?: videoResult.exceptionOrNull())
-                                    ?.let { "无法完整读取系统媒体目录" },
-                        )
-                } else {
-                    sources +=
-                        LibrarySourceState(
-                            id = LibrarySourceIds.SystemLibrary,
-                            kind = LibrarySourceKind.SystemLibrary,
-                            displayName = "设备媒体库",
-                            itemCount =
-                                config.catalogItems.count {
-                                    it.sourceId == LibrarySourceIds.SystemLibrary
-                                },
-                            hasAccess = hasSystemAccess,
-                            isScanned = false,
-                        )
-                }
-
-                val subtitleSuggestions = mutableListOf<TimedTextTrackCandidate>()
-                val folderScanResults =
-                    mutableMapOf<String, Pair<Boolean, Set<String>>>()
-                config.folders.forEach { folder ->
-                    if (!scope.includesFolder(folder.id)) {
-                        sources +=
-                            LibrarySourceState(
-                                id = folder.id,
-                                kind = LibrarySourceKind.Folder,
-                                displayName = folder.displayName,
-                                itemCount = config.catalogItems.count { it.sourceId == folder.id },
-                                isScanned = false,
-                            )
-                        return@forEach
-                    }
-                    val result = runCatching { scanner.scanFolder(folder) }
-                    val batch = result.getOrDefault(LibraryScanBatch())
-                    scanned += batch.media
-                    subtitleSuggestions += batch.subtitleSuggestions
-                    folderScanResults[folder.id] =
-                        result.isSuccess to batch.media.map { it.uri.toString() }.toSet()
-                    sources +=
-                        LibrarySourceState(
-                            id = folder.id,
-                            kind = LibrarySourceKind.Folder,
-                            displayName = folder.displayName,
-                            itemCount = batch.media.size,
-                            hasAccess = result.isSuccess,
-                            errorMessage =
-                                result.exceptionOrNull()?.let {
-                                    "文件夹授权已失效或暂时不可用"
-                                },
-                        )
-                }
-
-                val looseItems =
-                    config.catalogItems
-                        .filter { it.sourceId == LibrarySourceIds.LooseFiles }
-                        .map { item ->
-                            item.copy(
-                                origin = MediaOrigin.OpenDocument,
-                                sourceId = LibrarySourceIds.LooseFiles,
-                            )
-                        }
-                scanned += looseItems
-                if (looseItems.isNotEmpty()) {
-                    sources +=
-                        LibrarySourceState(
-                            id = LibrarySourceIds.LooseFiles,
-                            kind = LibrarySourceKind.LooseFiles,
-                            displayName = "单独打开",
-                            itemCount = looseItems.size,
-                        )
-                }
-
-                if (requestId != scanRequestId) return@launch
-                val freshItems =
-                    scanned
-                        .distinctBy { stableMediaLocatorId(it.uri.toString(), it.sourceId) }
-                        .sortedBy { it.displayTitle.lowercase() }
-                val latestConfig = state.config
-                val successfullyScannedFolderIds =
-                    folderScanResults.filterValues { it.first }.keys
-                val previouslySuggestedMediaUris =
-                    latestConfig.catalogItems
-                        .filter { it.sourceId in successfullyScannedFolderIds }
-                        .map { it.uri.toString() }
-                        .toSet()
-                val retainedCatalogItems =
-                    latestConfig.catalogItems.filterNot {
-                        it.sourceId?.let(successfullyScannedFolderIds::contains) == true
-                    }
-                var updatedConfig =
-                    latestConfig.copy(
-                        catalogItems =
-                            mergeCatalogItems(
-                                preferred = freshItems,
-                                fallback = retainedCatalogItems,
-                            ),
-                    ).withMediaSnapshots(freshItems, ContentAvailability.Available)
-                        .withTimedTextCandidates(subtitleSuggestions)
-                folderScanResults.forEach { (sourceId, scanResult) ->
-                    updatedConfig =
-                        updatedConfig.withSourceScanResult(
-                            sourceId = sourceId,
-                            seenUriValues = scanResult.second,
-                            sourceAvailable = scanResult.first,
-                            retainedUriValues = updatedConfig.retainedContentUriValues(),
-                        )
-                }
-                val catalogItems =
-                    mergeCatalogItems(
-                        preferred = updatedConfig.catalogItems,
-                        fallback = updatedConfig.retainedMediaSnapshots(),
-                    )
-                val partition = partitionLibrary(catalogItems, updatedConfig)
-                val updatedSuggestions =
-                    (state.suggestedTextTracks.filterNot {
-                        it.mediaUriValue in previouslySuggestedMediaUris
-                    } + subtitleSuggestions)
-                        .distinctBy { "${it.mediaUriValue}|${it.track.stableId}" }
+                val result = scan()
+                if (scanRequestIds[sourceId] != requestId) return@launch
+                applySourceScanResult(result)
+                if (scanRequestIds[sourceId] != requestId) return@launch
+                scanRequestIds.remove(sourceId)
+                scanJobs.remove(sourceId)
+                val remainingSourceIds = state.scanningSourceIds - sourceId
                 state =
                     state.copy(
-                        items = partition.included,
-                        candidates = partition.candidates,
-                        ignoredItems = partition.ignored,
-                        config = updatedConfig,
-                        sources = sources,
-                        suggestedTextTracks = updatedSuggestions,
-                        isLoading = false,
-                        hasAudioAccess = hasAudioAccess,
-                        videoAccess = videoAccess,
-                        errorMessage = sources.firstNotNullOfOrNull { it.errorMessage },
+                        isLoading = remainingSourceIds.isNotEmpty(),
+                        scanningSourceIds = remainingSourceIds,
                     )
-                configWriter.submit(updatedConfig)
             }
+    }
+
+    private fun applySourceScanResult(result: SourceScanResult) {
+        val sourceId = result.source.id
+        val latestConfig = state.config
+        val previousSourceUris =
+            latestConfig.catalogItems
+                .filter { it.sourceId == sourceId }
+                .map { it.uri.toString() }
+                .toSet()
+        val retainedCatalogItems =
+            if (result.replaceCachedItems) {
+                latestConfig.catalogItems.filterNot { it.sourceId == sourceId }
+            } else {
+                latestConfig.catalogItems
+            }
+        val freshItems =
+            result.media
+                .distinctBy { stableMediaLocatorId(it.uri.toString(), it.sourceId) }
+                .sortedBy { it.displayTitle.lowercase() }
+        var updatedConfig =
+            latestConfig.copy(
+                catalogItems =
+                    mergeCatalogItems(
+                        preferred = freshItems,
+                        fallback = retainedCatalogItems,
+                    ),
+            ).withMediaSnapshots(freshItems, ContentAvailability.Available)
+                .withTimedTextCandidates(result.subtitleSuggestions)
+        val cachedSourceUris =
+            if (result.replaceCachedItems) {
+                emptySet()
+            } else {
+                updatedConfig.cachedSourceItems(sourceId)
+                    .mapTo(linkedSetOf()) { it.uri.toString() }
+            }
+        updatedConfig =
+            updatedConfig.withSourceScanResult(
+                sourceId = sourceId,
+                seenUriValues = freshItems.map { it.uri.toString() }.toSet(),
+                sourceAvailable = result.locatorSourceAvailable,
+                retainedUriValues = updatedConfig.retainedContentUriValues() + cachedSourceUris,
+            )
+        val catalogItems =
+            mergeCatalogItems(
+                preferred = updatedConfig.catalogItems,
+                fallback = updatedConfig.retainedMediaSnapshots(),
+            )
+        val partition = partitionLibrary(catalogItems, updatedConfig)
+        val updatedSource =
+            result.source.copy(itemCount = updatedConfig.cachedSourceItems(sourceId).size)
+        val updatedSources = state.sources.withSourceState(updatedSource)
+        val retainedSuggestions =
+            if (result.replaceCachedItems) {
+                state.suggestedTextTracks.filterNot {
+                    it.mediaUriValue in previousSourceUris
+                }
+            } else {
+                state.suggestedTextTracks
+            }
+        state =
+            state.copy(
+                items = partition.included,
+                candidates = partition.candidates,
+                ignoredItems = partition.ignored,
+                config = updatedConfig,
+                sources = updatedSources.synchronizedWith(updatedConfig),
+                suggestedTextTracks =
+                    (retainedSuggestions + result.subtitleSuggestions)
+                        .distinctBy { "${it.mediaUriValue}|${it.track.stableId}" },
+                errorMessage = updatedSources.firstNotNullOfOrNull { it.errorMessage },
+            )
+        configWriter.submit(updatedConfig)
     }
 
     fun rememberRecentMedia(source: MediaSourceRef) {
@@ -264,8 +331,7 @@ internal class LibraryStateHolder(
                                     withMedia.contentUnitFor(existing)?.stableId == contentId)
                         }).take(MaxRecentItems),
             )
-        state = state.copy(config = updatedConfig)
-        configWriter.submit(updatedConfig)
+        updateConfig(updatedConfig)
     }
 
     fun collectMedia(source: MediaSourceRef) {
@@ -314,13 +380,62 @@ internal class LibraryStateHolder(
         contentResolver.persistReadPermission(uri)
         val folder = LibraryFolderRef(uri, contentResolver.treeDisplayName(uri))
         val config = state.config
+        val existing = config.folders.firstOrNull { it.uri == uri }
+        if (existing != null) {
+            refreshSource(existing.id)
+            return
+        }
         val updatedConfig =
-            config.copy(folders = listOf(folder) + config.folders.filterNot { it.uri == uri })
+            config.copy(folders = listOf(folder) + config.folders)
         updateConfig(updatedConfig)
         startScan(updatedConfig, LibraryScanScope.folder(folder.id))
     }
 
+    fun replaceFolder(
+        folderId: String,
+        uri: Uri,
+    ) {
+        val previous = state.config.folders.firstOrNull { it.id == folderId }
+        if (previous == null) {
+            addFolder(uri)
+            return
+        }
+        contentResolver.persistReadPermission(uri)
+        val duplicate =
+            state.config.folders.firstOrNull { it.id != folderId && it.uri == uri }
+        if (duplicate != null) {
+            removeFolder(folderId)
+            refreshSource(duplicate.id)
+            return
+        }
+        val replacement =
+            LibraryFolderRef(
+                uri = uri,
+                displayName = contentResolver.treeDisplayName(uri),
+                id = previous.id,
+            )
+        if (previous.uri != uri) {
+            runCatching {
+                contentResolver.releasePersistableUriPermission(
+                    previous.uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+        }
+        val config = state.config
+        val updatedConfig =
+            config.copy(
+                folders =
+                    config.folders.map { folder ->
+                        if (folder.id == folderId) replacement else folder
+                    },
+            )
+        updateConfig(updatedConfig)
+        startFolderScan(replacement)
+    }
+
     fun removeFolder(folderId: String) {
+        cancelScan(folderId)
         val config = state.config
         val folder = config.folders.firstOrNull { it.id == folderId } ?: return
         runCatching {
@@ -364,21 +479,28 @@ internal class LibraryStateHolder(
                 .filter { it.sourceId == LibrarySourceIds.LooseFiles }
                 .map { it.uri.toString() }
                 .toSet()
-        val retainedUris = config.retainedContentUriValues()
-        updateConfig(
+        val configWithoutLooseRecent =
             config.copy(
-                catalogItems =
-                    config.catalogItems.filterNot {
+                recentItems =
+                    config.recentItems.filterNot {
                         it.sourceId == LibrarySourceIds.LooseFiles
                     },
-                ignoredUris = config.ignoredUris.filterNot(looseUris::contains),
+            )
+        val retainedUris = configWithoutLooseRecent.retainedContentUriValues()
+        updateConfig(
+            configWithoutLooseRecent.copy(
+                catalogItems =
+                    configWithoutLooseRecent.catalogItems.filterNot {
+                        it.sourceId == LibrarySourceIds.LooseFiles
+                    },
+                ignoredUris = configWithoutLooseRecent.ignoredUris.filterNot(looseUris::contains),
                 homeShortcuts =
-                    config.homeShortcuts.filterNot { shortcut ->
+                    configWithoutLooseRecent.homeShortcuts.filterNot { shortcut ->
                         shortcut.type == LibraryShortcutType.Folder &&
                             shortcut.key.startsWith("${LibrarySourceIds.LooseFiles}|")
                     },
             ).withSourceRemoved(LibrarySourceIds.LooseFiles, retainedUris),
-            rescan = true,
+            repartition = true,
         )
     }
 
@@ -652,15 +774,95 @@ internal class LibraryStateHolder(
                     candidates = partition.candidates,
                     ignoredItems = partition.ignored,
                     config = config,
+                    sources = state.sources.synchronizedWith(config),
                 )
             } else {
-                state.copy(config = config)
+                state.copy(
+                    config = config,
+                    sources = state.sources.synchronizedWith(config),
+                )
             }
         if (scheduleWrite) configWriter.submit(config)
         if (rescan) scan(config)
     }
 
+    private suspend fun <T> scanSafely(block: suspend () -> T): Result<T> =
+        try {
+            Result.success(block())
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
+
     private companion object {
         const val MaxRecentItems = 50
     }
+}
+
+private data class SourceScanResult(
+    val source: LibrarySourceState,
+    val media: List<MediaSourceRef>,
+    val subtitleSuggestions: List<TimedTextTrackCandidate> = emptyList(),
+    val replaceCachedItems: Boolean,
+    val locatorSourceAvailable: Boolean,
+)
+
+internal fun List<LibrarySourceState>.withSourceState(
+    source: LibrarySourceState,
+): List<LibrarySourceState> {
+    if (any { it.id == source.id }) {
+        return map { existing -> if (existing.id == source.id) source else existing }
+    }
+    return when (source.kind) {
+        LibrarySourceKind.SystemLibrary -> listOf(source) + this
+        LibrarySourceKind.Folder -> {
+            val looseIndex = indexOfFirst { it.kind == LibrarySourceKind.LooseFiles }
+            if (looseIndex < 0) this + source
+            else take(looseIndex) + source + drop(looseIndex)
+        }
+        LibrarySourceKind.LooseFiles -> this + source
+    }
+}
+
+private fun List<LibrarySourceState>.synchronizedWith(
+    config: LibraryConfig,
+): List<LibrarySourceState> {
+    val current = associateBy(LibrarySourceState::id)
+    val system =
+        current[LibrarySourceIds.SystemLibrary]
+            ?: LibrarySourceState(
+                id = LibrarySourceIds.SystemLibrary,
+                kind = LibrarySourceKind.SystemLibrary,
+                displayName = "设备媒体库",
+                itemCount = config.cachedSourceItems(LibrarySourceIds.SystemLibrary).size,
+                isScanned = false,
+            )
+    val folders =
+        config.folders.map { folder ->
+            current[folder.id]?.copy(displayName = folder.displayName)
+                ?: LibrarySourceState(
+                    id = folder.id,
+                    kind = LibrarySourceKind.Folder,
+                    displayName = folder.displayName,
+                    itemCount = config.cachedSourceItems(folder.id).size,
+                    isScanned = false,
+                )
+        }
+    val looseItemCount = config.cachedSourceItems(LibrarySourceIds.LooseFiles).size
+    val loose =
+        if (looseItemCount > 0) {
+            listOf(
+                current[LibrarySourceIds.LooseFiles]?.copy(itemCount = looseItemCount)
+                    ?: LibrarySourceState(
+                        id = LibrarySourceIds.LooseFiles,
+                        kind = LibrarySourceKind.LooseFiles,
+                        displayName = "单独打开",
+                        itemCount = looseItemCount,
+                    ),
+            )
+        } else {
+            emptyList()
+        }
+    return listOf(system) + folders + loose
 }

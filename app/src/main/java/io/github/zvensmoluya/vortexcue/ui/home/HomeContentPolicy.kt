@@ -37,3 +37,11 @@ internal fun <T> orderCollectedContent(
     isCollected: (T) -> Boolean,
 ): List<T> =
     (recentItems.filter(isCollected) + collectedItems).distinctBy(stableKey)
+
+internal fun reconcileDiscoverySelection(
+    selectedUris: Set<String>,
+    knownUris: Set<String>,
+    availableUris: Set<String>,
+    defaultSelectedUris: Set<String>,
+): Set<String> =
+    selectedUris.intersect(availableUris) + (defaultSelectedUris - knownUris)
