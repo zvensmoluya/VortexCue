@@ -160,9 +160,9 @@ pixivFANBOX 官方同样明确支持 supporter-only 的 audio、video 和其他 
 
 # 4. DLsite Sound：目前最重要的相邻竞品
 
-截至 2026-07-31，DLsite Sound 在 Google Play 官方描述中已经明确定位为：
+截至 2026-07-31 的研究结论，DLsite Sound 在 Google Play 官方描述中明确定位为手机内音频文件与 DLsite 已购音声作品的专用播放器；本轮于 2026-08-12 复核了官方页面：
 
-> 手机内音频文件与 DLsite 已购音声作品的专用播放器。
+官方来源： [DLsite Sound Google Play 应用页](https://play.google.com/store/apps/details?hl=ja&id=jp.co.eisys.dlsitesound)。其中对隐私能力的原文是：“[プライバシーロック画面] ロック画面のサムネイルをダミー画像に差し替えて外でも安心して聴けます。”本记录只据此确认“锁屏缩略图替换为中性/虚拟图片”的最小语义，不推断默认开关状态或标题、艺术家文本是否隐藏。
 
 其 PurePlay 模式无需注册即可播放本地 MP3、AAC、M4A、FLAC、WAV，并且官方直接指出，用户可以播放：
 
