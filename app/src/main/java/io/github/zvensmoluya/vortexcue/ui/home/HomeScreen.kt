@@ -52,7 +52,6 @@ import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 import io.github.zvensmoluya.vortexcue.core.model.*
 import io.github.zvensmoluya.vortexcue.library.*
-import io.github.zvensmoluya.vortexcue.playback.TonightQueue
 import io.github.zvensmoluya.vortexcue.ui.player.PlaybackSnapshot
 import io.github.zvensmoluya.vortexcue.ui.player.formatTime
 import io.github.zvensmoluya.vortexcue.ui.theme.*
@@ -79,8 +78,9 @@ internal fun HomeScreen(
     draft: SessionDraft,
     activeSession: ActiveSession?,
     lastSession: RestorableSession?,
-    tonight: TonightQueue,
-    tonightActive: Boolean,
+    tonight: List<MediaSourceRef>,
+    tonightCurrentIndex: Int,
+    tonightPositionMs: Long,
     playback: PlaybackSnapshot,
     displayProfile: DisplayProfile,
     library: MediaLibraryState,
@@ -264,7 +264,8 @@ internal fun HomeScreen(
                     activeSession = activeSession,
                     lastSession = lastSession,
                     tonight = tonight,
-                    tonightActive = tonightActive,
+                    tonightCurrentIndex = tonightCurrentIndex,
+                    tonightPositionMs = tonightPositionMs,
                     playback = playback,
                     onOpenMyContent = {
                         myContentTab = defaultMyContentTab(library.items.size)
@@ -292,6 +293,7 @@ internal fun HomeScreen(
             HomeSection.Tonight ->
                 TonightEditor(
                     tonight = tonight,
+                    currentIndex = tonightCurrentIndex,
                     library = library,
                     onStartTonight = onStartTonight,
                     onRemove = onRemoveFromTonight,
@@ -663,8 +665,9 @@ private fun HomeLanding(
     resumableSession: ActiveSession?,
     activeSession: ActiveSession?,
     lastSession: RestorableSession?,
-    tonight: TonightQueue,
-    tonightActive: Boolean,
+    tonight: List<MediaSourceRef>,
+    tonightCurrentIndex: Int,
+    tonightPositionMs: Long,
     playback: PlaybackSnapshot,
     onOpenMyContent: () -> Unit,
     onOpenDiscoveries: () -> Unit,
@@ -684,7 +687,7 @@ private fun HomeLanding(
     val collectedItems =
         remember(library.items, library.config) { orderedCollectedItems(library, recentItems) }
     val firstUse =
-        tonight.isEmpty && shouldShowFirstUseHome(
+        tonight.isEmpty() && shouldShowFirstUseHome(
             hasResumableSession = resumableSession != null,
             collectedCount = collectedItems.size,
             recentCount = recentItems.size,
@@ -717,13 +720,12 @@ private fun HomeLanding(
                 }
             }
         } else {
-            if (tonight.entries.isNotEmpty()) {
+            if (tonight.isNotEmpty()) {
                 item(key = "tonight") {
                     TonightPreview(
                         tonight = tonight,
-                        tonightActive = tonightActive,
-                        activeSession = activeSession,
-                        playback = playback,
+                        currentIndex = tonightCurrentIndex,
+                        positionMs = tonightPositionMs,
                         onOpen = onOpenTonight,
                         onStart = onStartTonight,
                     )
@@ -1571,45 +1573,42 @@ private fun ContinueSection(
 
 @Composable
 private fun TonightPreview(
-    tonight: TonightQueue,
-    tonightActive: Boolean,
-    activeSession: ActiveSession?,
-    playback: PlaybackSnapshot,
+    tonight: List<MediaSourceRef>,
+    currentIndex: Int,
+    positionMs: Long,
     onOpen: () -> Unit,
     onStart: () -> Unit,
 ) {
-    val current = tonight.current
-    val next = tonight.entries.drop(tonight.currentIndex + 1).firstOrNull { !it.completed }
+    val safeIndex = currentIndex.coerceIn(tonight.indices)
+    val current = tonight.getOrNull(safeIndex)
+    val next = tonight.getOrNull(safeIndex + 1)
     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
         ManagerEntry(
-            title = if (tonight.started) "今晚继续" else "今晚",
-            detail = "${tonight.entries.size} 项 · ${tonight.remainingCount} 项未完成",
+            title = "今晚",
+            detail = "${tonight.size} 项",
             action = "编辑",
             onClick = onOpen,
         )
-        current?.let { entry ->
+        current?.let { media ->
             Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(entry.media.displayTitle, color = AppPrimaryText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(media.displayTitle, color = AppPrimaryText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
                         listOfNotNull(
-                            if (entry.completed) "已完成" else "第 ${tonight.currentIndex + 1} / ${tonight.entries.size} 项",
-                            formatTime(
-                            if (tonightActive && activeSession != null) playback.positionMs
-                                else entry.positionMs,
-                            ).takeIf { entry.positionMs > 0L || (tonightActive && activeSession != null) },
-                            next?.media?.displayTitle?.let { "接下来：$it" },
+                            "第 ${safeIndex + 1} / ${tonight.size} 项",
+                            formatTime(positionMs).takeIf { positionMs > 0L },
+                            next?.displayTitle?.let { "接下来：$it" },
                         ).joinToString(" · "),
                         color = AppMutedText,
                         fontSize = 11.sp,
                     )
                 }
                 TextButton(onClick = onStart) {
-                    Text(if (tonight.started) "继续今晚" else "开始今晚", color = AppAccent, fontSize = 12.sp)
+                    Text(if (positionMs > 0L) "继续今晚" else "开始今晚", color = AppAccent, fontSize = 12.sp)
                 }
             }
         }
@@ -1619,7 +1618,8 @@ private fun TonightPreview(
 
 @Composable
 private fun TonightEditor(
-    tonight: TonightQueue,
+    tonight: List<MediaSourceRef>,
+    currentIndex: Int,
     library: MediaLibraryState,
     onStartTonight: () -> Unit,
     onRemove: (Int) -> Unit,
@@ -1635,20 +1635,20 @@ private fun TonightEditor(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                if (tonight.isEmpty) "还没有安排今晚的内容" else "${tonight.entries.size} 项 · ${tonight.remainingCount} 项未完成",
+                if (tonight.isEmpty()) "还没有安排今晚的内容" else "${tonight.size} 项",
                 color = AppSecondaryText,
                 fontSize = 12.sp,
             )
             Row {
-                TextButton(onClick = onStartTonight, enabled = !tonight.isEmpty) {
-                    Text(if (tonight.started) "继续今晚" else "开始今晚", color = AppAccent, fontSize = 12.sp)
+                TextButton(onClick = onStartTonight, enabled = tonight.isNotEmpty()) {
+                    Text("继续今晚", color = AppAccent, fontSize = 12.sp)
                 }
-                TextButton(onClick = onClear, enabled = !tonight.isEmpty) {
+                TextButton(onClick = onClear, enabled = tonight.isNotEmpty()) {
                     Text("清空", color = AppMutedText, fontSize = 12.sp)
                 }
             }
         }
-        if (tonight.isEmpty) {
+        if (tonight.isEmpty()) {
             StatusText("可以在“我的内容”或“新发现”中打开条目操作，加入今晚。")
             return@Column
         }
@@ -1658,10 +1658,10 @@ private fun TonightEditor(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             itemsIndexed(
-                items = tonight.entries,
-                key = { index, entry -> "tonight-$index-${entry.contentId}" },
+                items = tonight,
+                key = { index, media -> "tonight-$index-${media.uri}" },
             ) { index, entry ->
-                val media = library.config.resolveActiveMedia(entry.media)
+                val media = library.config.resolveActiveMedia(entry)
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp),
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -1670,15 +1670,14 @@ private fun TonightEditor(
                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text(
                             media.displayTitle,
-                            color = if (index == tonight.currentIndex) AppAccent else AppPrimaryText,
+                            color = if (index == currentIndex) AppAccent else AppPrimaryText,
                             fontSize = 14.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
                             listOfNotNull(
-                                if (entry.completed) "已完成" else if (index == tonight.currentIndex) "当前项" else "待播放",
-                                formatTime(entry.positionMs).takeIf { entry.positionMs > 0L },
+                                if (index == currentIndex) "当前项" else "待播放",
                             ).joinToString(" · "),
                             color = AppMutedText,
                             fontSize = 10.sp,
@@ -1690,8 +1689,8 @@ private fun TonightEditor(
                     TextButton(onClick = { onMove(index, index - 1) }, enabled = index > 0) {
                         Text("↑", color = if (index > 0) AppSecondaryText else AppHairline, fontSize = 12.sp)
                     }
-                    TextButton(onClick = { onMove(index, index + 1) }, enabled = index < tonight.entries.lastIndex) {
-                        Text("↓", color = if (index < tonight.entries.lastIndex) AppSecondaryText else AppHairline, fontSize = 12.sp)
+                    TextButton(onClick = { onMove(index, index + 1) }, enabled = index < tonight.lastIndex) {
+                        Text("↓", color = if (index < tonight.lastIndex) AppSecondaryText else AppHairline, fontSize = 12.sp)
                     }
                     TextButton(onClick = { onRemove(index) }) {
                         Text("移除", color = AppMutedText, fontSize = 11.sp)

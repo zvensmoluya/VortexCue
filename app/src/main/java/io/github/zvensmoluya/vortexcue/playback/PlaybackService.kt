@@ -65,7 +65,7 @@ class PlaybackService : MediaSessionService() {
                         playbackState == Player.STATE_ENDED &&
                         player != null &&
                         player.currentMediaItemIndex == player.mediaItemCount - 1 &&
-                        isConfirmedTonightEnd(
+                        isConfirmedQueueEnd(
                             positionMs = player.currentPosition,
                             durationMs = player.duration.takeUnless { it == C.TIME_UNSET } ?: 0L,
                         )
@@ -257,4 +257,14 @@ class PlaybackService : MediaSessionService() {
             return Futures.immediateFuture(result)
         }
     }
+}
+
+internal fun isConfirmedQueueEnd(
+    positionMs: Long,
+    durationMs: Long,
+): Boolean {
+    val duration = durationMs.coerceAtLeast(0L)
+    if (duration == 0L) return true
+    val completionWindowMs = minOf(5_000L, (duration / 100L).coerceAtLeast(1L))
+    return positionMs.coerceAtLeast(0L) >= duration - completionWindowMs
 }

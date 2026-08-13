@@ -118,8 +118,8 @@ Source / 来源
 Collection / 我的内容
 哪些内容是用户明确留下、希望再次找到的
         ↓
-Session / 今晚
-这一次准备按什么顺序消费，以及当前进行到哪里
+Current Playback Session / 今晚
+当前这一次按什么顺序消费，以及进行到哪里
 ```
 
 三层之间不是替代关系：
@@ -133,16 +133,16 @@ Session / 今晚
         ↓
 明确保存到“我的内容”
         ↓
-加入“今晚”这一晚的可编辑计划
+载入或追加到当前“今晚”
         ↓
-Player 用 Queue 执行当前播放顺序
+Player 执行并持久化同一份当前 Queue
 ```
 
 - Home 是应用启动后的首屏启动台，负责继续上次、开始或继续今晚，并提供少量“我的内容”和添加内容入口；
 - “我的内容”是用户明确留下、以后希望在应用内再次找到的收藏/已保存列表。M3 先提供平面列表和搜索，不扩展成用户自建专辑、标签或复杂 Playlist 系统；
 - “来源”是应用访问内容的范围和权限边界，不是全局资源库。用户可添加单文件、常用文件夹或低频设备媒体来源，之后从已授权来源再次进入时不必每晚重新打开文件夹；来源中的发现不会自动变成“我的内容”；
-- “今晚”是本次可编辑的消费计划；Queue 是 Player 开始播放后的运行时顺序，不要求另设一个与 Home、我的内容并列的 Queue 页面；
-- 单文件打开只进入最近并可立即播放，不自动加入“我的内容”或“今晚”；加入这些集合必须是明确操作。
+- “今晚”是当前播放 Session / Queue 的产品表达，用户对“今晚”的添加、移除和重排就是对当前 Queue 的操作；它不与另一份未来计划并列，也不要求另设一个与 Home、我的内容并列的 Queue 页面；
+- 单文件打开只进入最近并可立即成为当前 Queue，不自动加入“我的内容”；“今晚”就是这份当前 Queue 的产品表达，不需要额外加入动作。
 
 - Source 可以是单文件、SAF Folder、MediaStore 或未来的 Share / Open With；
 - 一个 Source 中可以同时存在已收录、未收录和已忽略内容；
@@ -189,10 +189,11 @@ RecentEntry
 ├─ position / duration / speed
 └─ lastSurface
 
-TonightQueue
-├─ contentIds[]
-├─ currentIndex
-└─ completionState
+CurrentPlaybackSession
+├─ queueContentIds[]
+├─ currentIndex / position
+├─ repeat / shuffle / speed
+└─ lastSurface / sleep state
 ```
 
 `PlayableContentUnit` 表达用户正在消费的内容，URI 只表达应用当前如何定位它。同一物理内容可以因单文件打开、SAF Folder 或重新定位拥有多个 locator；内容的稳定 ID 一旦建立，不得仅因当前 URI 改变而重建。
@@ -201,7 +202,7 @@ TonightQueue
 
 文字轨、手动选择、拒绝决定和 offset 属于 `PlayableContentUnit`，不属于某个 Source、导入草稿或一次 Active Session。草稿可以为配置变化临时保留待选文件，Session 可以保留已加载的运行时状态，但它们不得与内容目录竞争“这个内容拥有哪些文字轨”的持久事实。
 
-同一个 `PlayableContentUnit` 可以同时出现在最近、我的内容和今晚；这些是相互独立的关系，不复制媒体文件。打开一次只产生 `RecentEntry` 和可恢复会话，只有明确收录才产生 `CollectionEntry`。
+同一个 `PlayableContentUnit` 可以同时出现在最近、我的内容和当前播放 Session；这些关系不复制媒体文件。打开一次产生 `RecentEntry` 和可恢复的当前 Queue，只有明确收录才产生 `CollectionEntry`。
 
 用户界面不出现 `PlayableContentUnit`、`CollectionEntry`、`Session` 或匹配置信度等内部术语。用户只看到：
 
@@ -261,8 +262,8 @@ Glow
 上面的结构表达职责，不要求四个对象都成为同级导航项：
 
 - “来源”作为“添加内容 / 文件夹与权限 / 新发现”的访问与管理区域，从 Home 或“我的内容”进入；它不要求用户先理解 `Source` 这个内部术语；
-- “今晚”从 Home 或“我的内容”进入编辑，承担本次计划，不必单独占一个顶级页面；
-- `Queue` 只在 Normal Player 的当前播放上下文中呈现，是 Tonight 的运行时表达，不另建 Queue 页面。
+- “今晚”从 Home、播放器或“我的内容”进入编辑，承担当前播放顺序，不必单独占一个顶级页面；
+- `Queue` 在 Home 与 Normal Player 中是同一个当前 Session 的两种表面，不另建平行模型或第二份 Queue。
 
 Home 不是完整资源库浏览器，“我的内容”也不是隐藏在高级管理页里的底层能力。M3 可以先用一个页面承载这些区域，不提前锁定底部导航；信息层级必须稳定为 `NOW → MINE → MORE`。
 
@@ -299,8 +300,7 @@ Home 是“今晚的启动台”，按顺序回答三个问题：
 首页最强位置只保留一个动态 Active Session 区域：
 
 - 单个内容未完成时显示“继续上次”；
-- Tonight 已开始时显示“今晚继续”、当前项和接下来的内容；
-- Tonight 已准备但尚未开始时显示“开始今晚”；
+- 当前 Queue 已有内容时显示“今晚继续”、当前项和接下来的内容；尚未播放只表示当前位置为起点，不产生独立 Draft；
 - 没有会话时不显示空卡片，由打开内容和添加来源承担首次动作。
 
 继续区域至少显示：
@@ -582,19 +582,20 @@ Sleep Timer 至少支持：
 - 取消；
 - 在 Normal 和 Glow 中均可低摩擦进入。
 
-“今晚”是用户可在播放前准备、跨来源编辑并在 Home 继续的当前消费意图；Player Queue 是它开始播放后的运行时表达。两者不能继续只作为播放器内部状态存在。
+“今晚”是当前持久化播放 Session / Queue 的产品表达。用户可以在播放前后跨来源追加、移除或重排内容；这些操作直接作用于当前 Queue，不维护一份等待开始且与播放器队列并列的未来 Draft。
+
+`PlaybackService` 中的 Queue 是唯一实时播放真相；持久层只保存其恢复快照，不作为第二份可编辑状态参与双向同步。Playlist、Folder 或用户多选可以复制为当前 Queue 的初始顺序，当前 Queue 的后续修改不反向改变来源。
 
 M3 的 Tonight 规则是：
 
 - 可以从我的内容、新发现或单次打开内容中加入；
 - 支持查看顺序、移除和重排，不要求创建或命名 Playlist；
-- 当前项未完成时，第二天保留当前项和后续项；
-- 已完成项可以从下一次启动视图中收起，但保留必要的最近记录；
-- Tonight 全部完成或用户明确清空后回到无当前计划状态；
+- 第二天恢复同一当前 Queue、当前项和位置；
+- 播放到队尾不会因为 Repeat 或一次自然结束而隐式清空 Queue；只有用户清空或用其他内容替换时结束当前编排；
 - 当前项切换时恢复该内容自己的文字轨、offset、进度和显示选择；
 - 单内容播放仍是合法的退化情况，不强迫用户先建立 Tonight。
 
-Folder 的自然顺序、现有 Playlist 或用户明确选择的多个内容都可以为 Tonight 提供初始顺序。复杂命名播放列表不是 M3 目标。
+Folder 的自然顺序、现有 Playlist 或用户明确选择的多个内容都可以为当前 Queue 提供初始顺序。复杂命名播放列表不是 M3 目标；未来若需要长期复用当前组合，应显式“保存为 Playlist”，而不是保留另一份 Tonight Draft。
 
 ## 视觉语言
 
@@ -616,7 +617,7 @@ Folder 的自然顺序、现有 Playlist 或用户明确选择的多个内容都
 app       Activity、应用组合根与系统入口
 core      内容体验单元、共享模型与存储格式
 library   Source、发现索引、我的内容、Folder 与持久化
-playback  MediaSessionService、Active Session、Tonight Queue 与 Sleep Timer
+playback  MediaSessionService、Current Playback Session / Queue 与 Sleep Timer
 subtitle  文字轨发现、读取、解析、时间轴与缓存
 ui        首次体验、Home、Player 和主题
 ```
@@ -753,11 +754,11 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 
 ### M3.4 建立今晚
 
-1. 将现有 Player Queue 提升为独立持久的 `TonightQueue`；
+1. 将现有 Player Queue 提升为可恢复的当前播放 Session，并在产品表面称为“今晚”；
 2. 支持从我的内容、新发现和单次打开内容加入；
 3. 支持查看顺序、移除和重排，不要求创建 Playlist；
-4. Home 使用统一 Active Session 区域表达继续上次、开始今晚和今晚继续；
-5. 保留未完成当前项和后续项，收起已完成项；
+4. Home 使用统一 Active Session 区域表达当前 Queue 和继续播放，不建立与 Queue 并列的未来 Tonight Draft；
+5. 第二天恢复同一 Queue、当前项和位置；自然播放结束或循环不自动清空 Queue；
 6. Sleep Timer 支持 Tonight 结束后停止；
 7. 切换下一项时恢复每项自己的文字关系和进度。
 
@@ -782,7 +783,7 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 - 第二晚是否继续；
 - 是否主动加入第二、第三份内容。
 - 是否从我的内容而不是 Android 文件系统再次找到内容；
-- 是否在播放前建立或修改 Tonight；
+- 是否会主动向当前 Tonight / Queue 加入第二、第三项，或重排当前顺序；
 
 北极星信号仍然是：
 
@@ -815,8 +816,8 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 - 明确重新定位保持内容 ID、文字轨 ID、主副选择和 offset，Source 刷新或移除只改变 locator 可用性；
 - 被拒绝候选不会重新自动激活；
 - 内容目录是字幕关系的唯一持久来源，Draft 与 Last Session 不含字幕副本；
-- Tonight / Queue 切换恢复每项文字关系和进度；
-- Tonight 在进程重建后保留顺序、当前项和未完成项；
+- 当前 Queue 切换恢复每项自己的文字关系；
+- 当前 Queue 在进程重建后保留顺序、当前项和位置；
 - `lastSurface`、位置、offset 和显示状态恢复；
 - 广泛扫描不会由普通冷启动触发。
 

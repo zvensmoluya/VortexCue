@@ -76,8 +76,6 @@ internal fun PlayerScreen(
     sleepTimer: SleepTimerState,
     showGestureHint: Boolean,
     isCollected: Boolean,
-    isInTonight: Boolean,
-    isTonightPlaying: Boolean,
     contentUnit: PlayableContentUnit?,
     embeddedCueTrackId: String?,
     embeddedCueText: String?,
@@ -87,7 +85,6 @@ internal fun PlayerScreen(
     onOpenSources: () -> Unit,
     onRelinkMedia: () -> Unit,
     onToggleCollected: () -> Unit,
-    onAddToTonight: () -> Unit,
     onOpenTonight: () -> Unit,
     onQueueSelect: (Int) -> Unit,
     onQueueMove: (Int, Int) -> Unit,
@@ -164,14 +161,11 @@ internal fun PlayerScreen(
                 hasSecondaryText = hasSecondaryText,
                 sleepTimer = sleepTimer,
                 isCollected = isCollected,
-                isInTonight = isInTonight,
-                isTonightPlaying = isTonightPlaying,
                 onPlayPause = onPlayPause,
                 onBackToLibrary = onBackToLibrary,
                 onOpenSources = onOpenSources,
                 onRelinkMedia = onRelinkMedia,
                 onToggleCollected = onToggleCollected,
-                onAddToTonight = onAddToTonight,
                 onOpenTonight = onOpenTonight,
                 onQueueSelect = onQueueSelect,
                 onQueueMove = onQueueMove,
@@ -237,7 +231,7 @@ internal fun PlayerScreen(
                 onStopAfterCurrent()
                 timerVisible = false
             },
-            showEndOfTonight = isTonightPlaying,
+            showEndOfTonight = playback.queue.isNotEmpty(),
             onEndOfTonight = {
                 onStopAfterTonight()
                 timerVisible = false
@@ -402,14 +396,11 @@ private fun NormalPlayer(
     hasSecondaryText: Boolean,
     sleepTimer: SleepTimerState,
     isCollected: Boolean,
-    isInTonight: Boolean,
-    isTonightPlaying: Boolean,
     onPlayPause: () -> Unit,
     onBackToLibrary: () -> Unit,
     onOpenSources: () -> Unit,
     onRelinkMedia: () -> Unit,
     onToggleCollected: () -> Unit,
-    onAddToTonight: () -> Unit,
     onOpenTonight: () -> Unit,
     onQueueSelect: (Int) -> Unit,
     onQueueMove: (Int, Int) -> Unit,
@@ -482,10 +473,10 @@ private fun NormalPlayer(
                     fontSize = 12.sp,
                 )
             }
-            TextButton(onClick = if (isInTonight) onOpenTonight else onAddToTonight) {
+            TextButton(onClick = onOpenTonight) {
                 Text(
-                    text = if (isInTonight) "查看今晚" else "加入今晚",
-                    color = if (isInTonight) AppMutedText else AppSecondaryText,
+                    text = "查看今晚",
+                    color = AppMutedText,
                     fontSize = 12.sp,
                 )
             }
@@ -599,7 +590,6 @@ private fun NormalPlayer(
             player = player,
             playback = playback,
             sleepTimer = sleepTimer,
-            isTonightPlaying = isTonightPlaying,
             onShowQueue = { queueVisible = true },
             onShowTimer = onShowTimer,
         )
@@ -638,7 +628,6 @@ private fun NormalPlayer(
     if (queueVisible) {
         QueueDialog(
             playback = playback,
-            isTonight = isTonightPlaying,
             onSelect = onQueueSelect,
             onMove = onQueueMove,
             onRemove = onQueueRemove,
@@ -1310,7 +1299,6 @@ private fun PlayerOptions(
     player: Player,
     playback: PlaybackSnapshot,
     sleepTimer: SleepTimerState,
-    isTonightPlaying: Boolean,
     onShowQueue: () -> Unit,
     onShowTimer: () -> Unit,
 ) {
@@ -1319,23 +1307,19 @@ private fun PlayerOptions(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (isTonightPlaying) {
-            Text("按今晚顺序", color = AppMutedText, fontSize = 12.sp)
-        } else {
-            TextButton(onClick = { player.shuffleModeEnabled = !playback.shuffleEnabled }) {
-                Text(
-                    "随机",
-                    color = if (playback.shuffleEnabled) AppAccent else AppMutedText,
-                    fontSize = 12.sp,
-                )
-            }
-            TextButton(onClick = { player.repeatMode = nextRepeatMode(playback.repeatMode) }) {
-                Text(repeatModeLabel(playback.repeatMode), color = AppMutedText, fontSize = 12.sp)
-            }
+        TextButton(onClick = { player.shuffleModeEnabled = !playback.shuffleEnabled }) {
+            Text(
+                "随机",
+                color = if (playback.shuffleEnabled) AppAccent else AppMutedText,
+                fontSize = 12.sp,
+            )
+        }
+        TextButton(onClick = { player.repeatMode = nextRepeatMode(playback.repeatMode) }) {
+            Text(repeatModeLabel(playback.repeatMode), color = AppMutedText, fontSize = 12.sp)
         }
         TextButton(onClick = onShowQueue) {
             Text(
-                "${if (isTonightPlaying) "今晚" else "队列"} ${playback.queue.size}",
+                "今晚 ${playback.queue.size}",
                 color = AppMutedText,
                 fontSize = 12.sp,
             )
@@ -1353,7 +1337,6 @@ private fun PlayerOptions(
 @Composable
 private fun QueueDialog(
     playback: PlaybackSnapshot,
-    isTonight: Boolean,
     onSelect: (Int) -> Unit,
     onMove: (Int, Int) -> Unit,
     onRemove: (Int) -> Unit,
@@ -1361,7 +1344,7 @@ private fun QueueDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (isTonight) "今晚" else "播放队列", color = AppPrimaryText) },
+        title = { Text("今晚", color = AppPrimaryText) },
         text = {
             LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
                 itemsIndexed(
@@ -1423,16 +1406,11 @@ private fun QueueDialog(
                             }
                             TextButton(
                                 onClick = { onRemove(index) },
-                                enabled = isTonight || playback.queue.size > 1,
+                                enabled = true,
                             ) {
                                 Text(
                                     "移除",
-                                    color =
-                                        if (isTonight || playback.queue.size > 1) {
-                                            AppMutedText
-                                        } else {
-                                            AppHairline
-                                        },
+                                    color = AppMutedText,
                                     fontSize = 11.sp,
                                 )
                             }

@@ -128,6 +128,21 @@ class SessionStore(context: Context) {
         }
     }
 
+    suspend fun clearLastSession() {
+        dataStore.edit { preferences ->
+            preferences.writeMediaSource(Keys.LastMedia, null)
+            preferences.remove(Keys.LastPosition)
+            preferences.remove(Keys.LastDuration)
+            preferences.remove(Keys.LastSpeed)
+            preferences.remove(Keys.LastQueue)
+            preferences.remove(Keys.LastQueueIndex)
+            preferences.remove(Keys.LastShuffle)
+            preferences.remove(Keys.LastRepeatMode)
+            preferences.remove(Keys.LastSurface)
+            preferences[Keys.SchemaVersion] = CurrentSessionSchemaVersion
+        }
+    }
+
     suspend fun saveDisplayProfile(profile: DisplayProfile) {
         dataStore.edit { preferences ->
             preferences[Keys.SchemaVersion] = CurrentSessionSchemaVersion
