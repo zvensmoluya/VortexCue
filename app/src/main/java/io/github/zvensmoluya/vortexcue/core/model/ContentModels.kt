@@ -28,12 +28,14 @@ enum class TimedTextMatchBasis {
     UserSelected,
     ExactStem,
     LanguageSuffix,
+    FilenameCandidate,
     EmbeddedMetadata,
 }
 
 enum class TimedTextReadiness {
     Unknown,
     Ready,
+    PrivateCopy,
     Unreadable,
     ParseFailed,
 }

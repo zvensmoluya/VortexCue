@@ -36,16 +36,17 @@ internal fun resolveSidecarTrackMetadata(
     val parts = suffix?.split('.')?.filter(String::isNotBlank).orEmpty()
     val roles = parts.mapNotNull(::timedTextRole).distinct()
     val language = parts.firstOrNull { timedTextRole(it) == null }
+    val ambiguousStem = isLowConfidenceStem(mediaStem)
     return SidecarTrackMetadata(
         format = subtitleDisplayName.substringAfterLast('.', "").lowercase(),
         language = language,
         label = suffix,
         roles = roles,
         matchBasis =
-            if (suffix == null) {
-                TimedTextMatchBasis.ExactStem
-            } else {
-                TimedTextMatchBasis.LanguageSuffix
+            when {
+                ambiguousStem -> TimedTextMatchBasis.FilenameCandidate
+                suffix == null -> TimedTextMatchBasis.ExactStem
+                else -> TimedTextMatchBasis.LanguageSuffix
             },
     )
 }
@@ -952,8 +953,15 @@ private fun timedTextTrackRank(track: TimedTextTrack): Int =
         track.origin == TimedTextOrigin.Embedded && TimedTextRole.Default in track.roles -> 1
         track.matchBasis == TimedTextMatchBasis.ExactStem -> 2
         track.matchBasis == TimedTextMatchBasis.LanguageSuffix -> 3
-        else -> 4
+        track.matchBasis == TimedTextMatchBasis.FilenameCandidate -> 4
+        else -> 5
     }
+
+private fun isLowConfidenceStem(stem: String): Boolean {
+    val normalized = stem.lowercase().filter(Char::isLetterOrDigit)
+    return normalized.length <= 2 ||
+        normalized in setOf("audio", "video", "track", "subtitle", "sub", "caption", "captions")
+}
 
 private fun timedTextRole(value: String): TimedTextRole? =
     when (value.lowercase()) {

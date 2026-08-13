@@ -67,6 +67,7 @@ data class SubtitleSourceRef(
 data class LoadedSubtitle(
     val source: SubtitleSourceRef,
     val timeline: SubtitleTimeline,
+    val usedPrivateCopy: Boolean = false,
 )
 
 sealed interface DraftMedia {

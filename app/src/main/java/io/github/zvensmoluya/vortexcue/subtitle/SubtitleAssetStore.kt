@@ -7,8 +7,10 @@ import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
 
-class SubtitleCache(context: Context) {
-    private val directory = File(context.filesDir, "session_subtitles")
+/** 保存用户已经确认并成功解析的同步文字资产。 */
+class SubtitleAssetStore(context: Context) {
+    private val directory = File(context.filesDir, "subtitle_assets")
+    private val legacyDirectory = File(context.filesDir, "session_subtitles")
 
     fun store(
         uri: Uri,
@@ -32,8 +34,9 @@ class SubtitleCache(context: Context) {
 
     fun read(fileName: String?): ByteArray? {
         val safeName = fileName?.takeIf { File(it).name == it } ?: return null
-        val file = File(directory, safeName)
-        return file.takeIf(File::isFile)?.readBytes()
+        return sequenceOf(File(directory, safeName), File(legacyDirectory, safeName))
+            .firstOrNull(File::isFile)
+            ?.readBytes()
     }
 
     private fun String.sha256(): String =

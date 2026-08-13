@@ -669,17 +669,6 @@ internal class LibraryStateHolder(
         )
     }
 
-    fun updateManualTextSource(
-        media: MediaSourceRef,
-        slot: TextTrackSlot,
-        subtitle: SubtitleSourceRef?,
-    ): TimedTextTrack? {
-        val config = state.config
-        val updatedConfig = config.withManualTextSource(media, slot, subtitle)
-        updateConfig(updatedConfig)
-        return updatedConfig.activeTextTrack(media, slot)
-    }
-
     suspend fun persistManualTextSource(
         media: MediaSourceRef,
         slot: TextTrackSlot,

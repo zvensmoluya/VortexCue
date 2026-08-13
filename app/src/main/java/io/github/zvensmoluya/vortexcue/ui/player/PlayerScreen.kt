@@ -869,6 +869,7 @@ private fun textTrackDetail(track: TimedTextTrack): String =
         when (track.readiness) {
             TimedTextReadiness.Unknown -> "待验证"
             TimedTextReadiness.Ready -> "可用"
+            TimedTextReadiness.PrivateCopy -> "应用副本可用"
             TimedTextReadiness.Unreadable -> "文件不可读"
             TimedTextReadiness.ParseFailed -> "无法解析"
         },
