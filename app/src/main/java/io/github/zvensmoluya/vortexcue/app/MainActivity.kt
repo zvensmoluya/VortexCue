@@ -1,6 +1,8 @@
 package io.github.zvensmoluya.vortexcue.app
 
 import android.content.ComponentName
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.View
@@ -28,11 +30,15 @@ import io.github.zvensmoluya.vortexcue.ui.theme.VortexCueTheme
 class MainActivity : ComponentActivity() {
     private val controllerState = mutableStateOf<MediaController?>(null)
     private val connectionErrorState = mutableStateOf<String?>(null)
+    private val externalMediaRequestState = mutableStateOf<ExternalMediaRequest?>(null)
     private var controllerFuture: ListenableFuture<MediaController>? = null
+    private var nextExternalMediaRequestId = 0L
     private var immersiveMode = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        restoreExternalMediaRequest(savedInstanceState)
+        publishExternalMediaRequest(intent)
 
         setContent {
             VortexCueTheme {
@@ -43,6 +49,8 @@ class MainActivity : ComponentActivity() {
                         onWindowBrightnessChanged = ::setWindowBrightness,
                         onImmersiveModeChanged = ::setImmersiveMode,
                         onPlaybackActiveChanged = ::setKeepScreenOn,
+                        externalMediaRequest = externalMediaRequestState.value,
+                        onExternalMediaRequestConsumed = ::consumeExternalMediaRequest,
                     )
                 } else {
                     Box(
@@ -96,6 +104,40 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun publishExternalMediaRequest(intent: Intent) {
+        val uri = intent.data ?: return
+        if (
+            !isSupportedExternalMediaRequest(
+                action = intent.action,
+                scheme = uri.scheme,
+                mimeType = intent.type,
+                uriValue = uri.toString(),
+            )
+        ) {
+            return
+        }
+        nextExternalMediaRequestId += 1L
+        externalMediaRequestState.value = ExternalMediaRequest(nextExternalMediaRequestId, uri)
+        // 请求已经转存到显式状态，避免 Activity 重用同一个 Intent 时重复消费。
+        setIntent(Intent(Intent.ACTION_MAIN).setComponent(componentName))
+    }
+
+    private fun restoreExternalMediaRequest(savedInstanceState: Bundle?) {
+        val state = savedInstanceState ?: return
+        nextExternalMediaRequestId = state.getLong(ExternalRequestSequenceKey)
+        val requestId = state.getLong(ExternalRequestIdKey)
+        val uri = state.getString(ExternalRequestUriKey)?.let(Uri::parse)
+        if (requestId > 0L && uri != null) {
+            externalMediaRequestState.value = ExternalMediaRequest(requestId, uri)
+        }
+    }
+
+    private fun consumeExternalMediaRequest(requestId: Long) {
+        if (externalMediaRequestState.value?.id == requestId) {
+            externalMediaRequestState.value = null
+        }
+    }
+
     private fun setKeepScreenOn(enabled: Boolean) {
         if (enabled) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -117,6 +159,20 @@ class MainActivity : ComponentActivity() {
         immersiveMode = enabled
         setImmersive(enabled)
         applySystemBars()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putLong(ExternalRequestSequenceKey, nextExternalMediaRequestId)
+        externalMediaRequestState.value?.let { request ->
+            outState.putLong(ExternalRequestIdKey, request.id)
+            outState.putString(ExternalRequestUriKey, request.uri.toString())
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        publishExternalMediaRequest(intent)
     }
 
     @Suppress("DEPRECATION")
@@ -143,5 +199,11 @@ class MainActivity : ComponentActivity() {
         } else {
             window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
         }
+    }
+
+    private companion object {
+        const val ExternalRequestSequenceKey = "external_request_sequence"
+        const val ExternalRequestIdKey = "external_request_id"
+        const val ExternalRequestUriKey = "external_request_uri"
     }
 }

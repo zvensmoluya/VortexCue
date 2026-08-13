@@ -82,11 +82,13 @@ private enum class SubtitlePickTarget {
  * 实际播放由 [PlaybackService] 持有；窗口属性仍由 [MainActivity] 通过回调执行。
  */
 @Composable
-fun VortexCueApp(
+internal fun VortexCueApp(
     player: MediaController,
     onWindowBrightnessChanged: (Float?) -> Unit,
     onImmersiveModeChanged: (Boolean) -> Unit,
     onPlaybackActiveChanged: (Boolean) -> Unit,
+    externalMediaRequest: ExternalMediaRequest? = null,
+    onExternalMediaRequestConsumed: (Long) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -1162,6 +1164,13 @@ fun VortexCueApp(
             restoreDraftSubtitles(storedMedia)
         }
         restorationCompleted = true
+    }
+
+    LaunchedEffect(restorationCompleted, externalMediaRequest?.id) {
+        val request = externalMediaRequest ?: return@LaunchedEffect
+        if (!restorationCompleted) return@LaunchedEffect
+        loadMedia(request.uri, MediaPickTarget.Draft)
+        onExternalMediaRequestConsumed(request.id)
     }
 
     // 以下副作用将 UI 状态与持久化数据、Media3 运行时状态保持一致。

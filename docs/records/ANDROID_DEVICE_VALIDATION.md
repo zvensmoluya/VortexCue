@@ -54,6 +54,8 @@ Android 12+ Splash 要在应用启动后尽早抓帧，必要时按 `0/20/50/100
 ## SAF、来源与扫描
 
 - 用 `DocumentsContract` 解析 Tree URI 的 document ID；原始 document ID 只作为身份或回退值，不能直接当用户可读的文件夹名称。具体 provider 返回值应在设备记录中注明。
+- 分别从系统文件管理器和下载应用执行“用荧荧打开”，覆盖应用未运行、前台运行和后台运行；每次确认只建立单项 Queue、进入 Recent，并复用已有内容 ID 与字幕关系。
+- 对外部 `content:` URI 记录 grant flags 和 Provider；不能取得持久授权时先确认当前播放成立，再强制停止或撤销授权，确认应用保留内容事实并进入重新定位，而不是静默创建重复内容。
 - 添加 Folder、重新进入、撤销授权和 URI 失效必须分开验证。Folder 授权应持久化，但授权撤销后只能更新 locator 可用性，不能删除仍被 Recent、Collection 或 Active Session 引用的内容事实。
 - 添加或刷新单个 Folder 时，断言系统 MediaStore 条目数不变化；只有明确执行全设备扫描时才允许扫描系统媒体库。
 - 同一内容从单文件和 Folder 进入时，检查稳定内容 ID、文字轨 ID、主次选择和 offset 是否复用，而不是只比较显示名称。
