@@ -5,11 +5,39 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal object ContentUnitJson {
-    fun encodeList(units: List<PlayableContentUnit>): JSONArray =
-        JSONArray().apply { units.forEach { put(encode(it)) } }
+    fun encodeList(
+        units: List<PlayableContentUnit>,
+        catalogItems: List<MediaSourceRef> = emptyList(),
+    ): JSONArray {
+        val catalogIndexByLocatorId =
+            buildMap {
+                catalogItems.forEachIndexed { index, media ->
+                    putIfAbsent(stableMediaLocatorId(media.uri.toString(), media.sourceId), index)
+                }
+            }
+        return JSONArray().apply {
+            units.forEach { unit ->
+                val catalogIndex =
+                    unit.compactCatalogIndex(
+                        catalogItems = catalogItems,
+                        catalogIndexByLocatorId = catalogIndexByLocatorId,
+                    )
+                put(
+                    if (catalogIndex == null) {
+                        encode(unit)
+                    } else {
+                        JSONObject().put(CatalogItemIndexKey, catalogIndex)
+                    },
+                )
+            }
+        }
+    }
 
-    fun decodeList(array: JSONArray?): List<PlayableContentUnit> =
-        array.mapObjects(::decode)
+    fun decodeList(
+        array: JSONArray?,
+        catalogItems: List<MediaSourceRef> = emptyList(),
+    ): List<PlayableContentUnit> =
+        array.mapObjects { json -> decode(json, catalogItems) }
 
     private fun encode(unit: PlayableContentUnit): JSONObject =
         JSONObject()
@@ -26,7 +54,28 @@ internal object ContentUnitJson {
             .put("activeText", encodeActiveText(unit.activeText))
             .put("subtitleOffsetMs", unit.subtitleOffsetMs)
 
-    private fun decode(json: JSONObject): PlayableContentUnit {
+    private fun decode(
+        json: JSONObject,
+        catalogItems: List<MediaSourceRef>,
+    ): PlayableContentUnit {
+        if (json.has(CatalogItemIndexKey)) {
+            val catalogIndex = json.getInt(CatalogItemIndexKey)
+            val media = catalogItems.getOrNull(catalogIndex)
+                ?: throw IllegalArgumentException("Catalog item index is out of bounds")
+            val identityKey = mediaIdentityKey(media.uri.toString())
+            val locator =
+                MediaLocator(
+                    stableId = stableMediaLocatorId(media.uri.toString(), media.sourceId),
+                    identityKey = identityKey,
+                    media = media,
+                    availability = ContentAvailability.Available,
+                )
+            return PlayableContentUnit(
+                stableId = stableContentId(identityKey),
+                mediaLocators = listOf(locator),
+                activeMediaLocatorId = locator.stableId,
+            )
+        }
         val stableId = json.getString("stableId").takeIf(String::isNotBlank)
             ?: throw IllegalArgumentException("Content ID is empty")
         val mediaLocators =
@@ -166,6 +215,30 @@ internal object ContentUnitJson {
                 ),
             rejectedTrackIds = json.optJSONArray("rejectedTrackIds").stringValues(),
         )
+
+    private fun PlayableContentUnit.compactCatalogIndex(
+        catalogItems: List<MediaSourceRef>,
+        catalogIndexByLocatorId: Map<String, Int>,
+    ): Int? {
+        val locator = mediaLocators.singleOrNull() ?: return null
+        val catalogIndex = catalogIndexByLocatorId[locator.stableId] ?: return null
+        val catalogMedia = catalogItems[catalogIndex]
+        val expectedIdentityKey = mediaIdentityKey(catalogMedia.uri.toString())
+        val isDefaultCatalogUnit =
+            locator.media == catalogMedia &&
+                locator.stableId ==
+                    stableMediaLocatorId(catalogMedia.uri.toString(), catalogMedia.sourceId) &&
+                locator.identityKey == expectedIdentityKey &&
+                locator.availability == ContentAvailability.Available &&
+                stableId == stableContentId(expectedIdentityKey) &&
+                activeMediaLocatorId == locator.stableId &&
+                timedTextTracks.isEmpty() &&
+                activeText == ActiveTextSelection() &&
+                subtitleOffsetMs == 0L
+        return catalogIndex.takeIf { isDefaultCatalogUnit }
+    }
+
+    private const val CatalogItemIndexKey = "catalogItemIndex"
 }
 
 private inline fun <reified T : Enum<T>> enumValueOrDefault(

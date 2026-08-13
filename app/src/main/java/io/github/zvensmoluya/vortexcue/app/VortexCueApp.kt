@@ -51,6 +51,7 @@ import java.io.IOException
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -119,7 +120,12 @@ internal fun VortexCueApp(
     var displayProfile by remember { mutableStateOf(DisplayProfile.Balanced) }
     var glowCalibrationCompleted by remember { mutableStateOf(false) }
     var glowGestureHintSeen by remember { mutableStateOf(false) }
+    var sessionSnapshotRestored by remember { mutableStateOf(false) }
+    var librarySnapshotRestored by remember { mutableStateOf(false) }
     var restorationCompleted by remember { mutableStateOf(false) }
+    var startupInteractionRevision by remember { mutableIntStateOf(0) }
+    var storedAppState by remember { mutableStateOf<StoredAppState?>(null) }
+    var restoredLibraryConfig by remember { mutableStateOf<LibraryConfig?>(null) }
     // 文件选择结果需要回填到的业务目标。
     var mediaPickTarget by rememberSaveable { mutableStateOf(MediaPickTarget.Draft) }
     var mediaRelinkContentId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -141,7 +147,7 @@ internal fun VortexCueApp(
     var pendingAutoPlay by rememberSaveable { mutableStateOf(false) }
     var folderPickTargetId by rememberSaveable { mutableStateOf<String?>(null) }
     val libraryState = libraryStateHolder.state
-    val currentQueue =
+    val runtimeQueue =
         (0 until player.mediaItemCount).mapNotNull { index ->
             player.getMediaItemAt(index).toMediaSourceRef()?.let { decoded ->
                 libraryState.items.firstOrNull { it.uri == decoded.uri }
@@ -149,6 +155,13 @@ internal fun VortexCueApp(
                     ?: decoded
             }
         }
+    val currentQueue = runtimeQueue.ifEmpty { lastSession?.queue.orEmpty() }
+    val currentQueueIndex =
+        if (runtimeQueue.isEmpty()) lastSession?.currentIndex ?: 0 else playback.currentIndex
+    val currentQueuePositionMs =
+        if (runtimeQueue.isEmpty()) lastSession?.positionMs ?: 0L else playback.positionMs
+    val homeSnapshotReady =
+        sessionSnapshotRestored && (lastSession != null || librarySnapshotRestored)
     val selectedEmbeddedTrackId =
         activeSession?.media?.let { media ->
             TextTrackSlot.entries
@@ -156,6 +169,9 @@ internal fun VortexCueApp(
                 .singleOrNull { it.origin == TimedTextOrigin.Embedded }
                 ?.stableId
         }
+    fun markStartupInteraction() {
+        if (!restorationCompleted) startupInteractionRevision += 1
+    }
     fun startPlayer() {
         if (player.playbackState == Player.STATE_ENDED) player.seekTo(0L)
         if (player.playbackState == Player.STATE_IDLE && player.mediaItemCount > 0) {
@@ -195,6 +211,7 @@ internal fun VortexCueApp(
 
     fun removeFromTonight(index: Int) {
         if (index !in 0 until player.mediaItemCount) return
+        markStartupInteraction()
         if (player.mediaItemCount == 1) {
             player.clearMediaItems()
             activeSession = null
@@ -209,11 +226,13 @@ internal fun VortexCueApp(
     fun moveTonight(fromIndex: Int, toIndex: Int) {
         if (fromIndex !in 0 until player.mediaItemCount) return
         if (toIndex !in 0 until player.mediaItemCount) return
+        markStartupInteraction()
         player.moveMediaItem(fromIndex, toIndex)
     }
 
     fun clearTonight() {
         if (player.mediaItemCount == 0) return
+        markStartupInteraction()
         player.clearMediaItems()
         activeSession = null
         lastSession = null
@@ -280,6 +299,7 @@ internal fun VortexCueApp(
     }
 
     fun addToTonight(media: MediaSourceRef) {
+        markStartupInteraction()
         val resolved = libraryStateHolder.state.config.resolveActiveMedia(media)
         val existing = currentQueue.any {
             libraryStateHolder.state.config.sameContent(it, resolved)
@@ -306,7 +326,11 @@ internal fun VortexCueApp(
         )
     }
 
-    fun resumeSession(saved: RestorableSession) {
+    fun resumeSession(
+        saved: RestorableSession,
+        markInteraction: Boolean = true,
+    ) {
+        if (markInteraction) markStartupInteraction()
         val queue = saved.queue.ifEmpty { listOf(saved.session.media) }
         val index = saved.currentIndex.coerceIn(queue.indices)
         player.setMediaItems(queue.map { it.toMediaItem() }, index, saved.positionMs)
@@ -468,6 +492,7 @@ internal fun VortexCueApp(
         uri: Uri,
         target: MediaPickTarget,
     ) {
+        markStartupInteraction()
         cancelMediaLoad()
         if (target == MediaPickTarget.Draft) cancelDraftSubtitleLoads()
         val source =
@@ -974,201 +999,311 @@ internal fun VortexCueApp(
         startDraftSubtitleLoad(media, draftSlot, source)
     }
 
-    // 组合首次进入时恢复持久化状态；完成前不渲染可交互页面，避免恢复结果覆盖用户操作。
+    // Session is a small snapshot and is sufficient to restore Tonight immediately. Library
+    // decoding and provider validation must not keep the Home screen in its default first-use state.
     LaunchedEffect(Unit) {
-        libraryStateHolder.restoreConfig()
         val stored =
-            runCatching { sessionStore.load() }
-                .getOrElse {
-                    StoredAppState(
-                        draft = StoredDraft(null),
-                        lastSession = null,
-                        displayProfile = DisplayProfile.Balanced,
-                    )
-                }
+            runSuspendCatching {
+                withContext(Dispatchers.Default) { sessionStore.load() }
+            }.getOrElse {
+                StoredAppState(
+                    draft = StoredDraft(null),
+                    lastSession = null,
+                    displayProfile = DisplayProfile.Balanced,
+                )
+            }
         displayProfile = stored.displayProfile
         glowCalibrationCompleted = stored.glowCalibrationCompleted
         glowGestureHintSeen = stored.glowGestureHintSeen
-
-        val storedLast = stored.lastSession
-        if (storedLast != null) {
-            val restoredConfig = libraryStateHolder.state.config
-            val restoredMedia = restoredConfig.resolveActiveMedia(storedLast.media)
-            val restoredQueue =
-                storedLast.queue
-                    .map(restoredConfig::resolveActiveMedia)
-                    .ifEmpty { listOf(restoredMedia) }
-            val restoredIndex = storedLast.currentIndex.coerceIn(restoredQueue.indices)
-            val restoredPosition = storedLast.positionMs
-            val mediaError =
-                runCatching {
-                    ensureMediaReadable(contentResolver, restoredMedia)
-                }.exceptionOrNull()
-            val primaryTrack =
-                restoredConfig.activeTextTrack(restoredMedia, TextTrackSlot.Primary)
-            val primarySource = primaryTrack?.toSubtitleSourceRef()
-            val secondaryTrack =
-                restoredConfig.activeTextTrack(restoredMedia, TextTrackSlot.Secondary)
-            val secondarySource = secondaryTrack?.toSubtitleSourceRef()
-            val primaryResult =
-                primarySource?.let { source ->
-                    runCatching { loadSubtitleSource(contentResolver, subtitleAssetStore, source) }
-                }
-            val secondaryResult =
-                secondarySource?.let { source ->
-                    runCatching { loadSubtitleSource(contentResolver, subtitleAssetStore, source) }
-                }
-            primaryTrack?.let { track ->
-                primaryResult?.fold(
-                    onSuccess = { loaded ->
-                        libraryStateHolder.updateTextTrackReadiness(
-                            media = restoredMedia,
-                            trackId = track.stableId,
-                            readiness = loaded.readiness,
-                            resolvedSource = loaded.source,
-                        )
-                    },
-                    onFailure = { error ->
-                        val failure = subtitleFailure(error)
-                        libraryStateHolder.updateTextTrackReadiness(
-                            media = restoredMedia,
-                            trackId = track.stableId,
-                            readiness = failure.readiness,
-                            failureMessage = failure.message,
-                        )
-                    },
-                )
-            }
-            secondaryTrack?.let { track ->
-                secondaryResult?.fold(
-                    onSuccess = { loaded ->
-                        libraryStateHolder.updateTextTrackReadiness(
-                            media = restoredMedia,
-                            trackId = track.stableId,
-                            readiness = loaded.readiness,
-                            resolvedSource = loaded.source,
-                        )
-                    },
-                    onFailure = { error ->
-                        val failure = subtitleFailure(error)
-                        libraryStateHolder.updateTextTrackReadiness(
-                            media = restoredMedia,
-                            trackId = track.stableId,
-                            readiness = failure.readiness,
-                            failureMessage = failure.message,
-                        )
-                    },
-                )
-            }
-            val loadedSubtitle = primaryResult?.getOrNull()
-            val loadedSecondarySubtitle = secondaryResult?.getOrNull()
-            val restored =
+        stored.lastSession?.let { saved ->
+            val queue = saved.queue.ifEmpty { listOf(saved.media) }
+            lastSession =
                 RestorableSession(
-                    session =
-                        ActiveSession(
-                            media = restoredMedia,
-                            subtitle = loadedSubtitle,
-                            secondarySubtitle = loadedSecondarySubtitle,
-                            subtitleOffsetMs =
-                                restoredConfig.subtitleOffsetFor(restoredMedia),
-                        ),
-                    positionMs = restoredPosition,
-                    durationMs = storedLast.durationMs,
-                    playbackSpeed = storedLast.playbackSpeed,
-                    queue = restoredQueue,
-                    currentIndex = restoredIndex,
-                    shuffleEnabled = storedLast.shuffleEnabled,
-                    repeatMode = storedLast.repeatMode,
-                    lastSurface = storedLast.lastSurface,
-                    mediaAvailability =
-                        mediaError?.let {
-                            MediaAvailability.Unavailable(mediaAccessMessage(it))
-                        } ?: MediaAvailability.Ready,
+                    session = ActiveSession(media = saved.media, subtitle = null),
+                    positionMs = saved.positionMs,
+                    durationMs = saved.durationMs,
+                    playbackSpeed = saved.playbackSpeed,
+                    queue = queue,
+                    currentIndex = saved.currentIndex.coerceIn(queue.indices),
+                    shuffleEnabled = saved.shuffleEnabled,
+                    repeatMode = saved.repeatMode,
+                    lastSurface = saved.lastSurface,
+                    mediaAvailability = MediaAvailability.Checking,
                 )
-            libraryStateHolder.updateMediaAvailability(
-                restoredMedia,
-                if (mediaError == null) {
-                    ContentAvailability.Available
-                } else {
-                    ContentAvailability.Unavailable
-                },
-            )
-            lastSession = restored
-            sessionStore.saveLastSession(restored)
-            val runtimeMedia =
-                initialSession?.media?.let(restoredConfig::resolveActiveMedia)
-            if (runtimeMedia != null) {
-                val runtimeMatchesStored = restoredConfig.sameContent(runtimeMedia, restoredMedia)
-                activeSession =
-                    initialSession.copy(
-                        media = runtimeMedia,
-                        subtitle = loadedSubtitle.takeIf { runtimeMatchesStored },
-                        secondarySubtitle = loadedSecondarySubtitle.takeIf { runtimeMatchesStored },
-                        subtitleOffsetMs = restoredConfig.subtitleOffsetFor(runtimeMedia),
-                    )
-                playerSurface =
-                    if (runtimeMatchesStored) {
-                        resolveResumeSurface(storedLast.lastSurface, glowCalibrationCompleted)
-                    } else {
-                        PlayerSurface.Normal
-                    }
-            } else if (mediaError == null) {
-                if (player.mediaItemCount == 0) {
-                    player.setMediaItems(
-                        restoredQueue.map { it.toMediaItem() },
-                        restoredIndex,
-                        restoredPosition,
-                    )
-                    player.prepare()
-                }
-                activeSession = restored.session
-                player.setPlaybackSpeed(storedLast.playbackSpeed)
-                player.shuffleModeEnabled = storedLast.shuffleEnabled
-                player.repeatMode = storedLast.repeatMode
-                playerSurface = resolveResumeSurface(storedLast.lastSurface, glowCalibrationCompleted)
-            } else {
-                player.pause()
-                activeSession = null
-                destination = AppDestination.Home
+        }
+        stored.draft.media?.let { media ->
+            if (draft.media.source?.let { it.uri == media.uri } != false) {
+                draft = SessionDraft(media = DraftMedia.Checking(media))
             }
         }
+        storedAppState = stored
+        sessionSnapshotRestored = true
+    }
 
-        val storedDraft = stored.draft
-        if (storedDraft.media != null) {
-            val storedMedia = storedDraft.media
-            draft = SessionDraft(media = DraftMedia.Checking(storedMedia))
-            val isReadable =
-                try {
-                    ensureMediaReadable(contentResolver, storedMedia)
-                    true
-                } catch (error: Exception) {
-                    draft =
-                        SessionDraft(
-                            media =
-                                DraftMedia.Unavailable(
-                                    source = storedMedia,
-                                    message = mediaAccessMessage(error),
-                                ),
-                        )
-                    false
-                }
-            if (isReadable) {
-                libraryStateHolder.rememberRecentMedia(storedMedia)
-                draft = SessionDraft(media = DraftMedia.Ready(storedMedia))
-            } else {
-                libraryStateHolder.updateMediaAvailability(
-                    storedMedia,
-                    ContentAvailability.Unavailable,
-                )
-            }
-            restoreDraftSubtitles(storedMedia)
+    // LibraryStore can be hundreds of kilobytes. Restore it independently so Session is not
+    // serialized behind JSON decoding and cached partition reconstruction.
+    LaunchedEffect(Unit) {
+        try {
+            restoredLibraryConfig = libraryStateHolder.restoreConfig()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            restoredLibraryConfig = LibraryConfig()
+        } finally {
+            librarySnapshotRestored = true
         }
+    }
+
+    LaunchedEffect(sessionSnapshotRestored, librarySnapshotRestored) {
+        if (!sessionSnapshotRestored || !librarySnapshotRestored || restorationCompleted) {
+            return@LaunchedEffect
+        }
+        val stored = storedAppState ?: return@LaunchedEffect
+        val restoredConfig = restoredLibraryConfig ?: return@LaunchedEffect
+        val restoreInteractionRevision = startupInteractionRevision
+
+        try {
+            stored.lastSession?.let { saved ->
+                val media = restoredConfig.resolveActiveMedia(saved.media)
+                val queue =
+                    saved.queue
+                        .map(restoredConfig::resolveActiveMedia)
+                        .ifEmpty { listOf(media) }
+                val index = saved.currentIndex.coerceIn(queue.indices)
+                val position = saved.positionMs
+
+                fun cachedSessionStillCurrent(): Boolean =
+                    lastSession?.let {
+                        restoredConfig.sameContent(it.session.media, media)
+                    } == true
+
+                fun runtimeSessionMatchesStored(): Boolean =
+                    activeSession?.let {
+                        restoredConfig.sameContent(it.media, media)
+                    } != false
+
+                if (
+                    startupInteractionRevision == restoreInteractionRevision &&
+                        cachedSessionStillCurrent()
+                ) {
+                    lastSession =
+                        RestorableSession(
+                            session =
+                                ActiveSession(
+                                    media = media,
+                                    subtitle = null,
+                                    subtitleOffsetMs = restoredConfig.subtitleOffsetFor(media),
+                                ),
+                            positionMs = position,
+                            durationMs = saved.durationMs,
+                            playbackSpeed = saved.playbackSpeed,
+                            queue = queue,
+                            currentIndex = index,
+                            shuffleEnabled = saved.shuffleEnabled,
+                            repeatMode = saved.repeatMode,
+                            lastSurface = saved.lastSurface,
+                            mediaAvailability = MediaAvailability.Checking,
+                        )
+                }
+
+                val mediaCheck =
+                    async { runSuspendCatching { ensureMediaReadable(contentResolver, media) } }
+                val primaryTrack = restoredConfig.activeTextTrack(media, TextTrackSlot.Primary)
+                val secondaryTrack = restoredConfig.activeTextTrack(media, TextTrackSlot.Secondary)
+                val primaryResult =
+                    primaryTrack?.toSubtitleSourceRef()?.let { source ->
+                        async {
+                            runSuspendCatching {
+                                loadSubtitleSource(contentResolver, subtitleAssetStore, source)
+                            }
+                        }
+                    }
+                val secondaryResult =
+                    secondaryTrack?.toSubtitleSourceRef()?.let { source ->
+                        async {
+                            runSuspendCatching {
+                                loadSubtitleSource(contentResolver, subtitleAssetStore, source)
+                            }
+                        }
+                    }
+                val mediaError = mediaCheck.await().exceptionOrNull()
+                val primaryLoaded = primaryResult?.await()
+                val secondaryLoaded = secondaryResult?.await()
+
+                if (
+                    startupInteractionRevision == restoreInteractionRevision &&
+                        cachedSessionStillCurrent()
+                ) {
+                    primaryTrack?.let { track ->
+                        primaryLoaded?.fold(
+                            onSuccess = { loaded ->
+                                libraryStateHolder.updateTextTrackReadiness(
+                                    media = media,
+                                    trackId = track.stableId,
+                                    readiness = loaded.readiness,
+                                    resolvedSource = loaded.source,
+                                )
+                            },
+                            onFailure = { error ->
+                                val failure = subtitleFailure(error)
+                                libraryStateHolder.updateTextTrackReadiness(
+                                    media = media,
+                                    trackId = track.stableId,
+                                    readiness = failure.readiness,
+                                    failureMessage = failure.message,
+                                )
+                            },
+                        )
+                    }
+                    secondaryTrack?.let { track ->
+                        secondaryLoaded?.fold(
+                            onSuccess = { loaded ->
+                                libraryStateHolder.updateTextTrackReadiness(
+                                    media = media,
+                                    trackId = track.stableId,
+                                    readiness = loaded.readiness,
+                                    resolvedSource = loaded.source,
+                                )
+                            },
+                            onFailure = { error ->
+                                val failure = subtitleFailure(error)
+                                libraryStateHolder.updateTextTrackReadiness(
+                                    media = media,
+                                    trackId = track.stableId,
+                                    readiness = failure.readiness,
+                                    failureMessage = failure.message,
+                                )
+                            },
+                        )
+                    }
+                }
+
+                val restored =
+                    RestorableSession(
+                        session =
+                            ActiveSession(
+                                media = media,
+                                subtitle = primaryLoaded?.getOrNull(),
+                                secondarySubtitle = secondaryLoaded?.getOrNull(),
+                                subtitleOffsetMs = restoredConfig.subtitleOffsetFor(media),
+                            ),
+                        positionMs = position,
+                        durationMs = saved.durationMs,
+                        playbackSpeed = saved.playbackSpeed,
+                        queue = queue,
+                        currentIndex = index,
+                        shuffleEnabled = saved.shuffleEnabled,
+                        repeatMode = saved.repeatMode,
+                        lastSurface = saved.lastSurface,
+                        mediaAvailability =
+                            mediaError?.let { MediaAvailability.Unavailable(mediaAccessMessage(it)) }
+                                ?: MediaAvailability.Ready,
+                    )
+                if (
+                    startupInteractionRevision == restoreInteractionRevision &&
+                        cachedSessionStillCurrent()
+                ) {
+                    libraryStateHolder.updateMediaAvailability(
+                        media,
+                        if (mediaError == null) ContentAvailability.Available
+                        else ContentAvailability.Unavailable,
+                    )
+                    lastSession = restored
+
+                    if (!runtimeSessionMatchesStored()) {
+                        // PlaybackService may already be playing a different item. Keep that
+                        // runtime session untouched, but still finish restoring the cached
+                        // Tonight entry so Continue and external-open sequencing can proceed.
+                    } else {
+                        val runtimeMedia = initialSession?.media?.let(restoredConfig::resolveActiveMedia)
+                        if (runtimeMedia != null) {
+                            val runtimeMatchesStored = restoredConfig.sameContent(runtimeMedia, media)
+                            activeSession =
+                                initialSession.copy(
+                                    media = runtimeMedia,
+                                    subtitle = restored.session.subtitle.takeIf { runtimeMatchesStored },
+                                    secondarySubtitle =
+                                        restored.session.secondarySubtitle.takeIf { runtimeMatchesStored },
+                                    subtitleOffsetMs = restoredConfig.subtitleOffsetFor(runtimeMedia),
+                                )
+                            playerSurface =
+                                if (runtimeMatchesStored) {
+                                    resolveResumeSurface(saved.lastSurface, glowCalibrationCompleted)
+                                } else {
+                                    PlayerSurface.Normal
+                                }
+                        } else if (mediaError == null) {
+                            if (player.mediaItemCount == 0) {
+                                player.setMediaItems(
+                                    restored.queue.map { it.toMediaItem() },
+                                    restored.currentIndex,
+                                    restored.positionMs,
+                                )
+                                player.prepare()
+                            }
+                            activeSession = restored.session
+                            player.setPlaybackSpeed(saved.playbackSpeed)
+                            player.shuffleModeEnabled = saved.shuffleEnabled
+                            player.repeatMode = saved.repeatMode
+                            playerSurface =
+                                resolveResumeSurface(saved.lastSurface, glowCalibrationCompleted)
+                        } else {
+                            player.pause()
+                            activeSession = null
+                            destination = AppDestination.Home
+                        }
+                    }
+                }
+            }
+
+            stored.draft.media?.let { media ->
+                if (draft.media.source?.uri == media.uri) {
+                    val draftResult =
+                        runSuspendCatching { ensureMediaReadable(contentResolver, media) }
+                    if (draftResult.isSuccess) {
+                        libraryStateHolder.rememberRecentMedia(media)
+                        draft = SessionDraft(media = DraftMedia.Ready(media))
+                        restoreDraftSubtitles(media)
+                    } else {
+                        draft =
+                            SessionDraft(
+                                media =
+                                    DraftMedia.Unavailable(
+                                        source = media,
+                                        message =
+                                            mediaAccessMessage(
+                                                draftResult.exceptionOrNull()
+                                                    ?: IOException("Media is unavailable"),
+                                            ),
+                                    ),
+                            )
+                        libraryStateHolder.updateMediaAvailability(
+                            media,
+                            ContentAvailability.Unavailable,
+                        )
+                    }
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // A malformed or inaccessible cached entry must not keep Home behind the startup
+            // gate. The cached session remains visible as a repairable item when possible.
+        }
+        // Persistence starts only after the cached player state has been hydrated. Otherwise the
+        // initially empty MediaController can overwrite the stored queue during startup.
         restorationCompleted = true
     }
 
-    LaunchedEffect(restorationCompleted, externalMediaRequest?.id) {
+    LaunchedEffect(
+        restorationCompleted,
+        lastSession?.mediaAvailability,
+        externalMediaRequest?.id,
+    ) {
         val request = externalMediaRequest ?: return@LaunchedEffect
         if (!restorationCompleted) return@LaunchedEffect
+        // Do not let an external “open with” request race cached recovery. restorationCompleted
+        // is the single barrier here; a failed validation must still allow the request through.
         loadMedia(request.uri, MediaPickTarget.Draft)
         onExternalMediaRequestConsumed(request.id)
     }
@@ -1230,7 +1365,20 @@ internal fun VortexCueApp(
     }
 
     fun continueTonight() {
-        val session = activeSession ?: player.currentMediaItem?.toActiveSession() ?: return
+        val session = activeSession ?: player.currentMediaItem?.toActiveSession()
+        if (session == null) {
+            lastSession
+                ?.takeUnless { it.mediaAvailability is MediaAvailability.Unavailable }
+                ?.let { saved ->
+                    resumeSession(
+                        saved = saved,
+                        markInteraction =
+                            saved.mediaAvailability !is MediaAvailability.Checking,
+                    )
+                }
+            return
+        }
+        markStartupInteraction()
         activeSession = session
         draft = session.toDraft()
         playerSurface = PlayerSurface.Normal
@@ -1241,7 +1389,7 @@ internal fun VortexCueApp(
         }
         playWithNotificationPermission()
     }
-    LaunchedEffect(currentQueue.map { it.uri.toString() }) {
+    LaunchedEffect(currentQueue.map { it.uri.toString() }, librarySnapshotRestored) {
         libraryStateHolder.retainContentIds(
             currentQueue.mapNotNullTo(linkedSetOf()) { media ->
                 libraryStateHolder.state.config.contentUnitFor(media)?.stableId
@@ -1423,13 +1571,15 @@ internal fun VortexCueApp(
         }
     }
 
-    if (!restorationCompleted) {
+    // 只阻塞到 Library / Session 的轻量快照已经发布；媒体 provider 和字幕解析在此之后
+    // 后台完成。这样不会再把“恢复慢”伪装成首页先显示空状态、随后突然跳变。
+    if (!homeSnapshotReady) {
         Box(
             modifier = modifier.fillMaxSize().background(AppBackground),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = "正在恢复会话…",
+                text = "正在准备首页…",
                 color = AppSecondaryText,
                 fontSize = 14.sp,
             )
@@ -1455,6 +1605,7 @@ internal fun VortexCueApp(
         items: List<MediaSourceRef>,
         index: Int,
     ) {
+        markStartupInteraction()
         val config = libraryStateHolder.state.config
         val resolvedItems = items.map(config::resolveActiveMedia)
         resolvedItems.getOrNull(index)?.let { media ->
@@ -1496,6 +1647,7 @@ internal fun VortexCueApp(
     }
 
     fun playSingle(media: MediaSourceRef) {
+        markStartupInteraction()
         playGroup(listOf(media), 0)
     }
 
@@ -1508,8 +1660,8 @@ internal fun VortexCueApp(
                 activeSession = activeSession,
                 lastSession = lastSession,
                 tonight = currentQueue,
-                tonightCurrentIndex = playback.currentIndex,
-                tonightPositionMs = playback.positionMs,
+                tonightCurrentIndex = currentQueueIndex,
+                tonightPositionMs = currentQueuePositionMs,
                 playback = playback,
                 displayProfile = displayProfile,
                 library = libraryState,
@@ -1559,6 +1711,7 @@ internal fun VortexCueApp(
                 onRemoveFromPlaylist = libraryStateHolder::removeFromPlaylist,
                 onDeletePlaylist = libraryStateHolder::deletePlaylist,
                 onContinue = {
+                    markStartupInteraction()
                     val currentSession = activeSession
                     val saved = lastSession
                     if (
@@ -1745,6 +1898,17 @@ internal fun VortexCueApp(
         }
     }
 }
+
+private suspend inline fun <T> runSuspendCatching(
+    crossinline block: suspend () -> T,
+): Result<T> =
+    try {
+        Result.success(block())
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Throwable) {
+        Result.failure(error)
+    }
 
 private suspend fun loadSubtitleSource(
     contentResolver: ContentResolver,

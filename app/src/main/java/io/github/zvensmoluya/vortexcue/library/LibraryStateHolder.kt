@@ -23,8 +23,10 @@ import io.github.zvensmoluya.vortexcue.core.storage.treeDisplayName
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Stable
 internal class LibraryStateHolder(
@@ -46,13 +48,36 @@ internal class LibraryStateHolder(
         private set
 
     suspend fun restoreConfig(): LibraryConfig {
-        val config = runCatching { store.load() }.getOrDefault(LibraryConfig())
-        state =
-            restoreCachedLibraryState(
-                config = config,
-                hasAudioAccess = appContext.hasAudioLibraryPermission(),
-                videoAccess = appContext.videoLibraryAccess(),
-            )
+        // LibraryStore contains a JSON snapshot that can grow substantially with a user's
+        // collection. Decode and rebuild the cached partitions away from the main thread;
+        // only publish the finished state back on the caller context.
+        val hasAudioAccess = appContext.hasAudioLibraryPermission()
+        val videoAccess = appContext.videoLibraryAccess()
+        val (config, restoredState, needsEncodingUpgrade) =
+            withContext(Dispatchers.Default) {
+                val loaded =
+                    try {
+                        store.loadConfig()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        LoadedLibraryConfig(
+                            config = LibraryConfig(),
+                            needsEncodingUpgrade = false,
+                        )
+                    }
+                Triple(
+                    loaded.config,
+                    restoreCachedLibraryState(
+                        config = loaded.config,
+                        hasAudioAccess = hasAudioAccess,
+                        videoAccess = videoAccess,
+                    ),
+                    loaded.needsEncodingUpgrade,
+                )
+            }
+        state = restoredState
+        if (needsEncodingUpgrade) configWriter.submit(config)
         return config
     }
 

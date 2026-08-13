@@ -165,10 +165,13 @@ internal fun HomeScreen(
             ignoredSelection = emptySet()
         }
     }
-    LaunchedEffect(library.candidates, library.config, library.sources) {
+    LaunchedEffect(library.candidates, library.config, library.sources, section, showingIgnored) {
+        // Discovery selection is only visible in the Discoveries surface. Avoid walking every
+        // candidate against the full content catalog during the initial Home composition.
+        if (section != HomeSection.Discoveries) return@LaunchedEffect
         val availableCandidates = library.candidates.filterNot(library::isUnavailable)
         val currentUris = availableCandidates.mapTo(hashSetOf()) { it.uri.toString() }
-        if (section == HomeSection.Discoveries && !showingIgnored) {
+        if (!showingIgnored) {
             val newAudioUris =
                 availableCandidates
                     .filter { it.kind == MediaKind.Audio }
