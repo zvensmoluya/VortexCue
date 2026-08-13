@@ -19,6 +19,8 @@
 - Tonight 是当前可恢复播放 Session / Queue 的产品表达，不是与 Player Queue 并列的数据模型。
 - 用户在 Home 或 Player 中添加、移除、重排和清空 Tonight 时，直接操作 Media3 当前 Queue。
 - 当前 Queue 的顺序、当前项和位置持久化为恢复快照；持久化不赋予它独立计划语义。
+- Playlist 和 Queue 条目不保存各自的播放位置；Session 只恢复当前项及其位置，内容自己的文字轨和 offset 继续由内容目录持有。
+- 打开或立即播放单个内容是 `replace`，“加入今晚”是 `append`，明确播放 Playlist、Folder 顺序或多选结果也是 `replace`；这些入口只操作唯一 Queue，不创建额外 Session 或播放完自动移除的临时条目。
 - 自然播放结束或循环播放不自动清空当前 Queue，以便继续查看和恢复本次 Session。
 - 当前不提供独立的未来 Tonight Draft。需要长期保存或复用一组内容时，使用 Playlist；需要回顾过去队列时，使用播放历史。
 
