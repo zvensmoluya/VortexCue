@@ -158,14 +158,7 @@ internal fun TimedTextTrackEntity.toDomain(
     TimedTextTrack(
         stableId = trackId,
         origin = origin.enumValueOr(TimedTextOrigin.Sidecar),
-        locator =
-            TimedTextLocator(
-                uriValue = uriValue,
-                embeddedTrackId = embeddedTrackId,
-                displayName = displayName,
-                mimeType = mimeType,
-                cachedFileName = cachedFileName,
-            ),
+        locator = toDomainLocator(),
         format = format,
         language = language,
         label = label,
@@ -196,7 +189,32 @@ internal fun TimedTextTrack.toEntity(
         readiness = readiness.name,
         failureMessage = failureMessage,
         isRejected = isRejected,
+        generatedSlotId = locator.generatedSlotId,
     )
+
+private fun TimedTextTrackEntity.toDomainLocator(): TimedTextLocator =
+    when {
+        generatedSlotId != null ->
+            TimedTextLocator.GeneratedResult(
+                generatedSlotId = generatedSlotId,
+                displayName = displayName,
+                mimeType = mimeType,
+            )
+        embeddedTrackId != null ->
+            TimedTextLocator.Embedded(
+                embeddedTrackId = embeddedTrackId,
+                displayName = displayName,
+                mimeType = mimeType,
+            )
+        uriValue != null ->
+            TimedTextLocator.External(
+                uriValue = uriValue,
+                displayName = displayName,
+                mimeType = mimeType,
+                cachedFileName = cachedFileName,
+            )
+        else -> error("Timed text entity has no locator")
+    }
 
 internal fun TimedTextTrack.roleEntities(): List<TimedTextTrackRoleEntity> =
     roles.distinct().map { TimedTextTrackRoleEntity(stableId, it.name) }

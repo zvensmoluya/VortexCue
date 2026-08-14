@@ -36,6 +36,7 @@ import io.github.zvensmoluya.vortexcue.core.model.ActiveSession
 import io.github.zvensmoluya.vortexcue.core.model.ContentAvailability
 import io.github.zvensmoluya.vortexcue.core.model.DisplayProfile
 import io.github.zvensmoluya.vortexcue.core.model.LoadedSubtitle
+import io.github.zvensmoluya.vortexcue.core.model.LoadedGeneratedText
 import io.github.zvensmoluya.vortexcue.core.model.MediaOrigin
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
 import io.github.zvensmoluya.vortexcue.core.model.PlayerSurface
@@ -72,10 +73,13 @@ import io.github.zvensmoluya.vortexcue.playback.stopAfterTonight
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleAssetStore
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleParser
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleTimeline
+import io.github.zvensmoluya.vortexcue.synctext.GeneratedTextPresentation
 import io.github.zvensmoluya.vortexcue.ui.home.HomeScreen
 import io.github.zvensmoluya.vortexcue.ui.home.HomeSection
 import io.github.zvensmoluya.vortexcue.ui.player.PlayerScreen
 import io.github.zvensmoluya.vortexcue.ui.player.rememberPlaybackSnapshot
+import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextAction
+import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextUiHost
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.util.concurrent.CancellationException
@@ -136,6 +140,8 @@ internal fun VortexCueApp(
     val persistedSettings by settingsStore.state.collectAsState(initial = SettingsState())
     val playback = rememberPlaybackSnapshot(player)
     val embeddedTextRuntime = rememberEmbeddedTextRuntimeState(player)
+    val syncTextUiState by container.syncTextUiController.state.collectAsState()
+    val dispatchSyncTextAction = container.syncTextUiController::dispatch
 
     var destination by rememberSaveable { mutableStateOf(AppDestination.Home) }
     var homeSection by rememberSaveable { mutableStateOf(HomeSection.Home) }
@@ -177,6 +183,74 @@ internal fun VortexCueApp(
     val currentUnit = currentDetails?.contentUnit
     val selectedPrimaryTrack = currentDetails?.selectedTrack(TextTrackSlot.Primary)
     val selectedSecondaryTrack = currentDetails?.selectedTrack(TextTrackSlot.Secondary)
+    val generatedSlotId = selectedPrimaryTrack?.locator?.generatedSlotId
+    val generatedPresentationFlow =
+        remember(container.syncTextRepository, generatedSlotId) {
+            generatedSlotId?.let(container.syncTextRepository::observePresentation) ?: flowOf(null)
+        }
+    val generatedPresentation by generatedPresentationFlow.collectAsState(initial = null)
+    var effectiveGeneratedPresentation by remember(currentContentId, generatedSlotId) {
+        mutableStateOf<GeneratedTextPresentation?>(null)
+    }
+    var deferredGeneratedResultId by remember(currentContentId, generatedSlotId) {
+        mutableStateOf<String?>(null)
+    }
+    var deferredAtCueKey by remember(currentContentId, generatedSlotId) {
+        mutableStateOf<String?>(null)
+    }
+    val effectiveGeneratedBoundaryTimeline =
+        remember(effectiveGeneratedPresentation?.result?.resultId) {
+            effectiveGeneratedPresentation
+                ?.let { presentation -> presentation.targetCues ?: presentation.sourceCues }
+                ?.let(::SubtitleTimeline)
+        }
+    val effectiveCueKey =
+        effectiveGeneratedBoundaryTimeline
+            ?.resolve((playback.positionMs + (currentDetails?.subtitleOffsetMs ?: 0L)).coerceAtLeast(0L))
+            ?.let { cue -> "${cue.stableId}:${cue.startMs}:${cue.endMs}" }
+
+    LaunchedEffect(
+        generatedPresentation?.result?.resultId,
+        generatedPresentation?.result?.presentationMode,
+        playback.isPlaying,
+        effectiveCueKey,
+    ) {
+        val incoming = generatedPresentation
+        val current = effectiveGeneratedPresentation
+        when {
+            incoming == null -> {
+                effectiveGeneratedPresentation = null
+                deferredGeneratedResultId = null
+                deferredAtCueKey = null
+            }
+            current == null ||
+                current.result.resultId == incoming.result.resultId ||
+                !playback.isPlaying ||
+                effectiveCueKey == null -> {
+                effectiveGeneratedPresentation = incoming
+                deferredGeneratedResultId = null
+                deferredAtCueKey = null
+            }
+            deferredGeneratedResultId != incoming.result.resultId -> {
+                deferredGeneratedResultId = incoming.result.resultId
+                deferredAtCueKey = effectiveCueKey
+            }
+            deferredAtCueKey != effectiveCueKey -> {
+                effectiveGeneratedPresentation = incoming
+                deferredGeneratedResultId = null
+                deferredAtCueKey = null
+            }
+        }
+    }
+    val loadedGeneratedText =
+        effectiveGeneratedPresentation?.let { presentation ->
+            LoadedGeneratedText(
+                slotId = presentation.result.slotId,
+                sourceTimeline = SubtitleTimeline(presentation.sourceCues),
+                targetTimeline = presentation.targetCues?.let(::SubtitleTimeline),
+                presentationMode = presentation.result.presentationMode,
+            )
+        }
 
     LaunchedEffect(currentContentId, selectedPrimaryTrack?.stableId) {
         primarySubtitle =
@@ -205,6 +279,7 @@ internal fun VortexCueApp(
                 media = it.activeMedia,
                 subtitle = primarySubtitle,
                 secondarySubtitle = secondarySubtitle,
+                generatedText = loadedGeneratedText,
                 subtitleOffsetMs = it.subtitleOffsetMs,
             )
         }
@@ -515,6 +590,15 @@ internal fun VortexCueApp(
                     displayProfile = profile
                     scope.launch { settingsStore.saveDisplayProfile(profile) }
                 },
+                syncTextTaskCount = syncTextUiState.tasks.size,
+                onOpenSyncTextTasks = { dispatchSyncTextAction(SyncTextAction.OpenTaskDrawer) },
+                onOpenSyncTextSchemes = { dispatchSyncTextAction(SyncTextAction.OpenSchemeEditor) },
+                onGenerateSyncText = { details ->
+                    dispatchSyncTextAction(SyncTextAction.OpenGeneration(details))
+                },
+                onOpenGeneratedTextResult = { slotId ->
+                    dispatchSyncTextAction(SyncTextAction.OpenResultDetails(slotId))
+                },
                 onRelinkContent = { id ->
                     relinkContentId = id
                     mediaPickTarget = MediaPickTarget.Relink
@@ -628,6 +712,24 @@ internal fun VortexCueApp(
                             subtitlePicker.launch(arrayOf("*/*"))
                         }
                     },
+                    syncTextTaskCount = syncTextUiState.tasks.size,
+                    onOpenSyncTextTasks = {
+                        dispatchSyncTextAction(SyncTextAction.OpenTaskDrawer)
+                    },
+                    onOpenSyncTextSchemes = {
+                        dispatchSyncTextAction(SyncTextAction.OpenSchemeEditor)
+                    },
+                    onGenerateSyncText = {
+                        currentDetails?.let { details ->
+                            dispatchSyncTextAction(SyncTextAction.OpenGeneration(details))
+                        }
+                    },
+                    onOpenGeneratedTextResult = { slotId ->
+                        dispatchSyncTextAction(SyncTextAction.OpenResultDetails(slotId))
+                    },
+                    onGeneratedPresentationModeChanged = { slotId, mode ->
+                        dispatchSyncTextAction(SyncTextAction.SetPresentationMode(slotId, mode))
+                    },
                     onSubtitleOffsetChanged = { offset ->
                         currentContentId?.let { id -> scope.launch { repository.updateSubtitleOffset(id, offset) } }
                     },
@@ -672,6 +774,11 @@ internal fun VortexCueApp(
             }
         }
     }
+
+    SyncTextUiHost(
+        state = syncTextUiState,
+        onAction = dispatchSyncTextAction,
+    )
 }
 
 private suspend fun loadSelectedTrack(

@@ -128,6 +128,11 @@ internal fun HomeScreen(
     onContinue: () -> Unit,
     onPlayPause: () -> Unit,
     onDisplayProfileChanged: (DisplayProfile) -> Unit,
+    syncTextTaskCount: Int,
+    onOpenSyncTextTasks: () -> Unit,
+    onOpenSyncTextSchemes: () -> Unit,
+    onGenerateSyncText: (ContentDetails) -> Unit,
+    onOpenGeneratedTextResult: (String) -> Unit,
     onRelinkContent: (String) -> Unit,
     onSelectContentTextTrack: (String, TextTrackSlot, String?) -> Unit,
     onRestoreAutomaticContentTextTrack: (String, TextTrackSlot) -> Unit,
@@ -222,6 +227,8 @@ internal fun HomeScreen(
                 searchVisible = true
             },
             onDisplay = { onSectionChanged(HomeSection.Display) },
+            syncTextTaskCount = syncTextTaskCount,
+            onOpenSyncTextTasks = onOpenSyncTextTasks,
         )
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -373,6 +380,9 @@ internal fun HomeScreen(
             onSelectTrack = onSelectContentTextTrack,
             onRestoreAutomatic = onRestoreAutomaticContentTextTrack,
             onAddTrack = onAddContentTextTrack,
+            onGenerateSyncText = { onGenerateSyncText(content) },
+            onOpenSyncTextSchemes = onOpenSyncTextSchemes,
+            onOpenGeneratedTextResult = onOpenGeneratedTextResult,
         )
     }
 
@@ -435,6 +445,8 @@ private fun HomeHeader(
     onBack: () -> Unit,
     onSearch: () -> Unit,
     onDisplay: () -> Unit,
+    syncTextTaskCount: Int,
+    onOpenSyncTextTasks: () -> Unit,
 ) {
     val title = nestedTitle ?: when (section) {
         HomeSection.Home -> "VortexCue"
@@ -465,6 +477,11 @@ private fun HomeHeader(
         )
         if (section == HomeSection.MyContent && nestedTitle == null) {
             TextButton(onClick = onSearch) { Text("搜索", color = AppAccent) }
+        }
+        if (syncTextTaskCount > 0) {
+            TextButton(onClick = onOpenSyncTextTasks) {
+                Text("文字任务 $syncTextTaskCount", color = AppAccent, fontSize = 12.sp)
+            }
         }
         if (section == HomeSection.Home) {
             TextButton(onClick = onDisplay) { Text("显示", color = AppSecondaryText) }
@@ -858,6 +875,9 @@ private fun ContentDetailDialog(
     onSelectTrack: (String, TextTrackSlot, String?) -> Unit,
     onRestoreAutomatic: (String, TextTrackSlot) -> Unit,
     onAddTrack: (String, TextTrackSlot) -> Unit,
+    onGenerateSyncText: () -> Unit,
+    onOpenSyncTextSchemes: () -> Unit,
+    onOpenGeneratedTextResult: (String) -> Unit,
 ) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(
@@ -904,6 +924,10 @@ private fun ContentDetailDialog(
                 }
                 item {
                     SectionHeading("同步文字")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        QuietButton("生成", onGenerateSyncText)
+                        QuietButton("方案", onOpenSyncTextSchemes)
+                    }
                     TextTrackSlot.entries.forEach { slot ->
                         TextTrackSlotEditor(
                             details = details,
@@ -911,6 +935,7 @@ private fun ContentDetailDialog(
                             onSelect = { onSelectTrack(details.contentId, slot, it) },
                             onAutomatic = { onRestoreAutomatic(details.contentId, slot) },
                             onAdd = { onAddTrack(details.contentId, slot) },
+                            onOpenGeneratedResult = onOpenGeneratedTextResult,
                         )
                     }
                 }
@@ -926,6 +951,7 @@ private fun TextTrackSlotEditor(
     onSelect: (String?) -> Unit,
     onAutomatic: () -> Unit,
     onAdd: () -> Unit,
+    onOpenGeneratedResult: (String) -> Unit,
 ) {
     val selectedId = when (slot) {
         TextTrackSlot.Primary -> details.activeText.primaryTrackId
@@ -951,6 +977,11 @@ private fun TextTrackSlotEditor(
             Column(modifier = Modifier.weight(1f)) {
                 Text(track.label ?: track.locator.displayName, color = AppPrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(trackDetail(track), color = AppSecondaryText, fontSize = 11.sp)
+            }
+            track.locator.generatedSlotId?.let { slotId ->
+                TextButton(onClick = { onOpenGeneratedResult(slotId) }) {
+                    Text("结果", color = AppAccent, fontSize = 11.sp)
+                }
             }
         }
     }

@@ -1,6 +1,6 @@
 # 持久领域数据升级为 Room（2026-08-14）
 
-> 状态：已实现，自动化验证完成，待真机验收
+> 状态：已实现，自动化验证与 Android 16 快速稳定性验证完成；扩展设备矩阵待人工验证
 >
 > 影响范围：内容目录、来源快照、用户关系、当前播放 Session / Queue，以及未来需要断点恢复的任务
 >
@@ -105,10 +105,12 @@ CurrentPlaybackSession 1 ──< CurrentQueueEntry >── 1 Content
 ## 结果
 
 - Room schema v1 已导出，17 张表覆盖内容身份、locator、文字关系、用户关系、Draft 和 Current Session / Queue；生产使用 Android SQLite framework driver，JVM 数据库测试使用 bundled driver。
+- M4 随后把同一关系边界扩展为 schema v2：新增 12 张同步文字表，表达 credential metadata、scheme、不可变 task snapshot、attempt、ASR window、translation batch、request attempt、generated slot / result、runner lease 和 queue control；没有恢复聚合 JSON 快照。
 - `ContentRepository`、`PlaybackStateRepository`、`PlaybackGateway` 和应用级 `AppContainer` 已成为 Activity 与 Service 的内部边界；Home 使用固定投影，内容列表使用 page size 50 的 PagingSource。
 - `LibraryConfig`、`LibraryStore`、`SessionStore`、完整状态 JSON 编码、内容单元压缩、恢复索引和启动竞态桥接已经删除。`settings_state` 只保存显示和引导设置，并在数据库成功打开后一次性清空旧 Library / Session DataStore。
 - Queue 结构命令由 `PlaybackService` 串行写入，位置和当前项写入受 `queueRevision` 保护；进程存活时采用 Player，进程重建后按需从 Room 实体化 Queue。
 - 自动化验证为 26 个 suite、113 项测试、0 失败；`lint` 与 `assembleDebug` 通过。覆盖安装、SAF、耳机恢复、强制停止、临时 URI、大目录和破坏性 reset 仍需按真机清单验收。
+- 2026-08-14 在 Vivo V2458A（Android 16 / API 36）完成快速稳定性验证：Debug APK 首次创建 Room，临时 WAV 建立 Content、Recent、Collection 和单项 Queue；强制停止后冷启动恢复标题、Continue、Tonight 及“1 项收录 · 1 项最近”，应用无 AndroidRuntime 崩溃。该结果足以确认新存储边界可以稳定表达当前关系并允许翻译模块启动；覆盖升级和扩展设备矩阵继续交由后续人工验证，不作为启动门槛。
 - 未来功能需要持久化集合、关系、局部状态或检查点时，默认先判断是否属于 Room，而不是向 DataStore 增加新的 JSON key。
 - 采用数据库不会消除领域 schema 设计责任；它消除的是应用自行实现整文件写入、局部更新、索引、事务和引用完整性的责任。
 

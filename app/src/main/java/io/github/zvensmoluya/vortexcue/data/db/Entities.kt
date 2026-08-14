@@ -186,9 +186,18 @@ data class ActiveMediaLocatorEntity(
             onDelete = ForeignKey.CASCADE,
             onUpdate = ForeignKey.CASCADE,
         ),
+        ForeignKey(
+            entity = GeneratedTextSlotEntity::class,
+            parentColumns = ["content_id", "slot_id"],
+            childColumns = ["content_id", "generated_slot_id"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
     ],
     indices = [
         Index("content_id"),
+        Index("generated_slot_id"),
+        Index(value = ["content_id", "generated_slot_id"]),
         Index(value = ["content_id", "track_id"], unique = true),
         Index(value = ["content_id", "origin", "locator_identity"], unique = true),
     ],
@@ -222,6 +231,8 @@ data class TimedTextTrackEntity(
     val failureMessage: String?,
     @ColumnInfo(name = "is_rejected")
     val isRejected: Boolean = false,
+    @ColumnInfo(name = "generated_slot_id")
+    val generatedSlotId: String? = null,
 )
 
 @Entity(

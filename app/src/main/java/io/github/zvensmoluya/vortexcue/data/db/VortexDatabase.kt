@@ -25,14 +25,28 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
         CurrentDraftEntity::class,
         CurrentPlaybackSessionEntity::class,
         CurrentQueueEntryEntity::class,
+        CredentialMetadataEntity::class,
+        SyncTextSchemeEntity::class,
+        GenerationTaskEntity::class,
+        GenerationTaskSnapshotEntity::class,
+        GenerationAttemptEntity::class,
+        AsrWindowEntity::class,
+        TranslationBatchEntity::class,
+        RequestAttemptEntity::class,
+        GeneratedTextSlotEntity::class,
+        GeneratedTextResultEntity::class,
+        SyncTextRunnerLeaseEntity::class,
+        SyncTextQueueControlEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class VortexDatabase : RoomDatabase() {
     abstract fun contentDao(): ContentDao
 
     abstract fun playbackDao(): PlaybackDao
+
+    abstract fun syncTextDao(): SyncTextDao
 
     companion object {
         const val DatabaseName = "vortexcue.db"

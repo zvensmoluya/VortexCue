@@ -2,11 +2,11 @@
 
 > 状态：当前唯一的产品与实施指导
 >
-> 当前阶段：M3 退场式播放与个人内容闭环
+> 当前阶段：M4 同步文字、翻译与 ASR V1
 >
 > 长期背景：[`DOMAIN_CONTEXT.md`](DOMAIN_CONTEXT.md)
 >
-> 更新时间：2026-08-13
+> 更新时间：2026-08-15
 
 本文定义当前要实现和验收的产品行为。`DOMAIN_CONTEXT.md` 解释荧荧为什么存在，但不自动产生实现要求；研究报告用于提供证据和假设，也不直接覆盖本文。
 
@@ -75,9 +75,9 @@ Normal Player → Glow
 
 ### M3 非目标
 
-以下能力在获得新行为证据前不扩展：
+以下能力不作为 M3 核心体验的完成条件：
 
-- ASR、自动翻译和 TransVortex 消费端接入；
+- ASR、自动翻译和 TransVortex 消费端接入不属于 M3 完成条件；Room 快速稳定性验证通过后已进入独立 M4；
 - 在线字幕搜索、在线内容目录、推荐和社交；
 - Artist、Album、封面、EQ 和完整音乐资料库；
 - 自动移动、重命名、复制或删除用户文件；
@@ -89,6 +89,39 @@ Normal Player → Glow
 - 账号、云同步和商业订阅体系。
 
 M3 会建立最小但真实的“我的内容”和“今晚”。现有 Queue、Playlist、Library 和扫描代码不删除，但必须逐步迁移到清晰的 Source、Collection 和 Session 边界；已有实现不自动决定最终产品结构。
+
+## M4 目标
+
+M4 解决 Glow 价值成立后最直接的供给缺口：优先翻译内容已有文字；没有可用文字时用用户自己的 OpenRouter 凭据生成原文，再按命名方案翻译。结果直接成为内容的正式同步文字，不要求用户导入或管理 SRT。
+
+```text
+已有外挂 / 内嵌文字 ──────────────────┐
+                                      ├─ 原文时间轴 ─ 翻译 ─ 配对结果 ─ Player / Glow
+媒体音轨 ─ 解码 ─ OpenRouter ASR ─────┘
+```
+
+### M4 完成条件
+
+- 用户可以保存多个完整同步文字方案，并指定一个默认方案；
+- 方案明确保存 ASR profile、ASR / 翻译凭据引用、翻译协议、Endpoint、Model、默认目标语言和展示模式；
+- 用户可以从已有、内嵌或媒体音轨创建任务；多音轨媒体必须明确选择音轨；
+- 同一内容和目标语言的重复提交复用未终结任务，重新生成期间旧结果继续可用；
+- 任务按 FIFO 排队并可重排、单项暂停、暂停全部、恢复、删除和换方案，进程重建后从 Room 检查点继续；
+- Whisper + Responses 走通首条发布主线；Anthropic Messages、Chat Completions 和 Google `generateContent` 遵循同一协议边界；
+- ASR 完成后先发布原文；翻译失败不撤销原文；
+- source / target 作为同时间轴配对结果进入 Player / Glow，支持纯译文和“译文在上、较弱原文在下”；
+- 已有手动文字选择不被生成结果静默覆盖；播放中的结果替换在下一 cue 边界生效；
+- API key、生成资产、任务工件和数据库不进入 Android 备份；
+- 上游未返回 usage / cost 时不显示推测价格。
+
+具体工程契约、固定 policy、协议、窗口、持久化与验收矩阵见 [`ASR_TRANSLATION_V1_SPEC.md`](ASR_TRANSLATION_V1_SPEC.md)。
+
+### M4 非目标
+
+- 翻译记忆、字幕编辑器、导出和用户自定义 prompt；
+- 在线模型目录、自动 provider fallback 和自动批量生成；
+- 本地 ASR、账号、应用代付额度与完整任务历史中心；
+- 借同步文字功能整体重做 Home、Player 或 Glow 视觉。
 
 ## 产品原则
 
@@ -169,7 +202,7 @@ PlayableContentUnit
 │  ├─ embedded
 │  ├─ sidecar
 │  ├─ lyrics
-│  └─ generated        future
+│  └─ generated
 ├─ activeText
 │  ├─ primary
 │  └─ secondary?       optional
@@ -218,7 +251,7 @@ CurrentPlaybackSession
 
 持久化架构以 [`records/DECISION_2026-08-14_USE_ROOM_FOR_DURABLE_DOMAIN_DATA.md`](records/DECISION_2026-08-14_USE_ROOM_FOR_DURABLE_DOMAIN_DATA.md) 为当前决定：
 
-- Room 是 Content、locator、Source、文字轨、Recent、Collection、忽略决定、Playlist 和 Current Session / Queue 恢复快照的唯一持久来源；
+- Room 是 Content、locator、Source、文字轨、Recent、Collection、忽略决定、Playlist、Current Session / Queue，以及同步文字任务关系与检查点的唯一持久来源；
 - Preferences DataStore 只保存显示预设、引导完成状态等少量独立设置，不保存内容集合、Queue、任务列表、跨对象引用或完整领域聚合 JSON；
 - 应用私有文件保存规范化字幕、诊断响应和临时处理工件，Room 只保存元数据、状态和文件引用；API key 等凭据使用 Android Keystore 保护；
 - Media3 Player 是进程存活时的实时 Queue 真相，Room 中的 Session 只负责恢复；`MediaItem.mediaId` 使用稳定 `contentId`，播放 URI 来自 active locator；
@@ -811,9 +844,9 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 5. Session 恢复与写入顺序由 Playback 层统一协调，覆盖 Activity 重建、服务仍存活、进程重建、外部打开和清空 Queue 竞态；
 6. Preferences DataStore 只保留独立轻量设置；首次切换默认重置 Library v7 / Session v2 旧快照，不建立 JSON / Room 双写或旧模型 fallback；
 7. 删除完整 Library JSON、Queue JSON、内容单元压缩编码、encoding version、恢复专用全目录索引及其启动竞态协调；
-8. 不在本切片预建 ASR / 翻译任务表；未来任务进入实现时，再基于同一 Room 边界增加检查点关系。
+8. 本切片当时不预建 ASR / 翻译任务表；M4 进入实现后已基于同一 Room 边界增加 task snapshot、attempt、ASR window、translation batch、request attempt 和 generated result 关系，没有恢复聚合 JSON 快照。
 
-状态：代码实现和自动化验证完成，真机验收待执行。Room schema v1、Repository、Paging、应用级 `AppContainer`、Service 按需恢复和单一 Queue 写入边界已经启用；旧 Library / Session 领域 JSON、压缩索引和启动竞态桥接已经删除，没有双写或旧模型 fallback。当前自动化基线为 26 个 suite、113 项测试、0 失败，`lint` 与 `assembleDebug` 通过；完成覆盖安装、SAF、外部打开、耳机恢复、进程重建、Queue 编辑、Source 移除、破坏性 reset 和大目录冷启动的真机清单后，再进入 M3.5。
+状态：代码实现和自动化验证完成，Android 16 真机快速稳定性验证通过。Room schema v1、Repository、Paging、应用级 `AppContainer`、Service 按需恢复和单一 Queue 写入边界已经启用；旧 Library / Session 领域 JSON、压缩索引和启动竞态桥接已经删除，没有双写或旧模型 fallback。当前自动化基线为 26 个 suite、113 项测试、0 失败，`lint` 与 `assembleDebug` 通过；真机已确认首次建库、单文件内容、Collection、Recent 和单项 Queue 在强制停止后可以冷启动恢复。覆盖安装、SAF、外部打开矩阵、耳机恢复、Source 移除、破坏性 reset 和大目录冷启动继续由后续人工验证覆盖，不阻塞翻译模块启动。
 
 ### M3.5 首次体验与行为验证
 
@@ -876,7 +909,10 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 - Queue 清空、替换、追加、移除、重排和位置采样按因果顺序落盘，较旧写入不会让已清空或已替换的 Queue 复活；
 - Activity 重建但 PlaybackService 仍存活时继续采用 Player 当前 Queue；整个进程重建时才从 Room 恢复快照；
 - `lastSurface`、位置、offset 和显示状态恢复；
-- 广泛扫描不会由普通冷启动触发。
+- 广泛扫描不会由普通冷启动触发；
+- 同步文字窗口所有权、overlap 去重、失败二分、并发字节预算、队列 lease、暂停 / 恢复、同方案阻塞和原子结果替换；
+- 四种翻译协议的请求、响应、usage、错误分类、重试、脱敏，以及 TransVortex policy hash、只读上下文、严格 ID、格式恢复和 repair；
+- 同步文字 scheme snapshot、凭据引用约束、generated slot 替换、资产 prune 和稳定 cue ID 往返。
 
 ### 真机验证
 
@@ -901,15 +937,16 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 - Normal → Glow → Continue；
 - OLED 纯黑、字幕 gap 和亮度；
 - Sleep Timer 与内容结束；
-- 大 Folder 扫描的取消和非阻塞表现。
+- 大 Folder 扫描的取消和非阻塞表现；
+- 短媒体通过 Whisper + Responses 生成原文和 `zh-CN` 译文，确认原文先发布、结果启用、展示切换和重启恢复；Grok、长媒体、计费网络和其他真实翻译 Endpoint 留在后续人工矩阵。
 
 ### 决策分支
 
 - **Go**：用户理解它与锁屏、视频播放器的区别，并用自己的内容重复进入 Glow；
-- **Rework A**：喜欢 Glow，但大量内容没有字幕，下一步验证 ASR、TransVortex 或翻译供给；
+- **Rework A**：喜欢 Glow，但大量内容没有字幕；M4 以 ASR 和翻译供给验证这一分支；
 - **Rework B**：喜欢睡前播放但很少看字幕，继续强化 sleep-first，字幕保留为差异能力；
 - **Rework C**：Glow 成立但 Android 文件查找和跨来源选择仍重，优先改善 Source、我的内容和 Tonight，不扩展通用音乐库；
 - **Rework D**：用户主要依赖 Recent / Continue，几乎不主动收录或建立 Tonight，收缩对应表面但保留底层关系；
 - **No-Go / 重新定位**：充分体验后仍普遍选择直接锁屏，或 Glow 只产生一次新奇而没有第二次使用。
 
-M3.4c 完成后再开始 M3.5 的正式连续使用验证；在完成 M3.5 的真实夜间使用前不开始 M4，也不以更多案头研究替代行为验证。M3.2 之后每个里程碑都必须带真实内容走通，不等待全部结构完成后再测试。
+M3.4c 的 Room 快速稳定性验证已经通过，M4 的同步文字、ASR 与翻译进入实现和首条主线验收。M3.5 的真实夜间使用与后续设备矩阵并行进行，不作为 M4 的启动门槛，也不以更多案头研究替代行为验证。M3.2 之后每个里程碑都必须带真实内容走通，不等待全部结构完成后再测试。

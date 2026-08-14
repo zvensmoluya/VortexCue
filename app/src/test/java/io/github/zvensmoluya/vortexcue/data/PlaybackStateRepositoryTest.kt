@@ -27,7 +27,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36], manifest = Config.NONE)
+@Config(sdk = [35], manifest = Config.NONE)
 class PlaybackStateRepositoryTest {
     private lateinit var database: VortexDatabase
     private lateinit var repository: PlaybackStateRepository

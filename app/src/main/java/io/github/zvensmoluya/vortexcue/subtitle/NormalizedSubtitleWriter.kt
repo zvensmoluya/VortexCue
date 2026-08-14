@@ -8,9 +8,11 @@ object NormalizedSubtitleWriter {
         val content =
             buildString {
                 append("WEBVTT\n\n")
-                cues.forEachIndexed { index, cue ->
-                    append(index + 1)
-                    append('\n')
+                cues.forEach { cue ->
+                    cue.stableId?.let { id ->
+                        append(id)
+                        append('\n')
+                    }
                     append(formatTimestamp(cue.startMs))
                     append(" --> ")
                     append(formatTimestamp(cue.endMs))

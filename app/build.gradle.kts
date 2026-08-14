@@ -65,6 +65,10 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.session)
+    implementation(libs.media3.extractor)
+    implementation(libs.work.runtime)
+    implementation(libs.okhttp)
+    implementation(libs.kotlinx.serialization.json)
     implementation(libs.room3.runtime)
     implementation(libs.room3.paging)
     implementation(libs.sqlite.framework)
@@ -82,6 +86,7 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     testImplementation(libs.junit)
+    testImplementation(libs.mockwebserver)
     testImplementation(libs.datastore.core.jvm)
     testImplementation(libs.datastore.core.okio.jvm)
     testImplementation(libs.datastore.preferences.core.jvm)

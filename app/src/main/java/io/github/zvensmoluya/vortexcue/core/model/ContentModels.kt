@@ -26,6 +26,7 @@ enum class TimedTextRole {
 
 enum class TimedTextMatchBasis {
     UserSelected,
+    GeneratedResult,
     ExactStem,
     LanguageSuffix,
     FilenameCandidate,
@@ -50,19 +51,59 @@ enum class TextTrackSlot {
     Secondary,
 }
 
-data class TimedTextLocator(
-    val uriValue: String? = null,
-    val embeddedTrackId: String? = null,
-    val displayName: String,
-    val mimeType: String? = null,
-    val cachedFileName: String? = null,
-) {
-    init {
-        require(!uriValue.isNullOrBlank() || !embeddedTrackId.isNullOrBlank())
+sealed interface TimedTextLocator {
+    val uriValue: String?
+    val embeddedTrackId: String?
+    val generatedSlotId: String?
+    val displayName: String
+    val mimeType: String?
+    val cachedFileName: String?
+    val stableIdentity: String
+
+    data class External(
+        override val uriValue: String,
+        override val displayName: String,
+        override val mimeType: String? = null,
+        override val cachedFileName: String? = null,
+    ) : TimedTextLocator {
+        init {
+            require(uriValue.isNotBlank())
+        }
+
+        override val embeddedTrackId: String? = null
+        override val generatedSlotId: String? = null
+        override val stableIdentity: String = "uri:$uriValue"
     }
 
-    val stableIdentity: String
-        get() = uriValue?.let { "uri:$it" } ?: "embedded:$embeddedTrackId"
+    data class Embedded(
+        override val embeddedTrackId: String,
+        override val displayName: String,
+        override val mimeType: String? = null,
+    ) : TimedTextLocator {
+        init {
+            require(embeddedTrackId.isNotBlank())
+        }
+
+        override val uriValue: String? = null
+        override val generatedSlotId: String? = null
+        override val cachedFileName: String? = null
+        override val stableIdentity: String = "embedded:$embeddedTrackId"
+    }
+
+    data class GeneratedResult(
+        override val generatedSlotId: String,
+        override val displayName: String,
+        override val mimeType: String? = "text/vtt",
+    ) : TimedTextLocator {
+        init {
+            require(generatedSlotId.isNotBlank())
+        }
+
+        override val uriValue: String? = null
+        override val embeddedTrackId: String? = null
+        override val cachedFileName: String? = null
+        override val stableIdentity: String = "generated:$generatedSlotId"
+    }
 }
 
 data class TimedTextTrack(

@@ -2,6 +2,7 @@ package io.github.zvensmoluya.vortexcue.core.model
 
 import android.net.Uri
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleTimeline
+import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 
 enum class MediaOrigin {
     MediaStore,
@@ -70,10 +71,18 @@ data class LoadedSubtitle(
     val usedPrivateCopy: Boolean = false,
 )
 
+data class LoadedGeneratedText(
+    val slotId: String,
+    val sourceTimeline: SubtitleTimeline,
+    val targetTimeline: SubtitleTimeline?,
+    val presentationMode: TextPresentationMode,
+)
+
 data class ActiveSession(
     val media: MediaSourceRef,
     val subtitle: LoadedSubtitle?,
     val secondarySubtitle: LoadedSubtitle? = null,
+    val generatedText: LoadedGeneratedText? = null,
     val subtitleOffsetMs: Long = 0L,
 )
 

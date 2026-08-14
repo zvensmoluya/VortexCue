@@ -61,6 +61,7 @@ import io.github.zvensmoluya.vortexcue.core.model.*
 import io.github.zvensmoluya.vortexcue.playback.*
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleCue
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleTimeline
+import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 import io.github.zvensmoluya.vortexcue.ui.theme.*
 
 private val GlowTrackColor = Color(0xFF242424)
@@ -92,6 +93,12 @@ internal fun PlayerScreen(
     onSelectTextTrack: (TextTrackSlot, String?) -> Unit,
     onRestoreAutomaticTextTrack: (TextTrackSlot) -> Unit,
     onAddTextTrack: (TextTrackSlot) -> Unit,
+    syncTextTaskCount: Int,
+    onOpenSyncTextTasks: () -> Unit,
+    onOpenSyncTextSchemes: () -> Unit,
+    onGenerateSyncText: () -> Unit,
+    onOpenGeneratedTextResult: (String) -> Unit,
+    onGeneratedPresentationModeChanged: (String, TextPresentationMode) -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
     onDisplayProfileChanged: (DisplayProfile) -> Unit,
     onCalibrationCompleted: () -> Unit,
@@ -106,13 +113,19 @@ internal fun PlayerScreen(
     var timerVisible by rememberSaveable { mutableStateOf(false) }
     val cuePositionMs =
         (playback.positionMs + session.subtitleOffsetMs).coerceAtLeast(0L)
+    val generatedSourceCue = session.generatedText?.sourceTimeline?.resolve(cuePositionMs)
+    val generatedTargetCue = session.generatedText?.targetTimeline?.resolve(cuePositionMs)
+    val primaryTimeline =
+        session.generatedText?.targetTimeline
+            ?: session.generatedText?.sourceTimeline
+            ?: session.subtitle?.timeline
     val currentCue =
         if (
             playback.playbackState != Player.STATE_IDLE &&
                 playback.playbackState != Player.STATE_ENDED &&
                 playback.errorMessage == null
         ) {
-            session.subtitle?.timeline?.resolve(cuePositionMs)
+            generatedTargetCue ?: generatedSourceCue ?: session.subtitle?.timeline?.resolve(cuePositionMs)
         } else {
             null
         }
@@ -122,7 +135,7 @@ internal fun PlayerScreen(
                 playback.playbackState != Player.STATE_ENDED &&
                 playback.errorMessage == null
         ) {
-            session.secondarySubtitle?.timeline?.resolve(cuePositionMs)
+            session.secondarySubtitle?.timeline?.resolve(cuePositionMs).takeIf { session.generatedText == null }
         } else {
             null
         }
@@ -131,17 +144,24 @@ internal fun PlayerScreen(
     val primaryEmbeddedTrack =
         selectedPrimaryTrack?.takeIf { it.origin == TimedTextOrigin.Embedded }
     val secondaryEmbeddedTrack =
-        selectedSecondaryTrack?.takeIf { it.origin == TimedTextOrigin.Embedded }
-    val hasPrimaryText = session.subtitle != null || primaryEmbeddedTrack != null
-    val hasSecondaryText = session.secondarySubtitle != null || secondaryEmbeddedTrack != null
+        selectedSecondaryTrack?.takeIf { it.origin == TimedTextOrigin.Embedded && session.generatedText == null }
+    val hasPrimaryText = session.generatedText != null || session.subtitle != null || primaryEmbeddedTrack != null
+    val hasPairedSource =
+        session.generatedText?.targetTimeline != null &&
+            session.generatedText.presentationMode == TextPresentationMode.SourceTarget
+    val hasSecondaryText = hasPairedSource || session.generatedText == null && (session.secondarySubtitle != null || secondaryEmbeddedTrack != null)
     val primaryText =
-        if (primaryEmbeddedTrack != null) {
+        if (session.generatedText != null) {
+            generatedTargetCue?.text ?: generatedSourceCue?.text
+        } else if (primaryEmbeddedTrack != null) {
             embeddedCueText.takeIf { embeddedCueTrackId == primaryEmbeddedTrack.stableId }
         } else {
             currentCue?.text
         }
     val secondaryText =
-        if (secondaryEmbeddedTrack != null) {
+        if (hasPairedSource) {
+            generatedSourceCue?.text
+        } else if (secondaryEmbeddedTrack != null) {
             embeddedCueText.takeIf { embeddedCueTrackId == secondaryEmbeddedTrack.stableId }
         } else {
             secondaryCue?.text
@@ -155,6 +175,7 @@ internal fun PlayerScreen(
                 playback = playback,
                 cuePositionMs = cuePositionMs,
                 currentCue = currentCue,
+                primaryTimeline = primaryTimeline,
                 primaryText = primaryText,
                 secondaryText = secondaryText,
                 hasPrimaryText = hasPrimaryText,
@@ -171,6 +192,8 @@ internal fun PlayerScreen(
                 onQueueMove = onQueueMove,
                 onQueueRemove = onQueueRemove,
                 onManageTextTracks = { textTracksVisible = true },
+                syncTextTaskCount = syncTextTaskCount,
+                onOpenSyncTextTasks = onOpenSyncTextTasks,
                 onEnterGlow = { onSurfaceChanged(PlayerSurface.Glow) },
                 onEnterCalibration = { onSurfaceChanged(PlayerSurface.Calibration) },
                 onSubtitleOffsetChanged = onSubtitleOffsetChanged,
@@ -218,6 +241,13 @@ internal fun PlayerScreen(
                 textTracksVisible = false
                 onAddTextTrack(slot)
             },
+            generatedText = session.generatedText,
+            syncTextTaskCount = syncTextTaskCount,
+            onOpenSyncTextTasks = onOpenSyncTextTasks,
+            onOpenSyncTextSchemes = onOpenSyncTextSchemes,
+            onGenerateSyncText = onGenerateSyncText,
+            onOpenGeneratedTextResult = onOpenGeneratedTextResult,
+            onPresentationModeChanged = onGeneratedPresentationModeChanged,
         )
     }
     if (timerVisible) {
@@ -390,6 +420,7 @@ private fun NormalPlayer(
     playback: PlaybackSnapshot,
     cuePositionMs: Long,
     currentCue: SubtitleCue?,
+    primaryTimeline: SubtitleTimeline?,
     primaryText: String?,
     secondaryText: String?,
     hasPrimaryText: Boolean,
@@ -406,13 +437,15 @@ private fun NormalPlayer(
     onQueueMove: (Int, Int) -> Unit,
     onQueueRemove: (Int) -> Unit,
     onManageTextTracks: () -> Unit,
+    syncTextTaskCount: Int,
+    onOpenSyncTextTasks: () -> Unit,
     onEnterGlow: () -> Unit,
     onEnterCalibration: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
     onShowTimer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val context = subtitleContext(session.subtitle?.timeline, cuePositionMs, currentCue)
+    val context = subtitleContext(primaryTimeline, cuePositionMs, currentCue)
     var queueVisible by rememberSaveable { mutableStateOf(false) }
 
     Column(
@@ -479,6 +512,15 @@ private fun NormalPlayer(
                     color = AppMutedText,
                     fontSize = 12.sp,
                 )
+            }
+        }
+
+        if (syncTextTaskCount > 0) {
+            TextButton(
+                onClick = onOpenSyncTextTasks,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            ) {
+                Text("同步文字任务 $syncTextTaskCount", color = AppAccent, fontSize = 11.sp)
             }
         }
 
@@ -577,7 +619,7 @@ private fun NormalPlayer(
             playback = playback,
             subtitleOffsetMs = session.subtitleOffsetMs,
             subtitleControlsEnabled =
-                session.subtitle != null || session.secondarySubtitle != null,
+                session.generatedText != null || session.subtitle != null || session.secondarySubtitle != null,
             contentColor = AppPrimaryText,
             secondaryColor = AppSecondaryText,
             accentColor = AppAccent,
@@ -643,6 +685,13 @@ private fun TextTrackDialog(
     onSelectTrack: (TextTrackSlot, String?) -> Unit,
     onRestoreAutomatic: (TextTrackSlot) -> Unit,
     onAddTrack: (TextTrackSlot) -> Unit,
+    generatedText: LoadedGeneratedText?,
+    syncTextTaskCount: Int,
+    onOpenSyncTextTasks: () -> Unit,
+    onOpenSyncTextSchemes: () -> Unit,
+    onGenerateSyncText: () -> Unit,
+    onOpenGeneratedTextResult: (String) -> Unit,
+    onPresentationModeChanged: (String, TextPresentationMode) -> Unit,
 ) {
     val tracks = contentUnit?.timedTextTracks.orEmpty()
     val selection = contentUnit?.activeText ?: ActiveTextSelection()
@@ -653,6 +702,51 @@ private fun TextTrackDialog(
         title = { Text("字幕轨", color = AppPrimaryText) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    TextButton(onClick = onGenerateSyncText) {
+                        Text("生成", color = AppAccent, fontSize = 12.sp)
+                    }
+                    TextButton(onClick = onOpenSyncTextSchemes) {
+                        Text("方案", color = AppSecondaryText, fontSize = 12.sp)
+                    }
+                    if (syncTextTaskCount > 0) {
+                        TextButton(onClick = onOpenSyncTextTasks) {
+                            Text("任务 $syncTextTaskCount", color = AppAccent, fontSize = 12.sp)
+                        }
+                    }
+                }
+                if (generatedText?.targetTimeline != null) {
+                    Text("生成结果展示", color = AppMutedText, fontSize = 11.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                onPresentationModeChanged(generatedText.slotId, TextPresentationMode.TargetOnly)
+                            },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                "纯译文",
+                                color = if (generatedText.presentationMode == TextPresentationMode.TargetOnly) AppAccent else AppSecondaryText,
+                                fontSize = 11.sp,
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                onPresentationModeChanged(generatedText.slotId, TextPresentationMode.SourceTarget)
+                            },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                "译文 + 原文",
+                                color = if (generatedText.presentationMode == TextPresentationMode.SourceTarget) AppAccent else AppSecondaryText,
+                                fontSize = 11.sp,
+                            )
+                        }
+                    }
+                    TextButton(onClick = { onOpenGeneratedTextResult(generatedText.slotId) }) {
+                        Text("结果详情", color = AppSecondaryText, fontSize = 11.sp)
+                    }
+                }
                 TextSelectionSummary(
                     title = "主轨",
                     track = primary,
@@ -710,6 +804,10 @@ private fun TextTrackDialog(
                                 onSelectSecondary = {
                                     onSelectTrack(TextTrackSlot.Secondary, track.stableId)
                                 },
+                                onOpenGeneratedResult =
+                                    track.locator.generatedSlotId?.let { slotId ->
+                                        { onOpenGeneratedTextResult(slotId) }
+                                    },
                             )
                             if (index != tracks.lastIndex) {
                                 Spacer(
@@ -790,6 +888,7 @@ private fun TextTrackChoiceRow(
     isSecondary: Boolean,
     onSelectPrimary: () -> Unit,
     onSelectSecondary: () -> Unit,
+    onOpenGeneratedResult: (() -> Unit)?,
 ) {
     val failed =
         track.readiness in
@@ -834,6 +933,11 @@ private fun TextTrackChoiceRow(
                         },
                     fontSize = 11.sp,
                 )
+            }
+            onOpenGeneratedResult?.let { open ->
+                TextButton(onClick = open) {
+                    Text("详情", color = AppSecondaryText, fontSize = 11.sp)
+                }
             }
         }
     }
@@ -1120,7 +1224,7 @@ private fun GlowPlayer(
                     playback = playback,
                     subtitleOffsetMs = session.subtitleOffsetMs,
                     subtitleControlsEnabled =
-                        session.subtitle != null || session.secondarySubtitle != null,
+                        session.generatedText != null || session.subtitle != null || session.secondarySubtitle != null,
                     contentColor = controlColor,
                     secondaryColor = controlColor.copy(alpha = 0.72f),
                     accentColor = controlColor,

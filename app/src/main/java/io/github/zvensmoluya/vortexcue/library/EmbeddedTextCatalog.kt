@@ -30,7 +30,7 @@ internal fun buildEmbeddedTextTrackCandidate(
             ?: metadata.language?.takeIf(String::isNotBlank)?.let { "内嵌字幕 · $it" }
             ?: "内嵌字幕 ${metadata.trackIndex + 1}"
     val locator =
-        TimedTextLocator(
+        TimedTextLocator.Embedded(
             embeddedTrackId = embeddedTrackId,
             displayName = displayName,
             mimeType = metadata.mimeType,

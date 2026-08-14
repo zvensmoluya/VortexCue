@@ -59,7 +59,13 @@ object WebVttParser {
                         .joinToString("\n")
                         .let(::cleanText)
                 if (text.isNotBlank()) {
-                    cues += SubtitleCue(startMs, endMs, text)
+                    cues +=
+                        SubtitleCue(
+                            startMs = startMs,
+                            endMs = endMs,
+                            text = text,
+                            stableId = lines.getOrNull(timingIndex - 1)?.trim()?.takeIf(String::isNotBlank),
+                        )
                 }
             }
 

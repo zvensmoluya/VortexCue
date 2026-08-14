@@ -221,7 +221,7 @@ internal fun TextTrackCatalogState.withTrackReadiness(
             track.copy(
                 locator =
                     resolvedSource?.let { source ->
-                        track.locator.copy(
+                        TimedTextLocator.External(
                             uriValue = source.uri.toString(),
                             displayName = source.displayName,
                             mimeType = source.mimeType,
@@ -301,7 +301,7 @@ private fun TimedTextTrack.rekeyForContent(contentId: String): TimedTextTrack =
     copy(stableId = stableTimedTextTrackId(contentId, origin, locator.stableIdentity))
 
 private fun SubtitleSourceRef.toTimedTextLocator(): TimedTextLocator =
-    TimedTextLocator(
+    TimedTextLocator.External(
         uriValue = uri.toString(),
         displayName = displayName,
         mimeType = mimeType,
@@ -320,7 +320,14 @@ internal fun TimedTextTrack.toSubtitleSourceRef(): SubtitleSourceRef? =
 
 private fun TimedTextTrack.mergeMetadata(incoming: TimedTextTrack): TimedTextTrack =
     copy(
-        locator = incoming.locator.copy(cachedFileName = incoming.locator.cachedFileName ?: locator.cachedFileName),
+        locator =
+            when (val incomingLocator = incoming.locator) {
+                is TimedTextLocator.External ->
+                    incomingLocator.copy(
+                        cachedFileName = incomingLocator.cachedFileName ?: locator.cachedFileName,
+                    )
+                else -> incomingLocator
+            },
         format = incoming.format ?: format,
         language = incoming.language ?: language,
         label = incoming.label ?: label,
@@ -394,11 +401,12 @@ private fun sortTimedTextTracks(
 private fun timedTextTrackRank(track: TimedTextTrack): Int =
     when {
         track.matchBasis == TimedTextMatchBasis.UserSelected -> 0
-        track.origin == TimedTextOrigin.Embedded && TimedTextRole.Default in track.roles -> 1
-        track.matchBasis == TimedTextMatchBasis.ExactStem -> 2
-        track.matchBasis == TimedTextMatchBasis.LanguageSuffix -> 3
-        track.matchBasis == TimedTextMatchBasis.FilenameCandidate -> 4
-        else -> 5
+        track.matchBasis == TimedTextMatchBasis.GeneratedResult -> 1
+        track.origin == TimedTextOrigin.Embedded && TimedTextRole.Default in track.roles -> 2
+        track.matchBasis == TimedTextMatchBasis.ExactStem -> 3
+        track.matchBasis == TimedTextMatchBasis.LanguageSuffix -> 4
+        track.matchBasis == TimedTextMatchBasis.FilenameCandidate -> 5
+        else -> 6
     }
 
 private fun isLowConfidenceStem(stem: String): Boolean {

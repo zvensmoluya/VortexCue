@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Once an include is present, every other domain and path is excluded. -->
+    <include
+        domain="file"
+        path="datastore/settings_state.preferences_pb" />
+</full-backup-content>
