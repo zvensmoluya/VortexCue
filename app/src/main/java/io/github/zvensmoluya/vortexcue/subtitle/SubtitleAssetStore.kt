@@ -39,6 +39,15 @@ class SubtitleAssetStore(context: Context) {
             ?.readBytes()
     }
 
+    fun pruneExcept(retainedFileNames: Set<String>) {
+        sequenceOf(directory, legacyDirectory)
+            .filter(File::isDirectory)
+            .flatMap { it.listFiles().orEmpty().asSequence() }
+            .filter(File::isFile)
+            .filterNot { it.name in retainedFileNames }
+            .forEach { file -> runCatching { file.delete() } }
+    }
+
     private fun String.sha256(): String =
         MessageDigest.getInstance("SHA-256")
             .digest(toByteArray(Charsets.UTF_8))

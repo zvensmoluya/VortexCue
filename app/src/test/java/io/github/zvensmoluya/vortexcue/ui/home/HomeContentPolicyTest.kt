@@ -86,10 +86,10 @@ class HomeContentPolicyTest {
     fun `refresh preserves deselection and only selects newly available audio`() {
         val selection =
             reconcileDiscoverySelection(
-                selectedUris = setOf("kept"),
-                knownUris = setOf("kept", "deselected", "gone"),
-                availableUris = setOf("kept", "deselected", "new-audio", "new-video"),
-                defaultSelectedUris = setOf("kept", "deselected", "new-audio"),
+                selectedContentIds = setOf("kept"),
+                knownContentIds = setOf("kept", "deselected", "gone"),
+                availableContentIds = setOf("kept", "deselected", "new-audio", "new-video"),
+                defaultSelectedContentIds = setOf("kept", "deselected", "new-audio"),
             )
 
         assertEquals(setOf("kept", "new-audio"), selection)

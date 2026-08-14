@@ -18,9 +18,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
@@ -30,33 +27,57 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import kotlin.math.absoluteValue
-import kotlin.math.roundToInt
-import io.github.zvensmoluya.vortexcue.core.model.*
-import io.github.zvensmoluya.vortexcue.library.*
+import androidx.paging.LoadState
+import androidx.paging.PagingData
+import androidx.paging.compose.LazyPagingItems
+import androidx.paging.compose.collectAsLazyPagingItems
+import io.github.zvensmoluya.vortexcue.core.model.ContentAvailability
+import io.github.zvensmoluya.vortexcue.core.model.DisplayProfile
+import io.github.zvensmoluya.vortexcue.core.model.MediaKind
+import io.github.zvensmoluya.vortexcue.core.model.TextSelectionMode
+import io.github.zvensmoluya.vortexcue.core.model.TextTrackSlot
+import io.github.zvensmoluya.vortexcue.core.model.TimedTextOrigin
+import io.github.zvensmoluya.vortexcue.core.model.TimedTextTrack
+import io.github.zvensmoluya.vortexcue.core.model.displayArtist
+import io.github.zvensmoluya.vortexcue.core.model.displayTitle
+import io.github.zvensmoluya.vortexcue.data.ContentDetails
+import io.github.zvensmoluya.vortexcue.data.ContentDisposition
+import io.github.zvensmoluya.vortexcue.data.ContentRepository
+import io.github.zvensmoluya.vortexcue.data.ContentSummary
+import io.github.zvensmoluya.vortexcue.data.HomeLibraryProjection
+import io.github.zvensmoluya.vortexcue.data.PlaybackRecoveryProjection
+import io.github.zvensmoluya.vortexcue.data.PlaylistSummary
+import io.github.zvensmoluya.vortexcue.data.SourceSummary
+import io.github.zvensmoluya.vortexcue.library.LibraryCoordinatorState
+import io.github.zvensmoluya.vortexcue.library.LibrarySourceIds
+import io.github.zvensmoluya.vortexcue.library.LibrarySourceKind
 import io.github.zvensmoluya.vortexcue.ui.player.PlaybackSnapshot
 import io.github.zvensmoluya.vortexcue.ui.player.formatTime
-import io.github.zvensmoluya.vortexcue.ui.theme.*
+import io.github.zvensmoluya.vortexcue.ui.theme.AppAccent
+import io.github.zvensmoluya.vortexcue.ui.theme.AppBackground
+import io.github.zvensmoluya.vortexcue.ui.theme.AppError
+import io.github.zvensmoluya.vortexcue.ui.theme.AppHairline
+import io.github.zvensmoluya.vortexcue.ui.theme.AppPrimaryText
+import io.github.zvensmoluya.vortexcue.ui.theme.AppSecondaryText
+import io.github.zvensmoluya.vortexcue.ui.theme.AppSurface
+import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceRaised
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 
 internal enum class HomeSection {
     Home,
@@ -67,166 +88,106 @@ internal enum class HomeSection {
     Display,
 }
 
-private data class ResolvedPlaylist(
-    val id: String,
-    val name: String,
-    val items: List<MediaSourceRef>,
-)
-
 @Composable
 internal fun HomeScreen(
     section: HomeSection,
     onSectionChanged: (HomeSection) -> Unit,
-    draft: SessionDraft,
-    activeSession: ActiveSession?,
-    lastSession: RestorableSession?,
-    tonight: List<MediaSourceRef>,
-    tonightCurrentIndex: Int,
-    tonightPositionMs: Long,
+    repository: ContentRepository,
+    home: HomeLibraryProjection,
+    coordinator: LibraryCoordinatorState,
+    draft: ContentSummary?,
+    recovery: PlaybackRecoveryProjection,
+    runtimeCurrentIndex: Int,
+    runtimePositionMs: Long,
     playback: PlaybackSnapshot,
     displayProfile: DisplayProfile,
-    library: MediaLibraryState,
     onPickMedia: () -> Unit,
-    onCancelMediaOpen: () -> Unit,
     onRequestLibraryAccess: () -> Unit,
     onRefreshLibrary: () -> Unit,
     onRefreshSource: (String) -> Unit,
     onCancelScan: (String) -> Unit,
     onAddFolder: () -> Unit,
     onRelinkFolder: (String) -> Unit,
-    onRemoveFolder: (String) -> Unit,
-    onClearLooseFiles: () -> Unit,
-    onAcceptCandidates: (Set<String>) -> Unit,
-    onIgnoreCandidates: (Set<String>) -> Unit,
-    onRemoveIncluded: (Set<String>) -> Unit,
-    onRestoreIgnored: (Set<String>) -> Unit,
-    onCollectMedia: (MediaSourceRef) -> Unit,
-    onPlaySingle: (MediaSourceRef) -> Unit,
-    onPlayGroup: (List<MediaSourceRef>, Int) -> Unit,
-    onAddToTonight: (MediaSourceRef) -> Unit,
-    onRemoveFromTonight: (Int) -> Unit,
+    onRemoveSource: (String) -> Unit,
+    onCollect: (String) -> Unit,
+    onUncollect: (String) -> Unit,
+    onIgnore: (String) -> Unit,
+    onRestoreIgnored: (String) -> Unit,
+    onPlaySingle: (String) -> Unit,
+    onPlayGroup: (List<String>, Int) -> Unit,
+    onSelectTonight: (String) -> Unit,
+    onAddToTonight: (String) -> Unit,
+    onRemoveFromTonight: (String) -> Unit,
     onMoveTonight: (Int, Int) -> Unit,
     onClearTonight: () -> Unit,
     onStartTonight: () -> Unit,
-    onCreatePlaylist: (String, MediaSourceRef?) -> Unit,
-    onAddToPlaylist: (String, MediaSourceRef) -> Unit,
-    onRemoveFromPlaylist: (String, MediaSourceRef) -> Unit,
+    onCreatePlaylist: (String, String?) -> Unit,
+    onAddToPlaylist: (String, String) -> Unit,
+    onRemoveFromPlaylist: (String, String) -> Unit,
     onDeletePlaylist: (String) -> Unit,
     onContinue: () -> Unit,
     onPlayPause: () -> Unit,
     onDisplayProfileChanged: (DisplayProfile) -> Unit,
     onRelinkContent: (String) -> Unit,
-    onSelectContentTextTrack: (MediaSourceRef, TextTrackSlot, String?) -> Unit,
-    onRestoreAutomaticContentTextTrack: (MediaSourceRef, TextTrackSlot) -> Unit,
+    onSelectContentTextTrack: (String, TextTrackSlot, String?) -> Unit,
+    onRestoreAutomaticContentTextTrack: (String, TextTrackSlot) -> Unit,
     onAddContentTextTrack: (String, TextTrackSlot) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var selectedPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedSourceId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedTab by rememberSaveable { mutableStateOf(MyContentTab.Collected) }
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
-    var selectedPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
-    var myContentTab by rememberSaveable { mutableStateOf(MyContentTab.Collected) }
     var showingIgnored by rememberSaveable { mutableStateOf(false) }
-    var reviewSelection by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var knownCandidateUris by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var ignoredSelection by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var selectedSourceId by rememberSaveable { mutableStateOf<String?>(null) }
-    var importVisible by rememberSaveable { mutableStateOf(false) }
-    var playlistTarget by remember { mutableStateOf<MediaSourceRef?>(null) }
     var contentDetailId by rememberSaveable { mutableStateOf<String?>(null) }
+    var playlistTargetId by rememberSaveable { mutableStateOf<String?>(null) }
     var createPlaylistVisible by rememberSaveable { mutableStateOf(false) }
-    var createPlaylistName by rememberSaveable { mutableStateOf("") }
-    var createPlaylistSeed by remember { mutableStateOf<MediaSourceRef?>(null) }
-    var folderRemovalTarget by remember { mutableStateOf<LibraryFolderRef?>(null) }
-    var clearLooseFilesConfirmation by rememberSaveable { mutableStateOf(false) }
+    var createPlaylistSeed by rememberSaveable { mutableStateOf<String?>(null) }
+    var playlistDeleteId by rememberSaveable { mutableStateOf<String?>(null) }
 
-    fun openContentDetails(media: MediaSourceRef) {
-        contentDetailId = library.config.contentUnitFor(media)?.stableId
-    }
+    val collectedFlow = remember(repository) { repository.pagedCollected() }
+    val recentFlow = remember(repository) { repository.pagedRecent() }
+    val discoveryFlow = remember(repository) { repository.pagedDiscovery() }
+    val ignoredFlow = remember(repository) { repository.pagedIgnored() }
+    val selectedPlaylistFlow =
+        remember(repository, selectedPlaylistId) {
+            selectedPlaylistId?.let(repository::pagedPlaylist) ?: flowOf(PagingData.empty())
+        }
+    val selectedSourceFlow =
+        remember(repository, selectedSourceId) {
+            selectedSourceId?.let(repository::pagedSource) ?: flowOf(PagingData.empty())
+        }
+    val searchFlow =
+        remember(repository, searchQuery) {
+            searchQuery.takeIf(String::isNotBlank)?.let(repository::pagedSearch)
+                ?: flowOf(PagingData.empty())
+        }
+    val collected = collectedFlow.collectAsLazyPagingItems()
+    val recent = recentFlow.collectAsLazyPagingItems()
+    val discovery = discoveryFlow.collectAsLazyPagingItems()
+    val ignored = ignoredFlow.collectAsLazyPagingItems()
+    val playlistItems = selectedPlaylistFlow.collectAsLazyPagingItems()
+    val sourceItems = selectedSourceFlow.collectAsLazyPagingItems()
+    val searchItems = searchFlow.collectAsLazyPagingItems()
 
-    LaunchedEffect(section) {
-        if (section != HomeSection.MyContent) {
-            searchVisible = false
-            selectedPlaylistId = null
+    val detailFlow: Flow<ContentDetails?> =
+        remember(repository, contentDetailId) {
+            contentDetailId?.let(repository::observeDetails) ?: flowOf(null)
         }
-        if (section != HomeSection.Discoveries) showingIgnored = false
-        if (section != HomeSection.Sources) selectedSourceId = null
-    }
-    LaunchedEffect(section, showingIgnored) {
-        if (section == HomeSection.Discoveries && !showingIgnored) {
-            reviewSelection =
-                library.candidates
-                    .filter { it.kind == MediaKind.Audio && !library.isUnavailable(it) }
-                    .mapTo(linkedSetOf()) { it.uri.toString() }
-            knownCandidateUris =
-                library.candidates
-                    .filterNot(library::isUnavailable)
-                    .mapTo(hashSetOf()) { it.uri.toString() }
-        } else if (section == HomeSection.Discoveries && showingIgnored) {
-            ignoredSelection = emptySet()
-        }
-    }
-    LaunchedEffect(library.candidates, library.config, library.sources, section, showingIgnored) {
-        // Discovery selection is only visible in the Discoveries surface. Avoid walking every
-        // candidate against the full content catalog during the initial Home composition.
-        if (section != HomeSection.Discoveries) return@LaunchedEffect
-        val availableCandidates = library.candidates.filterNot(library::isUnavailable)
-        val currentUris = availableCandidates.mapTo(hashSetOf()) { it.uri.toString() }
-        if (!showingIgnored) {
-            val newAudioUris =
-                availableCandidates
-                    .filter { it.kind == MediaKind.Audio }
-                    .mapTo(linkedSetOf()) { it.uri.toString() }
-            reviewSelection =
-                reconcileDiscoverySelection(
-                    selectedUris = reviewSelection,
-                    knownUris = knownCandidateUris,
-                    availableUris = currentUris,
-                    defaultSelectedUris = newAudioUris,
-                )
-        }
-        knownCandidateUris = currentUris
-    }
-    LaunchedEffect(library.ignoredItems) {
-        val ignoredUris = library.ignoredItems.mapTo(hashSetOf()) { it.uri.toString() }
-        ignoredSelection = ignoredSelection.filterTo(linkedSetOf(), ignoredUris::contains)
-    }
-    LaunchedEffect(library.sources, selectedSourceId) {
-        if (
-            selectedSourceId != null &&
-                library.sources.none { it.id == selectedSourceId }
-        ) {
-            selectedSourceId = null
-        }
-    }
+    val details by detailFlow.collectAsState(initial = null)
 
-    val resumableSession = activeSession ?: lastSession?.session
-    val miniPlayerSession =
-        resumableSession?.takeIf {
-            section == HomeSection.MyContent &&
-                (searchVisible || selectedPlaylistId != null)
-        }
-    val showMiniPlayer = miniPlayerSession != null
-    val selectedPlaylist =
-        selectedPlaylistId?.let { playlistId -> resolvePlaylist(playlistId, library) }
-
-    BackHandler(
-        enabled =
-            section == HomeSection.Tonight ||
-                (section == HomeSection.MyContent &&
-                (searchVisible || selectedPlaylistId != null)) ||
-                (section == HomeSection.Discoveries && showingIgnored) ||
-                (section == HomeSection.Sources && selectedSourceId != null),
-    ) {
+    val nested = selectedPlaylistId != null || selectedSourceId != null || searchVisible || showingIgnored
+    BackHandler(enabled = section != HomeSection.Home || nested) {
         when {
-            section == HomeSection.MyContent && selectedPlaylistId != null ->
-                selectedPlaylistId = null
-            section == HomeSection.MyContent && searchVisible -> {
+            selectedPlaylistId != null -> selectedPlaylistId = null
+            selectedSourceId != null -> selectedSourceId = null
+            searchVisible -> {
                 searchVisible = false
                 searchQuery = ""
             }
-            section == HomeSection.Discoveries -> showingIgnored = false
-            section == HomeSection.Sources && selectedSourceId != null -> selectedSourceId = null
-            section == HomeSection.Tonight -> onSectionChanged(HomeSection.Home)
+            showingIgnored -> showingIgnored = false
+            else -> onSectionChanged(HomeSection.Home)
         }
     }
 
@@ -237,29 +198,23 @@ internal fun HomeScreen(
                 .background(AppBackground)
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(horizontal = 22.dp, vertical = 12.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         HomeHeader(
             section = section,
-            searchVisible = searchVisible,
-            selectedPlaylist = selectedPlaylist,
-            selectedSource = library.sources.firstOrNull { it.id == selectedSourceId },
-            showingIgnored = showingIgnored,
+            nestedTitle =
+                selectedPlaylistId?.let { id -> home.playlists.firstOrNull { it.playlistId == id }?.name }
+                    ?: selectedSourceId?.let { id -> home.sources.firstOrNull { it.sourceId == id }?.displayName }
+                    ?: "搜索".takeIf { searchVisible }
+                    ?: "已忽略".takeIf { showingIgnored },
             onBack = {
                 when {
-                    section == HomeSection.MyContent && selectedPlaylistId != null ->
-                        selectedPlaylistId = null
-                    section == HomeSection.MyContent && searchVisible -> {
-                        searchVisible = false
-                        searchQuery = ""
-                    }
-                    section == HomeSection.Discoveries && showingIgnored ->
-                        showingIgnored = false
-                    section == HomeSection.Sources && selectedSourceId != null ->
-                        selectedSourceId = null
-                    section == HomeSection.Tonight -> onSectionChanged(HomeSection.Home)
-                    section != HomeSection.Home -> onSectionChanged(HomeSection.Home)
+                    selectedPlaylistId != null -> selectedPlaylistId = null
+                    selectedSourceId != null -> selectedSourceId = null
+                    searchVisible -> searchVisible = false
+                    showingIgnored -> showingIgnored = false
+                    else -> onSectionChanged(HomeSection.Home)
                 }
             },
             onSearch = {
@@ -267,340 +222,204 @@ internal fun HomeScreen(
                 searchVisible = true
             },
             onDisplay = { onSectionChanged(HomeSection.Display) },
-            onToggleIgnored = { showingIgnored = !showingIgnored },
         )
 
-        when (section) {
-            HomeSection.Home ->
-                HomeLanding(
-                    library = library,
-                    resumableSession = resumableSession,
-                    activeSession = activeSession,
-                    lastSession = lastSession,
-                    tonight = tonight,
-                    tonightCurrentIndex = tonightCurrentIndex,
-                    tonightPositionMs = tonightPositionMs,
-                    playback = playback,
-                    onOpenMyContent = {
-                        myContentTab = defaultMyContentTab(library.items.size)
-                        onSectionChanged(HomeSection.MyContent)
-                    },
-                    onOpenDiscoveries = {
-                        showingIgnored = false
-                        onSectionChanged(HomeSection.Discoveries)
-                    },
-                    onOpenTonight = { onSectionChanged(HomeSection.Tonight) },
-                    onOpenSources = { onSectionChanged(HomeSection.Sources) },
-                    onPlaySingle = onPlaySingle,
-                    onOpenMediaActions = ::openContentDetails,
-                    onAddFolder = onAddFolder,
-                    onOpenFile = {
-                        importVisible = true
-                        onPickMedia()
-                    },
-                    onContinue = onContinue,
-                    onPlayPause = onPlayPause,
-                    onStartTonight = onStartTonight,
-                    bottomPadding = 8.dp,
-                    modifier = Modifier.weight(1f),
-                )
-            HomeSection.Tonight ->
-                TonightEditor(
-                    tonight = tonight,
-                    currentIndex = tonightCurrentIndex,
-                    library = library,
-                    onStartTonight = onStartTonight,
-                    onRemove = onRemoveFromTonight,
-                    onMove = onMoveTonight,
-                    onClear = onClearTonight,
-                    onOpenMediaActions = ::openContentDetails,
-                    modifier = Modifier.weight(1f),
-                )
-            HomeSection.MyContent ->
-                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            when (section) {
+                HomeSection.Home ->
+                    HomeLanding(
+                        home = home,
+                        draft = draft,
+                        recovery = recovery,
+                        runtimePositionMs = runtimePositionMs,
+                        playback = playback,
+                        onContinue = onContinue,
+                        onPlayPause = onPlayPause,
+                        onPlay = onPlaySingle,
+                        onDetails = { contentDetailId = it },
+                        onOpenMyContent = { onSectionChanged(HomeSection.MyContent) },
+                        onOpenDiscoveries = { onSectionChanged(HomeSection.Discoveries) },
+                        onOpenTonight = { onSectionChanged(HomeSection.Tonight) },
+                        onOpenSources = { onSectionChanged(HomeSection.Sources) },
+                        onPickMedia = onPickMedia,
+                        onAddFolder = onAddFolder,
+                    )
+                HomeSection.Tonight ->
+                    TonightEditor(
+                        recovery = recovery,
+                        currentIndex = runtimeCurrentIndex,
+                        onStart = onStartTonight,
+                        onPlay = onSelectTonight,
+                        onDetails = { contentDetailId = it },
+                        onRemove = onRemoveFromTonight,
+                        onMove = onMoveTonight,
+                        onClear = onClearTonight,
+                    )
+                HomeSection.MyContent ->
                     when {
-                        selectedPlaylist != null ->
-                            PlaylistDetail(
-                                playlist = selectedPlaylist,
-                                library = library,
-                                onPlaySingle = onPlaySingle,
-                                onPlayGroup = onPlayGroup,
-                                onOpenMediaActions = ::openContentDetails,
-                                onRemoveFromPlaylist = onRemoveFromPlaylist,
-                                onDeletePlaylist = { playlistId ->
-                                    onDeletePlaylist(playlistId)
-                                    selectedPlaylistId = null
-                                },
-                                bottomPadding = if (showMiniPlayer) 88.dp else 8.dp,
-                                modifier = Modifier.fillMaxSize(),
-                            )
+                        selectedPlaylistId != null ->
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                    TextButton(onClick = { playlistDeleteId = selectedPlaylistId }) {
+                                        Text("删除播放列表", color = AppError)
+                                    }
+                                }
+                                PagedContentList(
+                                    items = playlistItems,
+                                    emptyText = "播放列表为空",
+                                    onPlay = onPlaySingle,
+                                    onDetails = { contentDetailId = it },
+                                    modifier = Modifier.weight(1f),
+                                    trailing = { summary ->
+                                        TextButton(onClick = {
+                                            onRemoveFromPlaylist(selectedPlaylistId!!, summary.contentId)
+                                        }) { Text("移出", color = AppSecondaryText) }
+                                    },
+                                )
+                            }
                         searchVisible ->
-                            MyContentSearch(
-                                query = searchQuery,
-                                onQueryChanged = { searchQuery = it },
-                                library = library,
-                                onPlaySingle = onPlaySingle,
-                                onOpenMediaActions = ::openContentDetails,
-                                bottomPadding = if (showMiniPlayer) 88.dp else 8.dp,
-                                modifier = Modifier.fillMaxSize(),
-                            )
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = searchQuery,
+                                    onValueChange = { searchQuery = it },
+                                    label = { Text("搜索标题、作者或专辑") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                PagedContentList(
+                                    items = searchItems,
+                                    emptyText = if (searchQuery.isBlank()) "输入关键词" else "没有匹配内容",
+                                    onPlay = onPlaySingle,
+                                    onDetails = { contentDetailId = it },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
                         else ->
                             MyContent(
-                                library = library,
-                                selectedTab = myContentTab,
-                                onTabChanged = { myContentTab = it },
-                                onPlaySingle = onPlaySingle,
-                                onPlayGroup = onPlayGroup,
-                                onOpenMediaActions = ::openContentDetails,
-                                onOpenPlaylist = { playlistId ->
-                                    selectedPlaylistId = playlistId
-                                },
+                                tab = selectedTab,
+                                onTabChanged = { selectedTab = it },
+                                collected = collected,
+                                recent = recent,
+                                playlists = home.playlists,
+                                onOpenPlaylist = { selectedPlaylistId = it },
                                 onCreatePlaylist = {
                                     createPlaylistSeed = null
-                                    createPlaylistName = ""
                                     createPlaylistVisible = true
                                 },
-                                bottomPadding = 8.dp,
-                                modifier = Modifier.fillMaxSize(),
+                                onPlay = onPlaySingle,
+                                onPlayLoaded = onPlayGroup,
+                                onDetails = { contentDetailId = it },
                             )
                     }
-
-                    miniPlayerSession?.let { session ->
-                        NowPlayingBar(
-                            session = session,
-                            activeSession = activeSession,
-                            lastSession = lastSession,
-                            libraryConfig = library.config,
-                            playback = playback,
-                            onContinue = onContinue,
-                            onPlayPause = onPlayPause,
-                            modifier = Modifier.align(Alignment.BottomCenter),
+                HomeSection.Discoveries ->
+                    Discoveries(
+                        showingIgnored = showingIgnored,
+                        onToggleIgnored = { showingIgnored = !showingIgnored },
+                        items = if (showingIgnored) ignored else discovery,
+                        onPlay = onPlaySingle,
+                        onDetails = { contentDetailId = it },
+                        onAccept = onCollect,
+                        onIgnore = onIgnore,
+                        onRestore = onRestoreIgnored,
+                    )
+                HomeSection.Sources ->
+                    if (selectedSourceId != null) {
+                        SourceDetail(
+                            source = home.sources.firstOrNull { it.sourceId == selectedSourceId },
+                            items = sourceItems,
+                            isScanning = selectedSourceId in coordinator.scanningSourceIds,
+                            onRefresh = { selectedSourceId?.let(onRefreshSource) },
+                            onCancel = { selectedSourceId?.let(onCancelScan) },
+                            onRelink = { selectedSourceId?.let(onRelinkFolder) },
+                            onRemove = {
+                                selectedSourceId?.let(onRemoveSource)
+                                selectedSourceId = null
+                            },
+                            onPlay = onPlaySingle,
+                            onDetails = { contentDetailId = it },
+                        )
+                    } else {
+                        Sources(
+                            sources = home.sources,
+                            coordinator = coordinator,
+                            onOpen = { selectedSourceId = it },
+                            onRequestAccess = onRequestLibraryAccess,
+                            onRefreshAll = onRefreshLibrary,
+                            onAddFolder = onAddFolder,
                         )
                     }
-                }
-            HomeSection.Discoveries ->
-                if (showingIgnored) {
-                    IgnoredContent(
-                        items = library.ignoredItems,
-                        selectedUris = ignoredSelection,
-                        onSelectionChanged = { ignoredSelection = it },
-                        onRestore = {
-                            onRestoreIgnored(setOf(it.uri.toString()))
-                            ignoredSelection -= it.uri.toString()
-                        },
-                        onRestoreSelected = {
-                            onRestoreIgnored(ignoredSelection)
-                            ignoredSelection = emptySet()
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
-                } else {
-                    CandidateReview(
-                        library = library,
-                        selectedUris = reviewSelection,
-                        onSelectionChanged = { reviewSelection = it },
-                        onAccept = {
-                            onAcceptCandidates(reviewSelection)
-                            reviewSelection = emptySet()
-                        },
-                        onAcceptOne = { uri ->
-                            onAcceptCandidates(setOf(uri))
-                            reviewSelection -= uri
-                        },
-                        onPlay = onPlaySingle,
-                        onOpenMediaActions = ::openContentDetails,
-                        onIgnore = { uri ->
-                            reviewSelection -= uri
-                            onIgnoreCandidates(setOf(uri))
-                        },
-                        onIgnoreSelected = {
-                            onIgnoreCandidates(reviewSelection)
-                            reviewSelection = emptySet()
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            HomeSection.Sources ->
-                if (selectedSourceId != null) {
-                    SourceDetail(
-                        source = library.sources.firstOrNull { it.id == selectedSourceId },
-                        library = library,
-                        onRequestLibraryAccess = onRequestLibraryAccess,
-                        onRefreshSource = onRefreshSource,
-                        onCancelScan = onCancelScan,
-                        onRelinkFolder = onRelinkFolder,
-                        onRemoveFolder = { folderId ->
-                            folderRemovalTarget =
-                                library.config.folders.firstOrNull { it.id == folderId }
-                        },
-                        onPlay = onPlaySingle,
-                        onPlayGroup = onPlayGroup,
-                        onOpenDetails = ::openContentDetails,
-                        onCollect = onCollectMedia,
-                        onRemoveIncluded = onRemoveIncluded,
-                        onIgnore = { media -> onIgnoreCandidates(setOf(media.uri.toString())) },
-                        onRestore = { media -> onRestoreIgnored(setOf(media.uri.toString())) },
-                        modifier = Modifier.weight(1f),
-                    )
-                } else {
-                    ScanSources(
-                        library = library,
-                        onRequestLibraryAccess = onRequestLibraryAccess,
-                        onRefreshLibrary = onRefreshLibrary,
-                        onRefreshSource = onRefreshSource,
-                        onCancelScan = onCancelScan,
-                        onOpenSource = { selectedSourceId = it },
-                        onAddFolder = onAddFolder,
-                        onRelinkFolder = onRelinkFolder,
-                        onOpenFile = {
-                            importVisible = true
-                            onPickMedia()
-                        },
-                        onRemoveFolder = { folderId ->
-                            folderRemovalTarget =
-                                library.config.folders.firstOrNull { it.id == folderId }
-                        },
-                        onClearLooseFiles = { clearLooseFilesConfirmation = true },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            HomeSection.Display ->
-                Column(
-                    modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(26.dp),
-                ) {
+                HomeSection.Display ->
                     DisplaySettings(displayProfile, onDisplayProfileChanged)
-                }
+            }
+        }
+
+        if (section != HomeSection.Display && selectedPlaylistId == null && selectedSourceId == null && !searchVisible) {
+            HomeNavigation(section, onSectionChanged)
         }
     }
 
-    playlistTarget?.let { item ->
-        PlaylistChooserDialog(
-            item = item,
-            playlists = library.config.playlists,
-            onDismiss = { playlistTarget = null },
-            onAdd = { playlistId ->
-                onAddToPlaylist(playlistId, item)
-                playlistTarget = null
-            },
-            onCreate = {
-                createPlaylistSeed = item
-                createPlaylistName = ""
-                playlistTarget = null
-                createPlaylistVisible = true
-            },
+    details?.let { content ->
+        ContentDetailDialog(
+            details = content,
+            playlists = home.playlists,
+            onDismiss = { contentDetailId = null },
+            onPlay = onPlaySingle,
+            onAddTonight = onAddToTonight,
+            onCollect = onCollect,
+            onUncollect = onUncollect,
+            onIgnore = onIgnore,
+            onRelink = onRelinkContent,
+            onChoosePlaylist = { playlistTargetId = content.contentId },
+            onSelectTrack = onSelectContentTextTrack,
+            onRestoreAutomatic = onRestoreAutomaticContentTextTrack,
+            onAddTrack = onAddContentTextTrack,
         )
     }
 
-    library.config.contentUnits.firstOrNull { it.stableId == contentDetailId }?.let { content ->
-        val item = content.media
-        ContentDetailSurface(
-            content = content,
-            library = library,
-            onDismiss = { contentDetailId = null },
-            onPlay = { onPlaySingle(item) },
-            onAddToTonight = {
-                onAddToTonight(item)
+    playlistTargetId?.let { contentId ->
+        PlaylistChooser(
+            playlists = home.playlists,
+            onChoose = {
+                onAddToPlaylist(it, contentId)
+                playlistTargetId = null
             },
-            onChoosePlaylist = {
-                contentDetailId = null
-                playlistTarget = item
+            onCreate = {
+                createPlaylistSeed = contentId
+                createPlaylistVisible = true
+                playlistTargetId = null
             },
-            onToggleCollected = {
-                if (library.config.isCollected(item)) {
-                    onRemoveIncluded(setOf(item.uri.toString()))
-                } else {
-                    onCollectMedia(item)
-                }
-            },
-            onRelinkMedia = { onRelinkContent(content.stableId) },
-            onSelectTextTrack = { slot, trackId ->
-                onSelectContentTextTrack(item, slot, trackId)
-            },
-            onRestoreAutomaticTextTrack = { slot ->
-                onRestoreAutomaticContentTextTrack(item, slot)
-            },
-            onAddTextTrack = { slot ->
-                onAddContentTextTrack(content.stableId, slot)
-            },
+            onDismiss = { playlistTargetId = null },
         )
     }
 
     if (createPlaylistVisible) {
         CreatePlaylistDialog(
-            name = createPlaylistName,
-            onNameChanged = { createPlaylistName = it },
-            onDismiss = { createPlaylistVisible = false },
-            onConfirm = {
-                onCreatePlaylist(createPlaylistName, createPlaylistSeed)
+            onCreate = { name ->
+                onCreatePlaylist(name, createPlaylistSeed)
                 createPlaylistVisible = false
-                createPlaylistName = ""
                 createPlaylistSeed = null
             },
+            onDismiss = { createPlaylistVisible = false },
         )
     }
 
-    if (importVisible) {
-        OpenContentDialog(
-            draft = draft,
-            onPickMedia = onPickMedia,
-            onCancel = {
-                onCancelMediaOpen()
-                importVisible = false
-            },
-            onDismiss = {
-                onCancelMediaOpen()
-                importVisible = false
-            },
-        )
-    }
-
-    folderRemovalTarget?.let { folder ->
+    playlistDeleteId?.let { playlistId ->
+        val playlistName = home.playlists.firstOrNull { it.playlistId == playlistId }?.name ?: "此播放列表"
         AlertDialog(
-            onDismissRequest = { folderRemovalTarget = null },
-            title = { Text("移除来源？", color = AppPrimaryText) },
-            text = {
-                Text(
-                    "只移除应用对“${folder.displayName}”的来源引用，不会删除原文件。",
-                    color = AppSecondaryText,
-                )
-            },
+            onDismissRequest = { playlistDeleteId = null },
+            title = { Text("删除播放列表") },
+            text = { Text("将删除“$playlistName”，其中的内容仍会保留在我的内容中。") },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        onRemoveFolder(folder.id)
-                        folderRemovalTarget = null
+                        onDeletePlaylist(playlistId)
+                        if (selectedPlaylistId == playlistId) selectedPlaylistId = null
+                        playlistDeleteId = null
                     },
-                ) {
-                    Text("移除", color = AppAccent)
-                }
+                ) { Text("删除", color = AppError) }
             },
             dismissButton = {
-                TextButton(onClick = { folderRemovalTarget = null }) {
-                    Text("取消", color = AppSecondaryText)
-                }
-            },
-            containerColor = AppSurfaceRaised,
-        )
-    }
-
-    if (clearLooseFilesConfirmation) {
-        AlertDialog(
-            onDismissRequest = { clearLooseFilesConfirmation = false },
-            title = { Text("清空单独打开记录？", color = AppPrimaryText) },
-            text = { Text("只移除应用内记录，不会删除原文件。", color = AppSecondaryText) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        onClearLooseFiles()
-                        clearLooseFilesConfirmation = false
-                    },
-                ) {
-                    Text("清空", color = AppAccent)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { clearLooseFilesConfirmation = false }) {
+                TextButton(onClick = { playlistDeleteId = null }) {
                     Text("取消", color = AppSecondaryText)
                 }
             },
@@ -612,1732 +431,487 @@ internal fun HomeScreen(
 @Composable
 private fun HomeHeader(
     section: HomeSection,
-    searchVisible: Boolean,
-    selectedPlaylist: ResolvedPlaylist?,
-    selectedSource: LibrarySourceState?,
-    showingIgnored: Boolean,
+    nestedTitle: String?,
     onBack: () -> Unit,
     onSearch: () -> Unit,
     onDisplay: () -> Unit,
-    onToggleIgnored: () -> Unit,
 ) {
-    val isHome = section == HomeSection.Home
-    val title =
-        when {
-            searchVisible -> "搜索"
-            selectedPlaylist != null -> selectedPlaylist.name
-            selectedSource != null -> selectedSource.displayName
-            section == HomeSection.MyContent -> "我的内容"
-            section == HomeSection.Tonight -> "今晚"
-            section == HomeSection.Discoveries && showingIgnored -> "已忽略"
-            section == HomeSection.Discoveries -> "新发现"
-            section == HomeSection.Sources -> "来源"
-            section == HomeSection.Display -> "显示"
-            else -> "今晚"
-        }
+    val title = nestedTitle ?: when (section) {
+        HomeSection.Home -> "VortexCue"
+        HomeSection.Tonight -> "今晚"
+        HomeSection.MyContent -> "我的内容"
+        HomeSection.Discoveries -> "待决定"
+        HomeSection.Sources -> "来源"
+        HomeSection.Display -> "显示"
+    }
     Row(
-        modifier = Modifier.fillMaxWidth().height(52.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = Modifier.fillMaxWidth().height(44.dp),
         verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (isHome) {
-            Text(
-                title,
-                modifier = Modifier.weight(1f),
-                color = AppPrimaryText,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Medium,
-            )
-        } else {
-            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onBack, contentPadding = PaddingValues(end = 12.dp)) {
-                    Text("返回", color = AppSecondaryText, fontSize = 12.sp)
-                }
-                Text(
-                    title,
-                    color = AppPrimaryText,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        when {
-            isHome ->
-                TextButton(onClick = onDisplay) {
-                    Text("显示", color = AppSecondaryText, fontSize = 12.sp)
-                }
-            section == HomeSection.MyContent &&
-                !searchVisible &&
-                selectedPlaylist == null -> {
-                TextButton(onClick = onSearch) {
-                    Text("搜索", color = AppSecondaryText, fontSize = 12.sp)
-                }
-            }
-            section == HomeSection.Discoveries ->
-                TextButton(onClick = onToggleIgnored) {
-                    Text(
-                        if (showingIgnored) "新发现" else "已忽略",
-                        color = AppSecondaryText,
-                        fontSize = 12.sp,
-                    )
-                }
-        }
-    }
-}
-
-@Composable
-private fun HomeLanding(
-    library: MediaLibraryState,
-    resumableSession: ActiveSession?,
-    activeSession: ActiveSession?,
-    lastSession: RestorableSession?,
-    tonight: List<MediaSourceRef>,
-    tonightCurrentIndex: Int,
-    tonightPositionMs: Long,
-    playback: PlaybackSnapshot,
-    onOpenMyContent: () -> Unit,
-    onOpenDiscoveries: () -> Unit,
-    onOpenTonight: () -> Unit,
-    onOpenSources: () -> Unit,
-    onPlaySingle: (MediaSourceRef) -> Unit,
-    onOpenMediaActions: (MediaSourceRef) -> Unit,
-    onAddFolder: () -> Unit,
-    onOpenFile: () -> Unit,
-    onContinue: () -> Unit,
-    onPlayPause: () -> Unit,
-    onStartTonight: () -> Unit,
-    bottomPadding: Dp,
-    modifier: Modifier = Modifier,
-) {
-    val recentItems = remember(library.config) { resolveRecentItems(library) }
-    val collectedItems =
-        remember(library.items, library.config) { orderedCollectedItems(library, recentItems) }
-    val firstUse =
-        tonight.isEmpty() && shouldShowFirstUseHome(
-            hasResumableSession = resumableSession != null,
-            collectedCount = collectedItems.size,
-            recentCount = recentItems.size,
-            discoveryCount = library.candidates.size,
-            ignoredCount = library.ignoredItems.size,
-            hasConfiguredSource =
-                library.config.folders.isNotEmpty() || library.hasSystemAccess,
-        )
-    LazyColumn(
-        modifier = modifier,
-        contentPadding = PaddingValues(bottom = bottomPadding),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
-    ) {
-        if (firstUse) {
-            item(key = "first-use") {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        "今晚想听什么？",
-                        color = AppPrimaryText,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    QuietButton(
-                        "打开一个内容",
-                        onOpenFile,
-                        Modifier.fillMaxWidth(),
-                        emphasized = true,
-                    )
-                    QuietButton("添加常用文件夹", onAddFolder, Modifier.fillMaxWidth())
-                }
-            }
-        } else {
-            if (tonight.isNotEmpty()) {
-                item(key = "tonight") {
-                    TonightPreview(
-                        tonight = tonight,
-                        currentIndex = tonightCurrentIndex,
-                        positionMs = tonightPositionMs,
-                        onOpen = onOpenTonight,
-                        onStart = onStartTonight,
-                    )
-                }
-            } else {
-                resumableSession?.let { session ->
-                    item(key = "continue") {
-                        ContinueSection(
-                            session = session,
-                            activeSession = activeSession,
-                            lastSession = lastSession,
-                            libraryConfig = library.config,
-                            playback = playback,
-                            onContinue = onContinue,
-                            onPlayPause = onPlayPause,
-                        )
-                    }
-                }
-            }
-            item(key = "my-content-heading") {
-                ManagerEntry(
-                    title = "我的内容",
-                    detail =
-                        when {
-                            collectedItems.isNotEmpty() -> "${collectedItems.size} 项已收录"
-                            recentItems.isNotEmpty() -> "${recentItems.size} 项最近打开"
-                            else -> "还没有收录内容"
-                        },
-                    action = "查看全部",
-                    onClick = onOpenMyContent,
-                )
-            }
-            itemsIndexed(
-                items = collectedItems.take(HomePreviewItemCount),
-                key = { _, item -> "home-content-${item.uri}" },
-            ) { index, media ->
-                TrackRow(
-                    media = media,
-                    hasSubtitle = library.hasSubtitleFor(media),
-                    unavailable = library.isUnavailable(media),
-                    onPlay = { onPlaySingle(media) },
-                    onOpenMediaActions = { onOpenMediaActions(media) },
-                )
-            }
-            item(key = "more-heading") { SectionHeading("更多") }
-            if (library.candidates.isNotEmpty() || library.ignoredItems.isNotEmpty()) {
-                item(key = "discoveries") {
-                    ManagerEntry(
-                        title = "新发现",
-                        detail =
-                            if (library.candidates.isNotEmpty()) {
-                                "${library.candidates.size} 项尚未决定的内容"
-                            } else {
-                                "没有新发现 · ${library.ignoredItems.size} 项已忽略"
-                            },
-                        action = "查看",
-                        onClick = onOpenDiscoveries,
-                    )
-                }
-            }
-            item(key = "add-actions") {
-                Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    QuietButton(
-                        "打开一个内容",
-                        onOpenFile,
-                        Modifier.fillMaxWidth(),
-                        emphasized = true,
-                    )
-                    QuietButton("添加常用文件夹", onAddFolder, Modifier.fillMaxWidth())
-                }
-            }
-            item(key = "sources") {
-                ManagerEntry(
-                    title = "来源",
-                    detail = sourceSummary(library),
-                    action = "管理",
-                    onClick = onOpenSources,
-                )
-            }
-        }
-        if (library.isLoading) item(key = "loading") { StatusText("来源正在扫描…") }
-        library.errorMessage?.let { message ->
-            item(key = "error") { StatusText(message, color = AppError) }
-        }
-    }
-}
-
-@Composable
-private fun PlaylistRow(
-    playlist: ResolvedPlaylist,
-    onOpen: () -> Unit,
-    onPlay: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(vertical = 15.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                playlist.name,
-                color = AppPrimaryText,
-                fontSize = 18.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(collectionDetail(playlist.items), color = AppMutedText, fontSize = 11.sp)
+        if (section != HomeSection.Home || nestedTitle != null) {
+            TextButton(onClick = onBack, contentPadding = PaddingValues(horizontal = 4.dp)) {
+                Text("返回", color = AppSecondaryText)
+            }
         }
-        TextButton(onClick = onPlay, enabled = playlist.items.isNotEmpty()) {
-            Text("播放", color = AppSecondaryText, fontSize = 12.sp)
+        Text(
+            text = title,
+            color = AppPrimaryText,
+            fontSize = 21.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (section == HomeSection.MyContent && nestedTitle == null) {
+            TextButton(onClick = onSearch) { Text("搜索", color = AppAccent) }
+        }
+        if (section == HomeSection.Home) {
+            TextButton(onClick = onDisplay) { Text("显示", color = AppSecondaryText) }
         }
     }
     Hairline()
 }
 
 @Composable
-private fun PlaylistDetail(
-    playlist: ResolvedPlaylist,
-    library: MediaLibraryState,
-    onPlaySingle: (MediaSourceRef) -> Unit,
-    onPlayGroup: (List<MediaSourceRef>, Int) -> Unit,
-    onOpenMediaActions: (MediaSourceRef) -> Unit,
-    onRemoveFromPlaylist: (String, MediaSourceRef) -> Unit,
-    onDeletePlaylist: (String) -> Unit,
-    bottomPadding: Dp,
-    modifier: Modifier = Modifier,
+private fun HomeLanding(
+    home: HomeLibraryProjection,
+    draft: ContentSummary?,
+    recovery: PlaybackRecoveryProjection,
+    runtimePositionMs: Long,
+    playback: PlaybackSnapshot,
+    onContinue: () -> Unit,
+    onPlayPause: () -> Unit,
+    onPlay: (String) -> Unit,
+    onDetails: (String) -> Unit,
+    onOpenMyContent: () -> Unit,
+    onOpenDiscoveries: () -> Unit,
+    onOpenTonight: () -> Unit,
+    onOpenSources: () -> Unit,
+    onPickMedia: () -> Unit,
+    onAddFolder: () -> Unit,
 ) {
     LazyColumn(
-        modifier = modifier,
-        contentPadding = PaddingValues(bottom = bottomPadding),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        item(key = "collection-actions") {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(collectionDetail(playlist.items), color = AppMutedText, fontSize = 12.sp)
-                Row {
-                    TextButton(
-                        onClick = { onPlayGroup(playlist.items, 0) },
-                        enabled = playlist.items.isNotEmpty(),
-                    ) {
-                        Text("播放全部", color = AppSecondaryText, fontSize = 12.sp)
+        recovery.currentItem?.let { current ->
+            item(key = "continue") {
+                SectionHeading("继续")
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onContinue).padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(current.media.displayTitle, color = AppPrimaryText, fontSize = 16.sp)
+                        Text(
+                            "${formatTime(runtimePositionMs)} / ${formatTime(current.media.durationMs)}",
+                            color = AppSecondaryText,
+                            fontSize = 12.sp,
+                        )
                     }
-                    TextButton(onClick = { onDeletePlaylist(playlist.id) }) {
-                        Text("删除", color = AppMutedText, fontSize = 12.sp)
+                    TextButton(onClick = onPlayPause) {
+                        Text(if (playback.isPlaying) "暂停" else "继续", color = AppAccent)
                     }
                 }
             }
         }
-        itemsIndexed(
-            items = playlist.items,
-            key = { _, item -> "collection-${item.uri}" },
-        ) { index, media ->
-            TrackRow(
-                media = media,
-                hasSubtitle = library.hasSubtitleFor(media),
-                onPlay = { onPlaySingle(media) },
-                onOpenMediaActions = { onOpenMediaActions(media) },
-                onRemove = { onRemoveFromPlaylist(playlist.id, media) },
-            )
+        draft?.takeIf { it.contentId != recovery.currentItem?.contentId }?.let { pending ->
+            item(key = "draft") {
+                SectionHeading("待处理")
+                SummaryRow(pending, onPlay, onDetails)
+            }
         }
-        if (playlist.items.isEmpty()) item { StatusText("这里还没有内容") }
+        item(key = "counts") {
+            SectionHeading("目录")
+            LandingAction("我的内容", "${home.collectedCount} 项收录 · ${home.recentCount} 项最近", onOpenMyContent)
+            LandingAction("待决定", "${home.discoveryCount} 项待决定 · ${home.ignoredCount} 项已忽略", onOpenDiscoveries)
+            LandingAction("今晚", "${recovery.queue.size} 项", onOpenTonight)
+            LandingAction("来源", sourceSummary(home.sources), onOpenSources)
+        }
+        if (home.recentPreview.isNotEmpty()) {
+            item { SectionHeading("最近打开") }
+            items(home.recentPreview, key = { "recent-${it.contentId}" }) { item ->
+                SummaryRow(item, onPlay, onDetails)
+            }
+        } else if (home.collectedPreview.isNotEmpty()) {
+            item { SectionHeading("已收录") }
+            items(home.collectedPreview, key = { "collected-${it.contentId}" }) { item ->
+                SummaryRow(item, onPlay, onDetails)
+            }
+        }
+        item(key = "imports") {
+            SectionHeading("导入")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                QuietButton("打开文件", onPickMedia, Modifier.weight(1f))
+                QuietButton("添加文件夹", onAddFolder, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun LandingAction(title: String, detail: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, color = AppPrimaryText, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        Text(detail, color = AppSecondaryText, fontSize = 12.sp, maxLines = 1)
+    }
+    Hairline()
+}
+
+@Composable
+private fun TonightEditor(
+    recovery: PlaybackRecoveryProjection,
+    currentIndex: Int,
+    onStart: () -> Unit,
+    onPlay: (String) -> Unit,
+    onDetails: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onMove: (Int, Int) -> Unit,
+    onClear: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("${recovery.queue.size} 项", color = AppSecondaryText, modifier = Modifier.weight(1f))
+            TextButton(onClick = onClear, enabled = recovery.queue.isNotEmpty()) { Text("清空", color = AppError) }
+            OutlinedButton(onClick = onStart, enabled = recovery.queue.isNotEmpty()) { Text("开始") }
+        }
+        if (recovery.queue.isEmpty()) {
+            EmptyState("今晚还没有内容")
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                items(recovery.queue.size, key = { recovery.queue[it].contentId }) { index ->
+                    val item = recovery.queue[index]
+                    Row(
+                        modifier = Modifier.fillMaxWidth().background(if (index == currentIndex) AppSurface else Color.Transparent),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f).clickable { onPlay(item.contentId) }.padding(vertical = 10.dp),
+                        ) {
+                            Text(item.media.displayTitle, color = AppPrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(if (index == currentIndex) "当前" else "第 ${index + 1} 项", color = AppSecondaryText, fontSize = 12.sp)
+                        }
+                        TextButton(onClick = { onMove(index, index - 1) }, enabled = index > 0) { Text("上移") }
+                        TextButton(onClick = { onMove(index, index + 1) }, enabled = index < recovery.queue.lastIndex) { Text("下移") }
+                        TextButton(onClick = { onDetails(item.contentId) }) { Text("详情") }
+                        TextButton(onClick = { onRemove(item.contentId) }) { Text("移除", color = AppError) }
+                    }
+                    Hairline()
+                }
+            }
+        }
     }
 }
 
 @Composable
 private fun MyContent(
-    library: MediaLibraryState,
-    selectedTab: MyContentTab,
+    tab: MyContentTab,
     onTabChanged: (MyContentTab) -> Unit,
-    onPlaySingle: (MediaSourceRef) -> Unit,
-    onPlayGroup: (List<MediaSourceRef>, Int) -> Unit,
-    onOpenMediaActions: (MediaSourceRef) -> Unit,
+    collected: LazyPagingItems<ContentSummary>,
+    recent: LazyPagingItems<ContentSummary>,
+    playlists: List<PlaylistSummary>,
     onOpenPlaylist: (String) -> Unit,
     onCreatePlaylist: () -> Unit,
-    bottomPadding: Dp,
-    modifier: Modifier = Modifier,
+    onPlay: (String) -> Unit,
+    onPlayLoaded: (List<String>, Int) -> Unit,
+    onDetails: (String) -> Unit,
 ) {
-    val recentItems = remember(library.config) { resolveRecentItems(library) }
-    val collectedItems =
-        remember(library.items, library.config) { orderedCollectedItems(library, recentItems) }
-    val visibleItems =
-        when (selectedTab) {
-            MyContentTab.Collected -> collectedItems
-            MyContentTab.Recent -> recentItems
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Segment("收录", tab == MyContentTab.Collected) { onTabChanged(MyContentTab.Collected) }
+            Segment("最近", tab == MyContentTab.Recent) { onTabChanged(MyContentTab.Recent) }
+            Segment("播放列表", tab == MyContentTab.Playlists) { onTabChanged(MyContentTab.Playlists) }
         }
-    val playlists = remember(library.config.playlists) { availablePlaylists(library) }
-    LazyColumn(
-        modifier = modifier,
-        contentPadding = PaddingValues(bottom = bottomPadding),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        item(key = "my-content-tabs") {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                QuietButton(
-                    label = "已收录 ${collectedItems.size}",
-                    onClick = { onTabChanged(MyContentTab.Collected) },
+        when (tab) {
+            MyContentTab.Collected ->
+                PagedContentList(
+                    items = collected,
+                    emptyText = "还没有收录内容",
+                    onPlay = onPlay,
+                    onDetails = onDetails,
+                    onPlayLoaded = onPlayLoaded,
                     modifier = Modifier.weight(1f),
-                    emphasized = selectedTab == MyContentTab.Collected,
                 )
-                QuietButton(
-                    label = "最近 ${recentItems.size}",
-                    onClick = { onTabChanged(MyContentTab.Recent) },
+            MyContentTab.Recent ->
+                PagedContentList(
+                    items = recent,
+                    emptyText = "还没有最近打开内容",
+                    onPlay = onPlay,
+                    onDetails = onDetails,
+                    onPlayLoaded = onPlayLoaded,
                     modifier = Modifier.weight(1f),
-                    emphasized = selectedTab == MyContentTab.Recent,
                 )
-            }
-        }
-        if (visibleItems.isEmpty()) {
-            item(key = "my-content-empty") {
-                StatusText(
-                    if (selectedTab == MyContentTab.Collected) {
-                        "还没有加入“我的内容”的条目"
-                    } else {
-                        "还没有最近打开的内容"
-                    },
-                )
-            }
-        } else {
-            itemsIndexed(
-                items = visibleItems,
-                key = { _, item -> "my-content-${selectedTab.name}-${item.uri}" },
-            ) { index, media ->
-                TrackRow(
-                    media = media,
-                    hasSubtitle = library.hasSubtitleFor(media),
-                    unavailable = library.isUnavailable(media),
-                    onPlay = { onPlaySingle(media) },
-                    onOpenMediaActions = { onOpenMediaActions(media) },
-                )
-            }
-        }
-        if (selectedTab == MyContentTab.Collected) {
-            item(key = "playlists-heading") {
-                Spacer(modifier = Modifier.height(10.dp))
-                SectionHeading("播放列表", "可选的手动编排")
-            }
-            items(
-                items = playlists,
-                key = { "playlist-${it.id}" },
-            ) { playlist ->
-                PlaylistRow(
-                    playlist = playlist,
-                    onOpen = { onOpenPlaylist(playlist.id) },
-                    onPlay = {
-                        if (playlist.items.isNotEmpty()) {
-                            onPlayGroup(playlist.items, 0)
-                        }
-                    },
-                )
-            }
-            item(key = "create-playlist") {
-                TextButton(onClick = onCreatePlaylist, modifier = Modifier.fillMaxWidth()) {
-                    Text("新建播放列表", color = AppSecondaryText, fontSize = 12.sp)
+            MyContentTab.Playlists ->
+                LazyColumn(modifier = Modifier.weight(1f)) {
+                    item {
+                        QuietButton("新建播放列表", onCreatePlaylist, Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    items(playlists, key = PlaylistSummary::playlistId) { playlist ->
+                        LandingAction(playlist.name, "打开", { onOpenPlaylist(playlist.playlistId) })
+                    }
+                    if (playlists.isEmpty()) item { EmptyState("还没有播放列表") }
                 }
-            }
         }
     }
 }
 
 @Composable
-private fun MyContentSearch(
-    query: String,
-    onQueryChanged: (String) -> Unit,
-    library: MediaLibraryState,
-    onPlaySingle: (MediaSourceRef) -> Unit,
-    onOpenMediaActions: (MediaSourceRef) -> Unit,
-    bottomPadding: Dp,
-    modifier: Modifier = Modifier,
-) {
-    val normalized = query.trim()
-    val recentItems = remember(library.config) { resolveRecentItems(library) }
-    val searchableItems =
-        remember(library.items, library.config) {
-            distinctContentItems(recentItems + orderedCollectedItems(library, recentItems), library)
-        }
-    val matches =
-        if (normalized.isEmpty()) emptyList()
-        else searchableItems.filter { it.matches(normalized) }
-    LazyColumn(
-        modifier = modifier,
-        contentPadding = PaddingValues(bottom = bottomPadding),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        item(key = "search-field") {
-            OutlinedTextField(
-                value = query,
-                onValueChange = onQueryChanged,
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("标题、文件名或来源", color = AppMutedText) },
-                singleLine = true,
-            )
-        }
-        if (normalized.isEmpty()) {
-            item { StatusText("搜索已收录和最近打开的内容") }
-        } else {
-            if (matches.isNotEmpty()) {
-                item { SectionHeading("内容", "${matches.size} 项") }
-                itemsIndexed(matches, key = { _, item -> "search-${item.uri}" }) { index, media ->
-                    TrackRow(
-                        media = media,
-                        hasSubtitle = library.hasSubtitleFor(media),
-                        statusLabel =
-                            if (library.config.isCollected(media)) "已收录" else "最近打开",
-                        unavailable = library.isUnavailable(media),
-                        onPlay = { onPlaySingle(media) },
-                        onOpenMediaActions = { onOpenMediaActions(media) },
-                    )
-                }
-            }
-            if (matches.isEmpty()) item { StatusText("没有找到相关内容") }
-        }
-    }
-}
-
-@Composable
-private fun ManagerEntry(
-    title: String,
-    detail: String,
-    action: String,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(title, color = AppPrimaryText, fontSize = 15.sp)
-            Text(detail, color = AppMutedText, fontSize = 11.sp)
-        }
-        Text(action, color = AppSecondaryText, fontSize = 12.sp)
-    }
-    Hairline()
-}
-
-@Composable
-private fun CandidateReview(
-    library: MediaLibraryState,
-    selectedUris: Set<String>,
-    onSelectionChanged: (Set<String>) -> Unit,
-    onAccept: () -> Unit,
-    onAcceptOne: (String) -> Unit,
-    onPlay: (MediaSourceRef) -> Unit,
-    onOpenMediaActions: (MediaSourceRef) -> Unit,
+private fun Discoveries(
+    showingIgnored: Boolean,
+    onToggleIgnored: () -> Unit,
+    items: LazyPagingItems<ContentSummary>,
+    onPlay: (String) -> Unit,
+    onDetails: (String) -> Unit,
+    onAccept: (String) -> Unit,
     onIgnore: (String) -> Unit,
-    onIgnoreSelected: () -> Unit,
-    modifier: Modifier = Modifier,
+    onRestore: (String) -> Unit,
 ) {
-    if (library.candidates.isEmpty()) {
-        Column(
-            modifier = modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            StatusText("没有新发现。已收录内容仍可从“我的内容”打开。")
-        }
-        return
-    }
-    val groups =
-        remember(library.candidates) {
-            library.candidates
-                .groupBy(MediaSourceRef::libraryFolderKey)
-                .values
-                .sortedBy { it.firstOrNull()?.libraryFolderName.orEmpty().lowercase() }
-        }
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(
-            "这里是来源中新发现、尚未决定的内容。音频已预选，视频需要逐项确认。",
-            color = AppSecondaryText,
-            fontSize = 12.sp,
-            lineHeight = 18.sp,
-        )
-        LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(bottom = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            groups.forEach { group ->
-                val groupUris =
-                    group.filterNot(library::isUnavailable)
-                        .mapTo(linkedSetOf()) { it.uri.toString() }
-                item(key = "candidate-group-${group.first().libraryFolderKey()}") {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        SectionHeading(group.first().libraryFolderName, "${group.size} 项")
-                    }
-                    Row {
-                        TextButton(
-                            onClick = {
-                                val audioUris =
-                                    group.filter {
-                                        it.kind == MediaKind.Audio && !library.isUnavailable(it)
-                                    }
-                                        .mapTo(linkedSetOf()) { it.uri.toString() }
-                                onSelectionChanged(selectedUris + audioUris)
-                            },
-                        ) {
-                            Text("选择音频", color = AppSecondaryText, fontSize = 11.sp)
-                        }
-                        TextButton(
-                            onClick = {
-                                if (groupUris.isNotEmpty() && groupUris.all(selectedUris::contains)) {
-                                    onSelectionChanged(selectedUris - groupUris)
-                                } else {
-                                    onSelectionChanged(selectedUris + groupUris)
-                                }
-                            },
-                        ) {
-                            Text(
-                                if (groupUris.isNotEmpty() && groupUris.all(selectedUris::contains)) {
-                                    "取消全选"
-                                } else {
-                                    "全选"
-                                },
-                                color = AppMutedText,
-                                fontSize = 11.sp,
-                            )
-                        }
-                    }
-                }
-                items(group, key = { "candidate-${it.uri}" }) { media ->
-                    val uriValue = media.uri.toString()
-                    CandidateRow(
-                        media = media,
-                        selected = uriValue in selectedUris,
-                        hasSubtitle = library.hasSuggestedSubtitleFor(media),
-                        isUnavailable = library.isUnavailable(media),
-                        onToggle = {
-                            onSelectionChanged(
-                                if (uriValue in selectedUris) selectedUris - uriValue
-                                else selectedUris + uriValue,
-                            )
-                        },
-                        onAccept = { onAcceptOne(uriValue) },
-                        onPlay = { onPlay(media) },
-                        onOpenMediaActions = { onOpenMediaActions(media) },
-                        onIgnore = { onIgnore(uriValue) },
-                    )
-                }
-            }
-        }
-        Hairline()
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("已选 ${selectedUris.size} 项", color = AppSecondaryText, fontSize = 12.sp)
-            QuietButton(
-                label = "加入我的内容",
-                onClick = onAccept,
-                enabled = selectedUris.isNotEmpty(),
-                emphasized = true,
-                modifier = Modifier.weight(1f),
-            )
-            QuietButton(
-                label = "忽略所选",
-                onClick = onIgnoreSelected,
-                enabled = selectedUris.isNotEmpty(),
-                modifier = Modifier.weight(1f),
-            )
-        }
-    }
-}
-
-@Composable
-private fun CandidateRow(
-    media: MediaSourceRef,
-    selected: Boolean,
-    hasSubtitle: Boolean,
-    isUnavailable: Boolean,
-    onToggle: () -> Unit,
-    onAccept: () -> Unit,
-    onPlay: () -> Unit,
-    onOpenMediaActions: () -> Unit,
-    onIgnore: () -> Unit,
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clickable(enabled = !isUnavailable, onClick = onPlay)
-                    .padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(
-                    media.displayTitle,
-                    color = AppPrimaryText,
-                    fontSize = 14.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    listOfNotNull(
-                        "不可用".takeIf { isUnavailable },
-                        candidateDetail(media, hasSubtitle),
-                    ).joinToString(" · "),
-                    color = if (isUnavailable) AppError else AppMutedText,
-                    fontSize = 10.sp,
-                )
-            }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                if (isUnavailable) "需恢复来源" else "播放",
-                color = if (isUnavailable) AppMutedText else AppSecondaryText,
-                fontSize = 11.sp,
-            )
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            TextButton(onClick = onToggle, enabled = !isUnavailable) {
-                Text(
-                    if (selected) "已选" else "选择",
-                    color = if (selected) AppAccent else AppSecondaryText,
-                    fontSize = 11.sp,
-                )
-            }
-            TextButton(onClick = onAccept, enabled = !isUnavailable) {
-                Text("收录", color = AppSecondaryText, fontSize = 11.sp)
-            }
-            TextButton(onClick = onOpenMediaActions, enabled = !isUnavailable) {
-                Text("详情", color = AppSecondaryText, fontSize = 11.sp)
-            }
-            TextButton(onClick = onIgnore) {
-                Text("忽略", color = AppMutedText, fontSize = 11.sp)
-            }
-        }
-    }
-    Hairline()
-}
-
-@Composable
-private fun IgnoredContent(
-    items: List<MediaSourceRef>,
-    selectedUris: Set<String>,
-    onSelectionChanged: (Set<String>) -> Unit,
-    onRestore: (MediaSourceRef) -> Unit,
-    onRestoreSelected: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (items.isEmpty()) {
-            StatusText("没有已忽略内容")
-            return@Column
-        }
-        LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(bottom = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            items(items, key = { "ignored-${it.uri}" }) { media ->
-                val uriValue = media.uri.toString()
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 9.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(
-                        onClick = {
-                            onSelectionChanged(
-                                if (uriValue in selectedUris) selectedUris - uriValue
-                                else selectedUris + uriValue,
-                            )
-                        },
-                    ) {
-                        Text(
-                            if (uriValue in selectedUris) "已选" else "选择",
-                            color = if (uriValue in selectedUris) AppAccent else AppSecondaryText,
-                            fontSize = 11.sp,
-                        )
-                    }
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(3.dp),
-                    ) {
-                        Text(
-                            media.displayTitle,
-                            color = AppPrimaryText,
-                            fontSize = 14.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(candidateDetail(media, false), color = AppMutedText, fontSize = 10.sp)
-                    }
-                    TextButton(onClick = { onRestore(media) }) {
-                        Text("恢复", color = AppSecondaryText, fontSize = 11.sp)
-                    }
-                }
-                Hairline()
-            }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("已选 ${selectedUris.size} 项", color = AppSecondaryText, fontSize = 12.sp)
-            QuietButton(
-                label = "恢复所选",
-                onClick = onRestoreSelected,
-                enabled = selectedUris.isNotEmpty(),
-                emphasized = true,
-                modifier = Modifier.weight(1f),
-            )
-        }
-    }
-}
-
-@Composable
-private fun ManagedMediaList(
-    items: List<MediaSourceRef>,
-    emptyText: String,
-    action: String,
-    onAction: (MediaSourceRef) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    LazyColumn(
-        modifier = modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(bottom = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        if (items.isEmpty()) item { StatusText(emptyText) }
-        items(items, key = { "managed-${it.uri}" }) { media ->
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 9.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(media.displayTitle, color = AppPrimaryText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(candidateDetail(media, false), color = AppMutedText, fontSize = 10.sp)
-                }
-                TextButton(onClick = { onAction(media) }) {
-                    Text(action, color = AppSecondaryText, fontSize = 11.sp)
-                }
-            }
-            Hairline()
-        }
-    }
-}
-
-@Composable
-private fun ScanSources(
-    library: MediaLibraryState,
-    onRequestLibraryAccess: () -> Unit,
-    onRefreshLibrary: () -> Unit,
-    onRefreshSource: (String) -> Unit,
-    onCancelScan: (String) -> Unit,
-    onOpenSource: (String) -> Unit,
-    onAddFolder: () -> Unit,
-    onRelinkFolder: (String) -> Unit,
-    onOpenFile: () -> Unit,
-    onRemoveFolder: (String) -> Unit,
-    onClearLooseFiles: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    LazyColumn(
-        modifier = modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(bottom = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "这里管理内容从哪里进入；扫描结果会出现在“新发现”中。",
-                    modifier = Modifier.weight(1f),
-                    color = AppSecondaryText,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp,
-                )
-                TextButton(
-                    onClick = onRefreshLibrary,
-                    enabled = !library.isLoading,
-                ) {
-                    Text("刷新全部", color = AppMutedText, fontSize = 11.sp)
-                }
-            }
-        }
-        if (library.isLoading && library.scanningSourceIds.size > 1) {
-            item { StatusText("正在刷新 ${library.scanningSourceIds.size} 个来源…") }
-        }
-        items(
-            library.sources.filter {
-                it.kind != LibrarySourceKind.LooseFiles || it.itemCount > 0
-            },
-            key = { "source-${it.id}" },
-        ) { source ->
-            LibrarySourceRow(
-                source = source,
-                isLoading = source.id in library.scanningSourceIds,
-                onPrimaryAction =
-                    when (source.kind) {
-                        LibrarySourceKind.SystemLibrary ->
-                            if (source.id in library.scanningSourceIds) {
-                                { onCancelScan(source.id) }
-                            }
-                            else if (library.hasCompleteSystemAccess) {
-                                { onRefreshSource(source.id) }
-                            }
-                            else onRequestLibraryAccess
-                        LibrarySourceKind.Folder ->
-                            if (source.id in library.scanningSourceIds) {
-                                { onCancelScan(source.id) }
-                            }
-                            else if (!source.hasAccess) {
-                                { onRelinkFolder(source.id) }
-                            }
-                            else { { onRefreshSource(source.id) } }
-                        LibrarySourceKind.LooseFiles -> onClearLooseFiles
-                    },
-                primaryActionLabel =
-                    when (source.kind) {
-                        LibrarySourceKind.SystemLibrary ->
-                            if (source.id in library.scanningSourceIds) "取消"
-                            else when {
-                                library.hasCompleteSystemAccess -> "刷新"
-                                library.hasAudioAccess &&
-                                    library.videoAccess == VideoLibraryAccess.Partial ->
-                                    "调整范围"
-                                else -> "补充授权"
-                            }
-                        LibrarySourceKind.Folder ->
-                            when {
-                                source.id in library.scanningSourceIds -> "取消"
-                                !source.hasAccess -> "重新授权"
-                                else -> "刷新"
-                            }
-                        LibrarySourceKind.LooseFiles -> "清空"
-                    },
-                onOpen = { onOpenSource(source.id) },
-                onRemove =
-                    if (source.kind == LibrarySourceKind.Folder) {
-                        { onRemoveFolder(source.id) }
-                    } else {
-                        null
-                    },
-            )
-        }
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                QuietButton("添加文件夹", onAddFolder, Modifier.fillMaxWidth())
-                TextButton(onClick = onOpenFile, modifier = Modifier.fillMaxWidth()) {
-                    Text("打开单个文件", color = AppSecondaryText)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun LibrarySourceRow(
-    source: LibrarySourceState,
-    isLoading: Boolean,
-    onPrimaryAction: (() -> Unit)?,
-    primaryActionLabel: String?,
-    onRemove: (() -> Unit)?,
-    onOpen: () -> Unit,
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(source.displayName, color = AppPrimaryText, fontSize = 14.sp)
-                Text(
-                    when {
-                        isLoading -> "正在刷新"
-                        !source.hasAccess -> "需要授权"
-                        source.errorMessage != null -> "暂时不可用"
-                        !source.isScanned -> "缓存 ${source.itemCount} 项 · 等待刷新"
-                        else -> "缓存 ${source.itemCount} 项"
-                    },
-                    color = if (!source.hasAccess || source.errorMessage != null) AppError else AppMutedText,
-                    fontSize = 11.sp,
-                )
-            }
-            if (primaryActionLabel != null && onPrimaryAction != null) {
-                TextButton(onClick = onPrimaryAction) {
-                    Text(primaryActionLabel, color = AppSecondaryText, fontSize = 11.sp)
-                }
-            }
-            if (onRemove != null) {
-                TextButton(onClick = onRemove) { Text("移除", color = AppMutedText, fontSize = 11.sp) }
-            }
-            TextButton(onClick = onOpen) {
-                Text("查看", color = AppSecondaryText, fontSize = 11.sp)
-            }
-        }
-        source.errorMessage?.let { StatusText(it, color = AppError) }
-        Hairline()
-    }
-}
-
-@Composable
-private fun ContinueSection(
-    session: ActiveSession,
-    activeSession: ActiveSession?,
-    lastSession: RestorableSession?,
-    libraryConfig: LibraryConfig,
-    playback: PlaybackSnapshot,
-    onContinue: () -> Unit,
-    onPlayPause: () -> Unit,
-) {
-    val lastSurface =
-        lastSession
-            ?.takeIf { libraryConfig.sameContent(it.session.media, session.media) }
-            ?.lastSurface
-            ?.asLastSurface()
-            ?: PlayerSurface.Normal
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        SectionHeading(
-            title = "继续上次",
-            detail = if (lastSurface == PlayerSurface.Glow) "微光" else null,
-        )
-        NowPlayingBar(
-            session = session,
-            activeSession = activeSession,
-            lastSession = lastSession,
-            libraryConfig = libraryConfig,
-            playback = playback,
-            onContinue = onContinue,
-            onPlayPause = onPlayPause,
-        )
-    }
-}
-
-@Composable
-private fun TonightPreview(
-    tonight: List<MediaSourceRef>,
-    currentIndex: Int,
-    positionMs: Long,
-    onOpen: () -> Unit,
-    onStart: () -> Unit,
-) {
-    val safeIndex = currentIndex.coerceIn(tonight.indices)
-    val current = tonight.getOrNull(safeIndex)
-    val next = tonight.getOrNull(safeIndex + 1)
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        ManagerEntry(
-            title = "今晚",
-            detail = "${tonight.size} 项",
-            action = "编辑",
-            onClick = onOpen,
-        )
-        current?.let { media ->
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(media.displayTitle, color = AppPrimaryText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        listOfNotNull(
-                            "第 ${safeIndex + 1} / ${tonight.size} 项",
-                            formatTime(positionMs).takeIf { positionMs > 0L },
-                            next?.displayTitle?.let { "接下来：$it" },
-                        ).joinToString(" · "),
-                        color = AppMutedText,
-                        fontSize = 11.sp,
-                    )
-                }
-                TextButton(onClick = onStart) {
-                    Text(if (positionMs > 0L) "继续今晚" else "开始今晚", color = AppAccent, fontSize = 12.sp)
-                }
-            }
-        }
-        Hairline()
-    }
-}
-
-@Composable
-private fun TonightEditor(
-    tonight: List<MediaSourceRef>,
-    currentIndex: Int,
-    library: MediaLibraryState,
-    onStartTonight: () -> Unit,
-    onRemove: (Int) -> Unit,
-    onMove: (Int, Int) -> Unit,
-    onClear: () -> Unit,
-    onOpenMediaActions: (MediaSourceRef) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                if (tonight.isEmpty()) "还没有安排今晚的内容" else "${tonight.size} 项",
+                if (showingIgnored) "已忽略内容仍会保留其身份" else "逐项决定是否纳入我的内容",
                 color = AppSecondaryText,
                 fontSize = 12.sp,
+                modifier = Modifier.weight(1f),
             )
-            Row {
-                TextButton(onClick = onStartTonight, enabled = tonight.isNotEmpty()) {
-                    Text("继续今晚", color = AppAccent, fontSize = 12.sp)
-                }
-                TextButton(onClick = onClear, enabled = tonight.isNotEmpty()) {
-                    Text("清空", color = AppMutedText, fontSize = 12.sp)
-                }
+            TextButton(onClick = onToggleIgnored) {
+                Text(if (showingIgnored) "待决定" else "已忽略", color = AppAccent)
             }
         }
-        if (tonight.isEmpty()) {
-            StatusText("可以从“我的内容”或“新发现”打开详情，再加入今晚。")
-            return@Column
-        }
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(bottom = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            itemsIndexed(
-                items = tonight,
-                key = { index, media -> "tonight-$index-${media.uri}" },
-            ) { index, entry ->
-                val media = library.config.resolveActiveMedia(entry)
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text(
-                            media.displayTitle,
-                            color = if (index == currentIndex) AppAccent else AppPrimaryText,
-                            fontSize = 14.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            listOfNotNull(
-                                if (index == currentIndex) "当前项" else "待播放",
-                            ).joinToString(" · "),
-                            color = AppMutedText,
-                            fontSize = 10.sp,
-                        )
-                    }
-                    TextButton(onClick = { onOpenMediaActions(media) }) {
-                        Text("详情", color = AppSecondaryText, fontSize = 11.sp)
-                    }
-                    TextButton(onClick = { onMove(index, index - 1) }, enabled = index > 0) {
-                        Text("↑", color = if (index > 0) AppSecondaryText else AppHairline, fontSize = 12.sp)
-                    }
-                    TextButton(onClick = { onMove(index, index + 1) }, enabled = index < tonight.lastIndex) {
-                        Text("↓", color = if (index < tonight.lastIndex) AppSecondaryText else AppHairline, fontSize = 12.sp)
-                    }
-                    TextButton(onClick = { onRemove(index) }) {
-                        Text("移除", color = AppMutedText, fontSize = 11.sp)
-                    }
+        PagedContentList(
+            items = items,
+            emptyText = if (showingIgnored) "没有已忽略内容" else "没有待决定内容",
+            onPlay = onPlay,
+            onDetails = onDetails,
+            trailing = { summary ->
+                if (showingIgnored) {
+                    TextButton(onClick = { onRestore(summary.contentId) }) { Text("恢复", color = AppAccent) }
+                } else {
+                    TextButton(onClick = { onAccept(summary.contentId) }) { Text("收录", color = AppAccent) }
+                    TextButton(onClick = { onIgnore(summary.contentId) }) { Text("忽略", color = AppSecondaryText) }
                 }
-                Hairline()
-            }
-        }
+            },
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
 @Composable
-private fun NowPlayingBar(
-    session: ActiveSession,
-    activeSession: ActiveSession?,
-    lastSession: RestorableSession?,
-    libraryConfig: LibraryConfig,
-    playback: PlaybackSnapshot,
-    onContinue: () -> Unit,
-    onPlayPause: () -> Unit,
-    modifier: Modifier = Modifier,
+private fun Sources(
+    sources: List<SourceSummary>,
+    coordinator: LibraryCoordinatorState,
+    onOpen: (String) -> Unit,
+    onRequestAccess: () -> Unit,
+    onRefreshAll: () -> Unit,
+    onAddFolder: () -> Unit,
 ) {
-    val matchingLastSession =
-        lastSession?.takeIf { libraryConfig.sameContent(it.session.media, session.media) }
-    val availability =
-        matchingLastSession?.mediaAvailability
-            ?: if (activeSession != null) MediaAvailability.Ready else null
-    val lastSurface = matchingLastSession?.lastSurface?.asLastSurface() ?: PlayerSurface.Normal
-    val positionMs =
-        if (activeSession != null) playback.positionMs else matchingLastSession?.positionMs ?: 0L
-    val sessionDetail =
-        listOf(
-            formatTime(positionMs),
-            if (session.subtitle == null) "无字幕" else "有字幕",
-            "微光".takeIf { lastSurface == PlayerSurface.Glow },
-        ).filterNotNull().joinToString(" · ")
-    Column(modifier = modifier.fillMaxWidth().background(Color.Black)) {
-        Hairline()
-        Row(
-            modifier = Modifier.fillMaxWidth().height(76.dp).clickable(onClick = onContinue),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(session.media.displayTitle, color = AppPrimaryText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    when (availability) {
-                        MediaAvailability.Checking -> "正在验证"
-                        is MediaAvailability.Unavailable -> "需要重新定位"
-                        else -> sessionDetail
-                    },
-                    color = if (availability is MediaAvailability.Unavailable) AppError else AppMutedText,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                QuietButton("媒体授权", onRequestAccess, Modifier.weight(1f))
+                QuietButton("添加文件夹", onAddFolder, Modifier.weight(1f))
+                QuietButton("全部刷新", onRefreshAll, Modifier.weight(1f))
             }
-            TextButton(
-                onClick =
-                    if (activeSession == null || availability is MediaAvailability.Unavailable) {
-                        onContinue
-                    } else {
-                        onPlayPause
-                    },
-                enabled = availability != MediaAvailability.Checking,
-            ) {
-                Text(
-                    when {
-                        availability is MediaAvailability.Unavailable -> "重新定位"
-                        activeSession == null && lastSurface == PlayerSurface.Glow -> "继续微光"
-                        activeSession == null -> "继续"
-                        playback.isPlaying -> "暂停"
-                        else -> "播放"
-                    },
-                    color = AppAccent,
-                )
-            }
+            coordinator.errorMessage?.let { Text(it, color = AppError, fontSize = 12.sp) }
+            Spacer(Modifier.height(8.dp))
         }
+        items(sources, key = SourceSummary::sourceId) { source ->
+            val detail = buildString {
+                append("${source.itemCount} 项")
+                if (!source.hasAccess) append(" · 授权失效")
+                if (source.sourceId in coordinator.scanningSourceIds) append(" · 扫描中")
+            }
+            LandingAction(source.displayName, detail) { onOpen(source.sourceId) }
+        }
+        if (sources.isEmpty()) item { EmptyState("还没有可用来源") }
     }
-}
-
-@Composable
-private fun TrackRow(
-    media: MediaSourceRef,
-    hasSubtitle: Boolean,
-    statusLabel: String? = null,
-    unavailable: Boolean = false,
-    onPlay: () -> Unit,
-    onOpenMediaActions: () -> Unit,
-    onRemove: (() -> Unit)? = null,
-) {
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .clickable(enabled = !unavailable, onClick = onPlay)
-                .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(media.displayTitle, color = AppPrimaryText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                listOfNotNull(
-                    "不可用".takeIf { unavailable },
-                    statusLabel,
-                    if (media.kind == MediaKind.Video) "视频" else "音频",
-                    "字幕".takeIf { hasSubtitle },
-                    media.displayArtist ?: media.libraryFolderName,
-                ).joinToString(" · "),
-                color = if (unavailable) AppError else AppMutedText,
-                fontSize = 10.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        if (media.durationMs > 0L) Text(formatTime(media.durationMs), color = AppMutedText, fontSize = 11.sp)
-        TextButton(onClick = onOpenMediaActions) {
-            Text("详情", color = AppSecondaryText, fontSize = 11.sp)
-        }
-        onRemove?.let { remove ->
-            TextButton(onClick = remove) {
-                Text("移除", color = AppMutedText, fontSize = 11.sp)
-            }
-        }
-    }
-    Hairline()
 }
 
 @Composable
 private fun SourceDetail(
-    source: LibrarySourceState?,
-    library: MediaLibraryState,
-    onRequestLibraryAccess: () -> Unit,
-    onRefreshSource: (String) -> Unit,
-    onCancelScan: (String) -> Unit,
-    onRelinkFolder: (String) -> Unit,
-    onRemoveFolder: (String) -> Unit,
-    onPlay: (MediaSourceRef) -> Unit,
-    onPlayGroup: (List<MediaSourceRef>, Int) -> Unit,
-    onOpenDetails: (MediaSourceRef) -> Unit,
-    onCollect: (MediaSourceRef) -> Unit,
-    onRemoveIncluded: (Set<String>) -> Unit,
-    onIgnore: (MediaSourceRef) -> Unit,
-    onRestore: (MediaSourceRef) -> Unit,
-    modifier: Modifier = Modifier,
+    source: SourceSummary?,
+    items: LazyPagingItems<ContentSummary>,
+    isScanning: Boolean,
+    onRefresh: () -> Unit,
+    onCancel: () -> Unit,
+    onRelink: () -> Unit,
+    onRemove: () -> Unit,
+    onPlay: (String) -> Unit,
+    onDetails: (String) -> Unit,
 ) {
-    val currentSource = source
-    if (currentSource == null) {
-        StatusText("来源已移除", modifier = modifier)
+    if (source == null) {
+        EmptyState("来源已不存在")
         return
     }
-    val isScanning = currentSource.id in library.scanningSourceIds
-    val items = remember(library.config, currentSource.id) {
-        library.config.cachedSourceItems(currentSource.id)
-    }
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Text(
-            when {
-                isScanning -> "正在刷新这个来源；已缓存的内容仍可继续使用。"
-                !currentSource.hasAccess -> "这个来源需要重新授权。"
-                currentSource.errorMessage != null -> "来源暂时不可用，保留的内容不会被删除。"
-                else -> "这个来源只显示已缓存的发现结果；播放不要求先收录。"
-            },
-            color = AppSecondaryText,
-            fontSize = 12.sp,
-            lineHeight = 18.sp,
-        )
-        if (currentSource.kind == LibrarySourceKind.SystemLibrary) {
-            StatusText(systemLibraryAccessSummary(library))
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            QuietButton(if (isScanning) "停止" else "刷新", if (isScanning) onCancel else onRefresh)
+            if (source.kind == LibrarySourceKind.Folder) QuietButton("重新授权", onRelink)
+            if (source.sourceId != LibrarySourceIds.SystemLibrary) QuietButton("移除来源", onRemove, danger = true)
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "缓存 ${items.size} 项",
-                color = AppMutedText,
-                fontSize = 11.sp,
-                modifier = Modifier.weight(1f),
-            )
-            if (
-                currentSource.kind == LibrarySourceKind.SystemLibrary &&
-                    !library.hasCompleteSystemAccess &&
-                    !isScanning
-            ) {
-                TextButton(onClick = onRequestLibraryAccess) {
-                    Text(
-                        if (currentSource.hasAccess) "调整授权" else "授权",
-                        color = AppSecondaryText,
-                        fontSize = 11.sp,
-                    )
-                }
+        source.lastError?.let { Text(it, color = AppError, fontSize = 12.sp) }
+        PagedContentList(
+            items = items,
+            emptyText = "来源中没有可显示内容",
+            onPlay = onPlay,
+            onDetails = onDetails,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun PagedContentList(
+    items: LazyPagingItems<ContentSummary>,
+    emptyText: String,
+    onPlay: (String) -> Unit,
+    onDetails: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    onPlayLoaded: ((List<String>, Int) -> Unit)? = null,
+    trailing: @Composable (ContentSummary) -> Unit = {},
+) {
+    when {
+        items.loadState.refresh is LoadState.Loading -> EmptyState("正在加载…", modifier)
+        items.loadState.refresh is LoadState.Error ->
+            Column(modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                EmptyState("加载失败")
+                TextButton(onClick = items::retry) { Text("重试", color = AppAccent) }
             }
-            when (currentSource.kind) {
-                LibrarySourceKind.SystemLibrary ->
-                    if (currentSource.hasAccess) {
-                        QuietButton(
-                            if (isScanning) "取消" else "刷新",
-                            if (isScanning) {
-                                { onCancelScan(currentSource.id) }
-                            } else {
-                                { onRefreshSource(currentSource.id) }
+        items.itemCount == 0 -> EmptyState(emptyText, modifier)
+        else ->
+            LazyColumn(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                items(items.itemCount, key = { index -> items.peek(index)?.contentId ?: "placeholder-$index" }) { index ->
+                    items[index]?.let { summary ->
+                        SummaryRow(
+                            summary = summary,
+                            onPlay = {
+                                val loaded = items.itemSnapshotList.items.map(ContentSummary::contentId)
+                                val loadedIndex = loaded.indexOf(summary.contentId)
+                                if (onPlayLoaded != null && loadedIndex >= 0) onPlayLoaded(loaded, loadedIndex)
+                                else onPlay(summary.contentId)
                             },
+                            onDetails = onDetails,
+                            trailing = { trailing(summary) },
                         )
                     }
-                LibrarySourceKind.Folder ->
-                    QuietButton(
-                        when {
-                            isScanning -> "取消"
-                            !currentSource.hasAccess -> "重新授权"
-                            else -> "刷新"
-                        },
-                        when {
-                            isScanning -> ({ onCancelScan(currentSource.id) })
-                            !currentSource.hasAccess -> ({ onRelinkFolder(currentSource.id) })
-                            else -> ({ onRefreshSource(currentSource.id) })
-                        },
-                    )
-                LibrarySourceKind.LooseFiles -> Unit
-            }
-            if (currentSource.kind == LibrarySourceKind.Folder) {
-                TextButton(onClick = { onRemoveFolder(currentSource.id) }) {
-                    Text("移除来源", color = AppMutedText, fontSize = 11.sp)
+                }
+                if (items.loadState.append is LoadState.Loading) item { EmptyState("正在加载更多…") }
+                if (items.loadState.append is LoadState.Error) {
+                    item { TextButton(onClick = items::retry) { Text("加载更多失败，重试", color = AppAccent) } }
                 }
             }
-        }
-        currentSource.errorMessage?.let { StatusText(it, color = AppError) }
-        if (currentSource.kind == LibrarySourceKind.Folder && items.isNotEmpty()) {
-            QuietButton(
-                label = "播放全部",
-                onClick = { onPlayGroup(items, 0) },
-                emphasized = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        Hairline()
-        if (items.isEmpty()) {
-            StatusText(
-                if (isScanning) "扫描完成后，内容会显示在这里。" else "还没有缓存内容；点击刷新开始发现。",
-            )
-        } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(bottom = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                items(items, key = { "source-item-${currentSource.id}-${it.uri}" }) { media ->
-                    SourceMediaRow(
-                        media = media,
-                        decision = library.config.decisionFor(media),
-                        isUnavailable = library.isUnavailable(media),
-                        onPlay = { onPlay(media) },
-                        onOpenDetails = { onOpenDetails(media) },
-                        onCollect = { onCollect(media) },
-                        onRemoveIncluded = { onRemoveIncluded(setOf(media.uri.toString())) },
-                        onIgnore = { onIgnore(media) },
-                        onRestore = { onRestore(media) },
-                    )
-                }
-            }
-        }
     }
 }
 
 @Composable
-private fun SourceMediaRow(
-    media: MediaSourceRef,
-    decision: LibraryDecision,
-    isUnavailable: Boolean,
-    onPlay: () -> Unit,
-    onOpenDetails: () -> Unit,
-    onCollect: () -> Unit,
-    onRemoveIncluded: () -> Unit,
-    onIgnore: () -> Unit,
-    onRestore: () -> Unit,
+private fun SummaryRow(
+    summary: ContentSummary,
+    onPlay: (String) -> Unit,
+    onDetails: (String) -> Unit,
+    trailing: @Composable () -> Unit = {},
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clickable(enabled = !isUnavailable, onClick = onPlay)
-                    .padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(
-                    media.displayTitle,
-                    color = AppPrimaryText,
-                    fontSize = 14.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    listOfNotNull(
-                        "不可用".takeIf { isUnavailable },
-                        when (decision) {
-                            LibraryDecision.Included -> "已收录"
-                            LibraryDecision.Ignored -> "已忽略"
-                            LibraryDecision.Candidate -> "新发现"
-                        },
-                        candidateDetail(media, false),
-                    ).joinToString(" · "),
-                    color = AppMutedText,
-                    fontSize = 10.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Text("播放", color = AppSecondaryText, fontSize = 11.sp)
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            TextButton(onClick = onOpenDetails) {
-                Text("详情", color = AppSecondaryText, fontSize = 11.sp)
-            }
-            when (decision) {
-                LibraryDecision.Included ->
-                    TextButton(onClick = onRemoveIncluded) {
-                        Text("移出我的内容", color = AppMutedText, fontSize = 11.sp)
-                    }
-                LibraryDecision.Candidate -> {
-                    TextButton(onClick = onCollect) {
-                        Text("加入我的内容", color = AppSecondaryText, fontSize = 11.sp)
-                    }
-                    TextButton(onClick = onIgnore) {
-                        Text("忽略", color = AppMutedText, fontSize = 11.sp)
-                    }
-                }
-                LibraryDecision.Ignored ->
-                    TextButton(onClick = onRestore) {
-                        Text("恢复发现", color = AppSecondaryText, fontSize = 11.sp)
-                    }
-            }
-        }
-        Hairline()
-    }
-}
-
-@Composable
-private fun OpenContentDialog(
-    draft: SessionDraft,
-    onPickMedia: () -> Unit,
-    onCancel: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val isChecking = draft.media is DraftMedia.Checking
-    val isUnavailable = draft.media is DraftMedia.Unavailable
-    AlertDialog(
-        onDismissRequest = { if (isChecking) onCancel() else onDismiss() },
-        title = { Text("打开内容", color = AppPrimaryText) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    "选择一个音频或视频后会直接进入播放器；同步文字可以在播放现场继续添加。",
-                    color = AppSecondaryText,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp,
-                )
-                when (val media = draft.media) {
-                    is DraftMedia.Checking ->
-                        StatusText("正在打开 ${media.source.displayName}…")
-                    is DraftMedia.Unavailable ->
-                        StatusText(media.message, color = AppError)
-                    DraftMedia.None,
-                    is DraftMedia.Ready,
-                    -> StatusText("不会自动加入“我的内容”，但会保留在最近记录中。")
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = if (isChecking) onCancel else onPickMedia) {
-                Text(
-                    if (isChecking) "取消打开" else if (isUnavailable) "重新选择" else "选择内容",
-                    color = if (isChecking) AppMutedText else AppAccent,
-                )
-            }
-        },
-        dismissButton = {
-            if (!isChecking) {
-                TextButton(onClick = onDismiss) {
-                    Text("关闭", color = AppSecondaryText)
-                }
-            }
-        },
-        containerColor = AppSurfaceRaised,
-    )
-}
-
-@Composable
-private fun PlaylistChooserDialog(
-    item: MediaSourceRef,
-    playlists: List<LibraryPlaylist>,
-    onDismiss: () -> Unit,
-    onAdd: (String) -> Unit,
-    onCreate: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("添加到播放列表", color = AppPrimaryText) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(item.displayTitle, color = AppSecondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                playlists.forEach { playlist ->
-                    TextButton(onClick = { onAdd(playlist.id) }) {
-                        Text("${playlist.name} · ${playlist.items.size} 项", color = AppPrimaryText)
-                    }
-                }
-                if (playlists.isEmpty()) StatusText("还没有播放列表")
-            }
-        },
-        confirmButton = { TextButton(onClick = onCreate) { Text("新建播放列表", color = AppAccent) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = AppSecondaryText) } },
-        containerColor = AppSurfaceRaised,
-    )
-}
-
-@Composable
-private fun ContentDetailSurface(
-    content: PlayableContentUnit,
-    library: MediaLibraryState,
-    onDismiss: () -> Unit,
-    onPlay: () -> Unit,
-    onAddToTonight: () -> Unit,
-    onChoosePlaylist: () -> Unit,
-    onToggleCollected: () -> Unit,
-    onRelinkMedia: () -> Unit,
-    onSelectTextTrack: (TextTrackSlot, String?) -> Unit,
-    onRestoreAutomaticTextTrack: (TextTrackSlot) -> Unit,
-    onAddTextTrack: (TextTrackSlot) -> Unit,
-) {
-    val item = content.media
-    val isCollected = library.config.isCollected(item)
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(
-            modifier =
-                Modifier
-                    .fillMaxSize()
-                    .background(AppBackground)
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 22.dp, vertical = 12.dp),
+            modifier = Modifier.weight(1f).clickable { onPlay(summary.contentId) }.padding(vertical = 9.dp),
+        ) {
+            Text(
+                summary.media.displayTitle,
+                color = if (summary.availability == ContentAvailability.Unavailable) AppSecondaryText else AppPrimaryText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                listOfNotNull(
+                    summary.media.displayArtist,
+                    formatTime(summary.media.durationMs).takeIf { summary.media.durationMs > 0L },
+                    "不可用".takeIf { summary.availability == ContentAvailability.Unavailable },
+                ).joinToString(" · ").ifBlank { summary.media.displayName },
+                color = AppSecondaryText,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        trailing()
+        TextButton(onClick = { onDetails(summary.contentId) }) { Text("详情", color = AppSecondaryText) }
+    }
+    Hairline()
+}
+
+@Composable
+private fun ContentDetailDialog(
+    details: ContentDetails,
+    playlists: List<PlaylistSummary>,
+    onDismiss: () -> Unit,
+    onPlay: (String) -> Unit,
+    onAddTonight: (String) -> Unit,
+    onCollect: (String) -> Unit,
+    onUncollect: (String) -> Unit,
+    onIgnore: (String) -> Unit,
+    onRelink: (String) -> Unit,
+    onChoosePlaylist: () -> Unit,
+    onSelectTrack: (String, TextTrackSlot, String?) -> Unit,
+    onRestoreAutomatic: (String, TextTrackSlot) -> Unit,
+    onAddTrack: (String, TextTrackSlot) -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(
+            modifier = Modifier.fillMaxSize().background(AppBackground).statusBarsPadding().navigationBarsPadding().padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(onClick = onDismiss) {
-                    Text("返回", color = AppSecondaryText)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(details.activeMedia.displayTitle, color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                    details.activeMedia.displayArtist?.let { Text(it, color = AppSecondaryText) }
                 }
-                Text("内容详情", color = AppPrimaryText, fontSize = 16.sp)
-                Spacer(modifier = Modifier.height(1.dp).fillMaxWidth(0.12f))
+                TextButton(onClick = onDismiss) { Text("关闭", color = AppSecondaryText) }
             }
-            LazyColumn(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                item(key = "content-summary") {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Hairline()
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                QuietButton("播放", { onPlay(details.contentId) })
+                QuietButton("加入今晚", { onAddTonight(details.contentId) })
+                QuietButton("播放列表", onChoosePlaylist, enabled = playlists.isNotEmpty())
+                QuietButton("重新定位", { onRelink(details.contentId) })
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                when (details.disposition) {
+                    ContentDisposition.Collected -> QuietButton("取消收录", { onUncollect(details.contentId) })
+                    ContentDisposition.Ignored -> QuietButton("收录", { onCollect(details.contentId) })
+                    null -> {
+                        QuietButton("收录", { onCollect(details.contentId) })
+                        QuietButton("忽略", { onIgnore(details.contentId) })
+                    }
+                }
+            }
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                item {
+                    SectionHeading("媒体定位")
+                    details.mediaLocators.forEach { locator ->
                         Text(
-                            item.displayTitle,
-                            color = AppPrimaryText,
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Text(
-                            listOfNotNull(
-                                if (item.kind == MediaKind.Video) "视频" else "音频",
-                                formatTime(item.durationMs).takeIf { item.durationMs > 0L },
-                                "媒体不可用".takeIf {
-                                    content.availability == ContentAvailability.Unavailable
-                                },
-                            ).joinToString(" · "),
-                            color =
-                                if (content.availability == ContentAvailability.Unavailable) {
-                                    AppError
-                                } else {
-                                    AppMutedText
-                                },
+                            text = (if (locator.stableId == details.activeMediaLocatorId) "当前 · " else "") + locator.media.uri,
+                            color = if (locator.availability == ContentAvailability.Unavailable) AppError else AppSecondaryText,
                             fontSize = 12.sp,
-                        )
-                    }
-                }
-                item(key = "content-actions") {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            QuietButton(
-                                label = "立即播放",
-                                onClick = onPlay,
-                                enabled = content.availability != ContentAvailability.Unavailable,
-                                emphasized = true,
-                                modifier = Modifier.weight(1f),
-                            )
-                            QuietButton(
-                                label = "加入今晚",
-                                onClick = onAddToTonight,
-                                enabled = content.availability != ContentAvailability.Unavailable,
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            QuietButton(
-                                label = if (isCollected) "移出我的内容" else "加入我的内容",
-                                onClick = onToggleCollected,
-                                modifier = Modifier.weight(1f),
-                            )
-                            QuietButton(
-                                label = "添加到播放列表",
-                                onClick = onChoosePlaylist,
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                    }
-                }
-                item(key = "media-locators-heading") {
-                    SectionHeading("来源", "${content.mediaLocators.size} 个已知位置")
-                }
-                items(
-                    items =
-                        content.mediaLocators.sortedByDescending {
-                            it.stableId == content.activeMediaLocatorId
-                        },
-                    key = { "locator-${it.stableId}" },
-                ) { locator ->
-                    val sourceName =
-                        library.sources.firstOrNull { it.id == locator.media.sourceId }?.displayName
-                            ?: locator.media.libraryFolderName
-                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text(sourceName, color = AppPrimaryText, fontSize = 13.sp)
-                        Text(
-                            listOfNotNull(
-                                locator.media.displayName,
-                                "当前位置".takeIf {
-                                    locator.stableId == content.activeMediaLocatorId
-                                },
-                                when (locator.availability) {
-                                    ContentAvailability.Unchecked -> "尚未检查"
-                                    ContentAvailability.Available -> "可用"
-                                    ContentAvailability.Unavailable -> "不可用"
-                                },
-                            ).joinToString(" · "),
-                            color =
-                                if (locator.availability == ContentAvailability.Unavailable) {
-                                    AppError
-                                } else {
-                                    AppMutedText
-                                },
-                            fontSize = 10.sp,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(vertical = 4.dp),
                         )
                     }
                 }
-                item(key = "relink-media") {
-                    QuietButton(
-                        label =
-                            if (content.availability == ContentAvailability.Unavailable) {
-                                "重新定位媒体"
-                            } else {
-                                "更换或补充媒体位置"
-                            },
-                        onClick = onRelinkMedia,
-                        emphasized = content.availability == ContentAvailability.Unavailable,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                item(key = "text-heading") {
-                    SectionHeading("同步文字", "主字幕与副字幕长期属于这份内容")
-                }
-                TextTrackSlot.entries.forEach { slot ->
-                    item(key = "slot-${slot.name}") {
-                        ContentTextSlot(
-                            content = content,
+                item {
+                    SectionHeading("同步文字")
+                    TextTrackSlot.entries.forEach { slot ->
+                        TextTrackSlotEditor(
+                            details = details,
                             slot = slot,
-                            onSelectTrack = { onSelectTextTrack(slot, it) },
-                            onRestoreAutomatic = { onRestoreAutomaticTextTrack(slot) },
-                            onAddTrack = { onAddTextTrack(slot) },
+                            onSelect = { onSelectTrack(details.contentId, slot, it) },
+                            onAutomatic = { onRestoreAutomatic(details.contentId, slot) },
+                            onAdd = { onAddTrack(details.contentId, slot) },
                         )
-                    }
-                }
-                if (content.timedTextTracks.isNotEmpty()) {
-                    item(key = "text-assets-heading") {
-                        SectionHeading("已发现字幕", "${content.timedTextTracks.size} 轨")
-                    }
-                    items(
-                        items = content.timedTextTracks,
-                        key = { "text-${it.stableId}" },
-                    ) { track ->
-                        ContentTextAssetRow(
-                            track = track,
-                            isPrimary = track.stableId == content.activeText.primaryTrackId,
-                            isSecondary = track.stableId == content.activeText.secondaryTrackId,
-                            onSelectPrimary = {
-                                onSelectTextTrack(TextTrackSlot.Primary, track.stableId)
-                            },
-                            onSelectSecondary = {
-                                onSelectTextTrack(TextTrackSlot.Secondary, track.stableId)
-                            },
-                        )
-                    }
-                } else {
-                    item(key = "no-text-assets") {
-                        StatusText("还没有字幕资产；可以为主字幕或副字幕选择文件。")
                     }
                 }
             }
@@ -2346,240 +920,159 @@ private fun ContentDetailSurface(
 }
 
 @Composable
-private fun ContentTextSlot(
-    content: PlayableContentUnit,
+private fun TextTrackSlotEditor(
+    details: ContentDetails,
     slot: TextTrackSlot,
-    onSelectTrack: (String?) -> Unit,
-    onRestoreAutomatic: () -> Unit,
-    onAddTrack: () -> Unit,
+    onSelect: (String?) -> Unit,
+    onAutomatic: () -> Unit,
+    onAdd: () -> Unit,
 ) {
-    val trackId =
-        when (slot) {
-            TextTrackSlot.Primary -> content.activeText.primaryTrackId
-            TextTrackSlot.Secondary -> content.activeText.secondaryTrackId
+    val selectedId = when (slot) {
+        TextTrackSlot.Primary -> details.activeText.primaryTrackId
+        TextTrackSlot.Secondary -> details.activeText.secondaryTrackId
+    }
+    val mode = when (slot) {
+        TextTrackSlot.Primary -> details.activeText.primaryMode
+        TextTrackSlot.Secondary -> details.activeText.secondaryMode
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(if (slot == TextTrackSlot.Primary) "主文字" else "第二文字", color = AppPrimaryText, modifier = Modifier.weight(1f))
+        if (mode == TextSelectionMode.Manual) {
+            TextButton(onClick = onAutomatic) { Text("恢复自动", color = AppAccent) }
         }
-    val mode =
-        when (slot) {
-            TextTrackSlot.Primary -> content.activeText.primaryMode
-            TextTrackSlot.Secondary -> content.activeText.secondaryMode
-        }
-    val track = content.timedTextTracks.firstOrNull { it.stableId == trackId }
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        TextButton(onClick = onAdd) { Text("添加", color = AppAccent) }
+    }
+    details.timedTextTracks.forEach { track ->
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth().clickable { onSelect(track.stableId) }.padding(vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+            Text(if (track.stableId == selectedId) "已选" else "", color = AppAccent, fontSize = 12.sp, modifier = Modifier.padding(end = 8.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    if (slot == TextTrackSlot.Primary) "主字幕" else "副字幕",
-                    color = AppMutedText,
-                    fontSize = 11.sp,
-                )
-                Text(
-                    track?.let(::contentTextTrackLabel) ?: "关闭",
-                    color = AppPrimaryText,
-                    fontSize = 14.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Text(
-                if (mode == TextSelectionMode.Automatic) "自动" else "手动",
-                color = AppMutedText,
-                fontSize = 10.sp,
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            TextButton(onClick = onAddTrack) {
-                Text(if (track == null) "选择文件" else "更换文件", color = AppSecondaryText)
-            }
-            TextButton(onClick = { onSelectTrack(null) }) {
-                Text("关闭", color = AppMutedText)
-            }
-            if (mode == TextSelectionMode.Manual) {
-                TextButton(onClick = onRestoreAutomatic) {
-                    Text("恢复自动", color = AppSecondaryText)
-                }
-            }
-        }
-        track?.failureMessage?.let { StatusText(it, color = AppError) }
-    }
-    Hairline()
-}
-
-@Composable
-private fun ContentTextAssetRow(
-    track: TimedTextTrack,
-    isPrimary: Boolean,
-    isSecondary: Boolean,
-    onSelectPrimary: () -> Unit,
-    onSelectSecondary: () -> Unit,
-) {
-    val failed =
-        track.readiness in
-            setOf(TimedTextReadiness.Unreadable, TimedTextReadiness.ParseFailed)
-    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(contentTextTrackLabel(track), color = AppPrimaryText, fontSize = 13.sp)
-        Text(
-            contentTextTrackDetail(track),
-            color = if (failed) AppError else AppMutedText,
-            fontSize = 10.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            TextButton(onClick = onSelectPrimary, enabled = !isPrimary || failed) {
-                Text(if (isPrimary) "当前主字幕" else "设为主字幕", color = AppSecondaryText)
-            }
-            TextButton(
-                onClick = onSelectSecondary,
-                enabled = (!isSecondary || failed) && !isPrimary,
-            ) {
-                Text(if (isSecondary) "当前副字幕" else "设为副字幕", color = AppSecondaryText)
+                Text(track.label ?: track.locator.displayName, color = AppPrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(trackDetail(track), color = AppSecondaryText, fontSize = 11.sp)
             }
         }
     }
-    Hairline()
+    if (selectedId != null) {
+        TextButton(onClick = { onSelect(null) }) { Text("此槽不显示文字", color = AppSecondaryText) }
+    }
 }
 
-private fun contentTextTrackLabel(track: TimedTextTrack): String =
-    track.label?.takeIf(String::isNotBlank)
-        ?: track.language?.takeIf(String::isNotBlank)
-        ?: track.locator.displayName
-
-private fun contentTextTrackDetail(track: TimedTextTrack): String =
-    listOfNotNull(
-        when (track.origin) {
-            TimedTextOrigin.Embedded -> "内嵌"
-            TimedTextOrigin.Sidecar -> "外挂"
-            TimedTextOrigin.Lyrics -> "歌词"
-            TimedTextOrigin.Generated -> "生成"
-        },
-        track.format?.uppercase(),
-        when (track.matchBasis) {
-            TimedTextMatchBasis.UserSelected -> "用户确认"
-            TimedTextMatchBasis.ExactStem -> "同名关联"
-            TimedTextMatchBasis.LanguageSuffix -> "语言后缀"
-            TimedTextMatchBasis.FilenameCandidate -> "待确认候选"
-            TimedTextMatchBasis.EmbeddedMetadata -> "容器发现"
-        },
-        when (track.readiness) {
-            TimedTextReadiness.Unknown -> "待验证"
-            TimedTextReadiness.Ready -> "原文件可用"
-            TimedTextReadiness.PrivateCopy -> "正在使用应用副本"
-            TimedTextReadiness.Unreadable -> "文件不可读"
-            TimedTextReadiness.ParseFailed -> "无法解析"
-        },
-        "已保存应用副本".takeIf { track.locator.cachedFileName != null },
-    ).joinToString(" · ")
-
 @Composable
-private fun CreatePlaylistDialog(
-    name: String,
-    onNameChanged: (String) -> Unit,
+private fun PlaylistChooser(
+    playlists: List<PlaylistSummary>,
+    onChoose: (String) -> Unit,
+    onCreate: () -> Unit,
     onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("新建播放列表", color = AppPrimaryText) },
+        title = { Text("加入播放列表") },
         text = {
-            OutlinedTextField(value = name, onValueChange = onNameChanged, label = { Text("名称") }, singleLine = true)
-        },
-        confirmButton = {
-            TextButton(onClick = onConfirm, enabled = name.isNotBlank()) {
-                Text("创建", color = if (name.isNotBlank()) AppAccent else AppMutedText)
+            Column {
+                playlists.forEach { playlist ->
+                    TextButton(onClick = { onChoose(playlist.playlistId) }) {
+                        Text(playlist.name, color = AppPrimaryText)
+                    }
+                }
+                TextButton(onClick = onCreate) { Text("新建播放列表", color = AppAccent) }
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = AppSecondaryText) } },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
         containerColor = AppSurfaceRaised,
     )
 }
 
 @Composable
-private fun DisplaySettings(
-    profile: DisplayProfile,
-    onProfileChanged: (DisplayProfile) -> Unit,
-) {
-    GlowPreview(profile)
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionHeading("预设", profile.name)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            DisplayProfile.Presets.forEach { preset ->
-                QuietButton(preset.name, { onProfileChanged(preset) }, Modifier.weight(1f), emphasized = preset == profile)
+private fun CreatePlaylistDialog(onCreate: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("新建播放列表") },
+        text = {
+            OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("名称") }, singleLine = true)
+        },
+        confirmButton = {
+            TextButton(onClick = { onCreate(name) }, enabled = name.isNotBlank()) { Text("创建", color = AppAccent) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        containerColor = AppSurfaceRaised,
+    )
+}
+
+@Composable
+private fun DisplaySettings(profile: DisplayProfile, onChanged: (DisplayProfile) -> Unit) {
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            SectionHeading("预设")
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                DisplayProfile.Presets.forEach { preset ->
+                    Segment(preset.name, profile.name == preset.name) { onChanged(preset) }
+                }
+            }
+        }
+        item {
+            SettingSlider("窗口亮度", profile.glowWindowBrightness, 0.01f..0.30f) {
+                onChanged(profile.copy(name = DisplayProfile.CustomName, glowWindowBrightness = it))
+            }
+            SettingSlider("文字亮度", profile.glowSubtitleLevel.toFloat(), 4f..96f) {
+                onChanged(profile.copy(name = DisplayProfile.CustomName, glowSubtitleLevel = it.toInt()))
+            }
+            SettingSlider("控制亮度", profile.glowControlLevel.toFloat(), 24f..160f) {
+                onChanged(profile.copy(name = DisplayProfile.CustomName, glowControlLevel = it.toInt()))
+            }
+            SettingSlider("文字大小", profile.glowSubtitleSizeSp, 18f..36f) {
+                onChanged(profile.copy(name = DisplayProfile.CustomName, glowSubtitleSizeSp = it))
+            }
+            SettingSlider("文字位置", profile.glowSubtitleVerticalBias, -0.60f..0.60f) {
+                onChanged(profile.copy(name = DisplayProfile.CustomName, glowSubtitleVerticalBias = it))
             }
         }
     }
-    Hairline()
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        SectionHeading("微光校准", "窗口与发光强度")
-        DisplaySettingSlider("环境亮度", windowBrightnessLabel(profile.glowWindowBrightness), profile.glowWindowBrightness, 0.01f..0.30f) {
-            onProfileChanged(profile.copy(name = DisplayProfile.CustomName, glowWindowBrightness = it))
-        }
-        DisplaySettingSlider("文字亮度", luminanceLabel(profile.glowSubtitleLevel, 4, 96), profile.glowSubtitleLevel.toFloat(), 4f..96f) {
-            onProfileChanged(profile.copy(name = DisplayProfile.CustomName, glowSubtitleLevel = it.roundToInt()))
-        }
-        DisplaySettingSlider("控制亮度", luminanceLabel(profile.glowControlLevel, 24, 160), profile.glowControlLevel.toFloat(), 24f..160f) {
-            onProfileChanged(profile.copy(name = DisplayProfile.CustomName, glowControlLevel = it.roundToInt()))
-        }
-    }
-    Hairline()
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        SectionHeading("字幕外观", "独立于屏幕亮度")
-        DisplaySettingSlider("字号", subtitleSizeLabel(profile.glowSubtitleSizeSp), profile.glowSubtitleSizeSp, 18f..36f) {
-            onProfileChanged(profile.copy(name = DisplayProfile.CustomName, glowSubtitleSizeSp = it))
-        }
-        DisplaySettingSlider("垂直位置", verticalPositionLabel(profile.glowSubtitleVerticalBias), profile.glowSubtitleVerticalBias, -0.60f..0.60f) {
-            onProfileChanged(profile.copy(name = DisplayProfile.CustomName, glowSubtitleVerticalBias = it))
-        }
-    }
-    Hairline()
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionHeading("微光交互", "锁定态")
-        Text(
-            "左右区域双击快退或快进，中央双击播放或暂停，长按任意位置显示临时控制。普通单击不会打断沉浸。",
-            color = AppSecondaryText,
-            fontSize = 12.sp,
-            lineHeight = 18.sp,
-        )
-    }
-    Spacer(modifier = Modifier.height(8.dp))
 }
 
 @Composable
-private fun GlowPreview(profile: DisplayProfile) {
-    val subtitleLevel = profile.glowSubtitleLevel.coerceIn(0, 255)
-    val controlLevel = profile.glowControlLevel.coerceIn(0, 255)
-    Box(modifier = Modifier.fillMaxWidth().height(210.dp).background(Color.Black)) {
-        Text(
-            "声音继续，画面退场",
-            modifier =
-                Modifier.align(BiasAlignment(0f, profile.glowSubtitleVerticalBias.coerceIn(-0.60f, 0.60f)))
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp),
-            color = Color(subtitleLevel, subtitleLevel, subtitleLevel),
-            fontSize = profile.glowSubtitleSizeSp.coerceIn(18f, 36f).sp,
-            lineHeight = (profile.glowSubtitleSizeSp.coerceIn(18f, 36f) * 1.4f).sp,
-            textAlign = TextAlign.Center,
-        )
-        Text(
-            "长按解锁",
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
-            color = Color(controlLevel, controlLevel, controlLevel),
-            fontSize = 11.sp,
+private fun SettingSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChanged: (Float) -> Unit) {
+    Column {
+        Row {
+            Text(label, color = AppPrimaryText, modifier = Modifier.weight(1f))
+            Text("%.2f".format(value), color = AppSecondaryText, fontSize = 12.sp)
+        }
+        Slider(
+            value = value.coerceIn(range.start, range.endInclusive),
+            onValueChange = onChanged,
+            valueRange = range,
+            colors = SliderDefaults.colors(thumbColor = AppAccent, activeTrackColor = AppAccent),
         )
     }
 }
 
 @Composable
-private fun SectionHeading(
-    title: String,
-    detail: String? = null,
-) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Text(title, color = AppPrimaryText, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-        detail?.let { Text(it, color = AppMutedText, fontSize = 11.sp) }
+private fun HomeNavigation(section: HomeSection, onChanged: (HomeSection) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        listOf(
+            HomeSection.Home to "首页",
+            HomeSection.Tonight to "今晚",
+            HomeSection.MyContent to "内容",
+            HomeSection.Discoveries to "发现",
+            HomeSection.Sources to "来源",
+        ).forEach { (target, label) ->
+            TextButton(onClick = { onChanged(target) }) {
+                Text(label, color = if (section == target) AppAccent else AppSecondaryText, fontSize = 12.sp)
+            }
+        }
     }
+}
+
+@Composable
+private fun Segment(label: String, selected: Boolean, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        border = BorderStroke(1.dp, if (selected) AppAccent else AppHairline),
+        colors = ButtonDefaults.outlinedButtonColors(containerColor = if (selected) AppSurface else Color.Transparent),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 5.dp),
+    ) { Text(label, color = if (selected) AppPrimaryText else AppSecondaryText, fontSize = 12.sp) }
 }
 
 @Composable
@@ -2587,205 +1080,51 @@ private fun QuietButton(
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    danger: Boolean = false,
     enabled: Boolean = true,
-    emphasized: Boolean = false,
 ) {
     OutlinedButton(
         onClick = onClick,
-        enabled = enabled,
         modifier = modifier,
-        border = BorderStroke(1.dp, if (emphasized) AppAccent else AppHairline),
-        colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.Transparent, contentColor = if (emphasized) AppAccent else AppPrimaryText, disabledContentColor = AppMutedText),
-    ) {
-        Text(label, fontSize = 13.sp)
-    }
+        enabled = enabled,
+        border = BorderStroke(1.dp, if (danger) AppError.copy(alpha = 0.6f) else AppHairline),
+        colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.Transparent),
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+    ) { Text(label, color = if (danger) AppError else AppPrimaryText, fontSize = 12.sp) }
 }
 
 @Composable
-private fun DisplaySettingSlider(
-    label: String,
-    valueLabel: String,
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    onValueChange: (Float) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(label, color = AppSecondaryText, fontSize = 12.sp)
-            Text(valueLabel, color = AppPrimaryText, fontSize = 12.sp)
-        }
-        Slider(
-            value = value.coerceIn(valueRange),
-            onValueChange = onValueChange,
-            valueRange = valueRange,
-            modifier = Modifier.semantics { contentDescription = "$label，$valueLabel" },
-            colors = SliderDefaults.colors(thumbColor = AppAccent, activeTrackColor = AppSecondaryText, inactiveTrackColor = AppHairline),
-        )
-    }
+private fun SectionHeading(text: String) {
+    Text(text, color = AppSecondaryText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
 }
 
 @Composable
 private fun Hairline() {
-    Spacer(modifier = Modifier.fillMaxWidth().height(1.dp).background(AppHairline))
+    Spacer(Modifier.fillMaxWidth().height(1.dp).background(AppHairline))
 }
 
 @Composable
-private fun StatusText(
-    text: String,
-    modifier: Modifier = Modifier,
-    color: Color = AppMutedText,
-) {
-    Text(text, modifier = modifier, color = color, fontSize = 11.sp, lineHeight = 16.sp)
-}
-
-private fun availablePlaylists(library: MediaLibraryState): List<ResolvedPlaylist> =
-    library.config.playlists.map { playlist ->
-        ResolvedPlaylist(
-            id = playlist.id,
-            name = playlist.name,
-            items = playlist.items,
-        )
+private fun EmptyState(text: String, modifier: Modifier = Modifier) {
+    Box(modifier = modifier.fillMaxWidth().padding(vertical = 28.dp), contentAlignment = Alignment.Center) {
+        Text(text, color = AppSecondaryText, fontSize = 13.sp)
     }
-
-private fun resolvePlaylist(
-    playlistId: String,
-    library: MediaLibraryState,
-): ResolvedPlaylist? =
-    availablePlaylists(library).firstOrNull { it.id == playlistId }
-
-private fun resolveRecentItems(library: MediaLibraryState): List<MediaSourceRef> =
-    distinctContentItems(
-        items =
-            library.config.recentItems.map { recent ->
-                library.config.contentUnitFor(recent)?.media ?: recent
-            },
-        library = library,
-    )
-
-private fun orderedCollectedItems(
-    library: MediaLibraryState,
-    recentItems: List<MediaSourceRef>,
-): List<MediaSourceRef> =
-    orderCollectedContent(
-        recentItems = recentItems,
-        collectedItems = library.items,
-        stableKey = { media ->
-            library.config.contentUnitFor(media)?.stableId ?: "uri:${media.uri}"
-        },
-        isCollected = library.config::isCollected,
-    )
-
-private fun distinctContentItems(
-    items: List<MediaSourceRef>,
-    library: MediaLibraryState,
-): List<MediaSourceRef> =
-    items.distinctBy { media ->
-        library.config.contentUnitFor(media)?.stableId ?: "uri:${media.uri}"
-    }
-
-private fun MediaLibraryState.isUnavailable(media: MediaSourceRef): Boolean =
-    config.contentUnitFor(media)?.let {
-        it.availability == ContentAvailability.Unavailable
-    } ?: (sources.firstOrNull { it.id == media.sourceId }?.hasAccess == false)
-
-private fun sourceSummary(library: MediaLibraryState): String {
-    val looseItemCount =
-        library.sources
-            .firstOrNull { it.kind == LibrarySourceKind.LooseFiles }
-            ?.itemCount
-            ?: 0
-    return buildList {
-        if (library.config.folders.isNotEmpty()) add("${library.config.folders.size} 个文件夹")
-        if (library.hasSystemAccess) add("设备媒体库")
-        if (looseItemCount > 0) add("$looseItemCount 项单独打开记录")
-    }.ifEmpty {
-        listOf("添加文件夹或管理设备媒体库")
-    }.joinToString(" · ")
 }
 
-private fun MediaSourceRef.matches(query: String): Boolean =
-    listOf(displayTitle, displayArtist, album, folder, displayName)
-        .any { value -> value?.contains(query, ignoreCase = true) == true }
-
-private fun MediaLibraryState.hasSuggestedSubtitleFor(media: MediaSourceRef): Boolean =
-    suggestedTextTracks.any { it.mediaUriValue == media.uri.toString() } ||
-        config.hasTimedTextTracks(media)
-
-private fun MediaLibraryState.hasSubtitleFor(media: MediaSourceRef): Boolean =
-    config.activeTextTrack(media, TextTrackSlot.Primary)?.toSubtitleSourceRef() != null
-
-private fun collectionDetail(items: List<MediaSourceRef>): String {
-    val audioCount = items.count { it.kind == MediaKind.Audio }
-    val videoCount = items.size - audioCount
-    return listOfNotNull(
-        "$audioCount 音频".takeIf { audioCount > 0 },
-        "$videoCount 视频".takeIf { videoCount > 0 },
-    ).ifEmpty { listOf("0 项") }.joinToString(" · ")
+private fun sourceSummary(sources: List<SourceSummary>): String {
+    val folders = sources.count { it.kind == LibrarySourceKind.Folder }
+    val total = sources.sumOf(SourceSummary::itemCount)
+    return "$total 项 · $folders 个文件夹"
 }
 
-private fun systemLibraryAccessSummary(library: MediaLibraryState): String =
-    listOf(
-        if (library.hasAudioAccess) "音频已授权" else "音频未授权",
-        when (library.videoAccess) {
-            VideoLibraryAccess.Full -> "视频已完整授权"
-            VideoLibraryAccess.Partial -> "视频仅限所选范围"
-            VideoLibraryAccess.None -> "视频未授权"
-        },
-    ).joinToString(" · ")
-
-private fun candidateDetail(
-    media: MediaSourceRef,
-    hasSubtitle: Boolean,
-): String =
+private fun trackDetail(track: TimedTextTrack): String =
     listOfNotNull(
-        if (media.kind == MediaKind.Video) "视频" else "音频",
-        formatTime(media.durationMs).takeIf { media.durationMs > 0L },
-        if (media.videoWidth > 0 && media.videoHeight > 0) "${media.videoWidth}×${media.videoHeight}" else null,
-        formatFileSize(media.sizeBytes).takeIf { media.sizeBytes > 0L },
-        "匹配字幕".takeIf { hasSubtitle },
+        when (track.origin) {
+            TimedTextOrigin.Embedded -> "内嵌"
+            TimedTextOrigin.Sidecar -> "外挂"
+            TimedTextOrigin.Lyrics -> "歌词"
+            TimedTextOrigin.Generated -> "生成"
+        },
+        track.language,
+        track.format,
+        track.readiness.name,
     ).joinToString(" · ")
-
-private fun formatFileSize(bytes: Long): String =
-    when {
-        bytes >= 1_073_741_824L -> "%.1f GB".format(bytes / 1_073_741_824.0)
-        bytes >= 1_048_576L -> "%.1f MB".format(bytes / 1_048_576.0)
-        bytes >= 1_024L -> "%.1f KB".format(bytes / 1_024.0)
-        else -> "$bytes B"
-    }
-
-private fun windowBrightnessLabel(value: Float): String =
-    when {
-        value < 0.055f -> "极暗"
-        value < 0.11f -> "柔和"
-        value < 0.19f -> "清晰"
-        else -> "明亮"
-    }
-
-private fun luminanceLabel(value: Int, minimum: Int, maximum: Int): String {
-    val ratio = (value - minimum).toFloat() / (maximum - minimum).toFloat()
-    return when {
-        ratio < 0.25f -> "极暗"
-        ratio < 0.55f -> "柔和"
-        ratio < 0.82f -> "清晰"
-        else -> "明亮"
-    }
-}
-
-private fun subtitleSizeLabel(value: Float): String =
-    when {
-        value < 22f -> "紧凑"
-        value < 28f -> "标准"
-        value < 33f -> "醒目"
-        else -> "大字"
-    }
-
-private fun verticalPositionLabel(bias: Float): String {
-    val percent = (bias.coerceIn(-0.60f, 0.60f) * 100).roundToInt()
-    return when {
-        percent.absoluteValue < 5 -> "中央"
-        percent < 0 -> "上移 ${percent.absoluteValue}%"
-        else -> "下移 $percent%"
-    }
-}
-
-private const val HomePreviewItemCount = 3

@@ -28,7 +28,7 @@
 
 - 删除独立 Tonight 状态、存储以及 Tonight 与运行时 Queue 之间的比对和同步逻辑。
 - Home 与 Player 读取并编辑同一份当前 Queue，避免两套顺序出现分歧。
-- `SessionStore` 只负责进程重建和次日恢复所需的快照，不成为另一份队列事实来源。
+- Room 中的 `current_playback_session` / `current_queue_entry` 只负责进程重建和次日恢复所需的快照，写入由 `PlaybackService` 统一协调，不成为另一份队列事实来源。
 - 后续需求如果确实需要未来计划，应先判断它是否属于 Playlist；只有真实行为证据证明 Playlist 仍无法承载时，才重新评估独立 Draft。
 
 ## 文档优先级

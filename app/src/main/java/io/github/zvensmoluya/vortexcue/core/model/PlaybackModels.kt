@@ -70,117 +70,12 @@ data class LoadedSubtitle(
     val usedPrivateCopy: Boolean = false,
 )
 
-sealed interface DraftMedia {
-    val source: MediaSourceRef?
-
-    data object None : DraftMedia {
-        override val source: MediaSourceRef? = null
-    }
-
-    data class Checking(
-        override val source: MediaSourceRef,
-    ) : DraftMedia
-
-    data class Ready(
-        override val source: MediaSourceRef,
-    ) : DraftMedia
-
-    data class Unavailable(
-        override val source: MediaSourceRef,
-        val message: String,
-    ) : DraftMedia
-}
-
-sealed interface DraftSubtitle {
-    data object None : DraftSubtitle
-
-    data class Loading(
-        val source: SubtitleSourceRef,
-    ) : DraftSubtitle
-
-    data class Ready(
-        val subtitle: LoadedSubtitle,
-    ) : DraftSubtitle
-
-    data class Failed(
-        val source: SubtitleSourceRef,
-        val message: String,
-    ) : DraftSubtitle
-}
-
-internal fun DraftSubtitle.sourceOrNull(): SubtitleSourceRef? =
-    when (this) {
-        DraftSubtitle.None -> null
-        is DraftSubtitle.Loading -> source
-        is DraftSubtitle.Ready -> subtitle.source
-        is DraftSubtitle.Failed -> source
-    }
-
-data class SessionDraft(
-    val media: DraftMedia = DraftMedia.None,
-    val subtitle: DraftSubtitle = DraftSubtitle.None,
-    val secondarySubtitle: DraftSubtitle = DraftSubtitle.None,
-)
-
-internal fun SessionDraft.subtitleFor(slot: TextTrackSlot): DraftSubtitle =
-    when (slot) {
-        TextTrackSlot.Primary -> subtitle
-        TextTrackSlot.Secondary -> secondarySubtitle
-    }
-
-internal fun SessionDraft.withSubtitle(
-    slot: TextTrackSlot,
-    value: DraftSubtitle,
-): SessionDraft =
-    when (slot) {
-        TextTrackSlot.Primary -> copy(subtitle = value)
-        TextTrackSlot.Secondary -> copy(secondarySubtitle = value)
-    }
-
 data class ActiveSession(
     val media: MediaSourceRef,
     val subtitle: LoadedSubtitle?,
     val secondarySubtitle: LoadedSubtitle? = null,
     val subtitleOffsetMs: Long = 0L,
 )
-
-data class RestorableSession(
-    val session: ActiveSession,
-    val positionMs: Long,
-    val durationMs: Long,
-    val playbackSpeed: Float,
-    val mediaAvailability: MediaAvailability = MediaAvailability.Ready,
-    val queue: List<MediaSourceRef> = listOf(session.media),
-    val currentIndex: Int = 0,
-    val shuffleEnabled: Boolean = false,
-    val repeatMode: Int = 0,
-    val lastSurface: PlayerSurface = PlayerSurface.Normal,
-)
-
-internal fun RestorableSession.relinkMedia(
-    replacement: MediaSourceRef,
-    availability: MediaAvailability,
-): RestorableSession {
-    val previousUri = session.media.uri
-    return copy(
-        session = session.copy(media = replacement),
-        mediaAvailability = availability,
-        queue =
-            queue.map { queued ->
-                if (queued.uri == previousUri) replacement else queued
-            },
-    )
-}
-
-sealed interface MediaAvailability {
-    data object Checking : MediaAvailability
-
-    data object Ready : MediaAvailability
-
-    data class Unavailable(
-        val message: String,
-    ) : MediaAvailability
-}
 
 data class DisplayProfile(
     val name: String,

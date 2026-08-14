@@ -1,0 +1,343 @@
+package io.github.zvensmoluya.vortexcue.data.db
+
+import androidx.paging.PagingSource
+import androidx.room3.Room
+import androidx.room3.withWriteTransaction
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+
+class VortexDatabaseTest {
+    @get:Rule
+    val temporaryFolder = TemporaryFolder()
+
+    private lateinit var database: VortexDatabase
+    private lateinit var contentDao: ContentDao
+    private lateinit var playbackDao: PlaybackDao
+
+    @Before
+    fun setUp() {
+        database =
+            Room.inMemoryDatabaseBuilder<VortexDatabase> { VortexDatabase_Impl() }
+                .setDriver(BundledSQLiteDriver())
+                .setQueryCoroutineContext(Dispatchers.IO)
+                .build()
+        contentDao = database.contentDao()
+        playbackDao = database.playbackDao()
+    }
+
+    @After
+    fun tearDown() {
+        database.close()
+    }
+
+    @Test
+    fun activeLocatorMustBelongToItsContent() = runBlocking {
+        insertContent("first", "content://media/first")
+        insertContent("second", "content://media/second")
+
+        val failure =
+            runCatching {
+                contentDao.upsertActiveLocator(
+                    ActiveMediaLocatorEntity(contentId = "first", locatorId = "locator-second"),
+                )
+            }
+
+        assertTrue(failure.isFailure)
+        assertEquals("locator-first", contentDao.activeLocator("first")?.locatorId)
+    }
+
+    @Test
+    fun textSelectionTrackMustBelongToItsContent() = runBlocking {
+        insertContent("first", "content://media/first")
+        insertContent("second", "content://media/second")
+        contentDao.upsertTextTrack(textTrack("track-second", "second"))
+
+        val failure =
+            runCatching {
+                contentDao.upsertTextSelection(
+                    TextSelectionEntity("first", "Primary", "track-second", "Manual"),
+                )
+            }
+
+        assertTrue(failure.isFailure)
+        assertTrue(contentDao.textSelections("first").isEmpty())
+    }
+
+    @Test
+    fun playlistAndTonightKeepOneEntryPerContent() = runBlocking {
+        insertContent("first", "content://media/first")
+        val now = 10L
+        contentDao.upsertPlaylist(PlaylistEntity("playlist", "Test", now, now))
+        contentDao.upsertPlaylistEntry(PlaylistEntryEntity("playlist", "first", 0, now))
+        contentDao.upsertPlaylistEntry(PlaylistEntryEntity("playlist", "first", 0, now + 1))
+        playbackDao.upsertQueueEntries(
+            listOf(CurrentQueueEntryEntity("first", 0, now)),
+        )
+        playbackDao.upsertQueueEntries(
+            listOf(CurrentQueueEntryEntity("first", 0, now + 1)),
+        )
+
+        assertEquals(1, contentDao.playlistEntries("playlist").size)
+        assertEquals(1, playbackDao.queueEntries().size)
+    }
+
+    @Test
+    fun dispositionIsMutuallyExclusiveAndPlaylistCollectionIsAtomic() = runBlocking {
+        insertContent("first", "content://media/first")
+        contentDao.upsertDisposition(ContentDispositionEntity("first", false, 1L))
+        database.withWriteTransaction {
+            contentDao.upsertPlaylist(PlaylistEntity("playlist", "Test", 2L, 2L))
+            contentDao.upsertPlaylistEntry(PlaylistEntryEntity("playlist", "first", 0, 2L))
+            contentDao.upsertDisposition(ContentDispositionEntity("first", true, 2L))
+        }
+
+        assertEquals(true, contentDao.disposition("first")?.isCollected)
+        contentDao.deletePlaylistEntry("playlist", "first")
+        assertEquals(true, contentDao.disposition("first")?.isCollected)
+    }
+
+    @Test
+    fun failedScanKeepsGenerationAndSuccessfulScanInvalidatesOlderLocators() = runBlocking {
+        val source = SourceEntity("source", "Folder", "content://tree", "Folder", createdAtMs = 1L)
+        contentDao.upsertSource(source.copy(generation = 1L, lastIndexedAtMs = 1L))
+        insertContent("first", "content://media/first", sourceId = "source", generation = 1L)
+
+        contentDao.upsertSource(
+            source.copy(generation = 1L, lastIndexedAtMs = 1L, lastError = "failed"),
+        )
+        assertEquals(1L, contentDao.source("source")?.generation)
+        assertEquals("Available", contentDao.locator("locator-first")?.availability)
+
+        database.withWriteTransaction {
+            contentDao.upsertSource(source.copy(generation = 2L, lastIndexedAtMs = 2L))
+            contentDao.markOlderSourceLocatorsUnavailable("source", 2L, 2L)
+        }
+        assertEquals("Unavailable", contentDao.locator("locator-first")?.availability)
+    }
+
+    @Test
+    fun durableUserRelationsAreGarbageCollectionRoots() = runBlocking {
+        insertContent("collected", "content://media/collected", availability = "Unavailable")
+        insertContent("ignored", "content://media/ignored", availability = "Unavailable")
+        insertContent("recent", "content://media/recent", availability = "Unavailable")
+        insertContent("playlist", "content://media/playlist", availability = "Unavailable")
+        insertContent("queued", "content://media/queued", availability = "Unavailable")
+        insertContent("draft", "content://media/draft", availability = "Unavailable")
+        insertContent("manual-track", "content://media/manual-track", availability = "Unavailable")
+        insertContent("manual-selection", "content://media/manual-selection", availability = "Unavailable")
+        insertContent("orphan", "content://media/orphan", availability = "Unavailable")
+        contentDao.upsertDisposition(ContentDispositionEntity("collected", true, 1L))
+        contentDao.upsertDisposition(ContentDispositionEntity("ignored", false, 1L))
+        contentDao.upsertRecent(RecentEntryEntity("recent", 1L))
+        contentDao.upsertPlaylist(PlaylistEntity("playlist-root", "Root", 1L, 1L))
+        contentDao.upsertPlaylistEntry(PlaylistEntryEntity("playlist-root", "playlist", 0, 1L))
+        playbackDao.upsertQueueEntries(listOf(CurrentQueueEntryEntity("queued", 0, 1L)))
+        contentDao.upsertDraft(CurrentDraftEntity(contentId = "draft", updatedAtMs = 1L))
+        contentDao.upsertTextTrack(textTrack("track-manual", "manual-track"))
+        contentDao.upsertTextTrack(
+            textTrack("track-selected", "manual-selection").copy(matchBasis = "ExactStem"),
+        )
+        contentDao.upsertTextSelection(
+            TextSelectionEntity("manual-selection", "Primary", "track-selected", "Manual"),
+        )
+
+        val candidates = contentDao.garbageCollectableContentIds().toSet()
+
+        assertEquals(setOf("orphan"), candidates)
+    }
+
+    @Test
+    fun pagingReadsActiveLocatorMetadataWithoutContentCopy() = runBlocking {
+        repeat(55) { index ->
+            val id = "content-$index"
+            insertContent(id, "content://media/$index", dateAdded = index.toLong())
+            contentDao.upsertDisposition(ContentDispositionEntity(id, true, index.toLong()))
+        }
+
+        val result =
+            contentDao.pagedCollected().load(
+                PagingSource.LoadParams.Refresh(key = null, loadSize = 50, placeholdersEnabled = false),
+            )
+        val page = result as PagingSource.LoadResult.Page
+
+        assertEquals(50, page.data.size)
+        assertEquals("content-54", page.data.first().contentId)
+        assertEquals("Title 54", page.data.first().title)
+    }
+
+    @Test
+    fun recentHistoryIsTrimmedToFiftyEntries() = runBlocking {
+        repeat(55) { index ->
+            val id = "recent-$index"
+            insertContent(id, "content://media/recent/$index")
+            contentDao.upsertRecent(RecentEntryEntity(id, index.toLong()))
+        }
+
+        contentDao.trimRecent(50)
+        val result =
+            contentDao.pagedRecent().load(
+                PagingSource.LoadParams.Refresh(key = null, loadSize = 60, placeholdersEnabled = false),
+            ) as PagingSource.LoadResult.Page
+
+        assertEquals(50, result.data.size)
+        assertEquals("recent-54", result.data.first().contentId)
+        assertEquals("recent-5", result.data.last().contentId)
+    }
+
+    @Test
+    fun sourceSummaryCountsOnlyActiveLocators() = runBlocking {
+        contentDao.upsertSource(
+            SourceEntity("source", "Folder", "content://tree", "Folder", createdAtMs = 1L),
+        )
+        insertContent("first", "content://media/first", sourceId = "source")
+        insertContent("second", "content://media/second", sourceId = "source")
+        contentDao.upsertLocator(
+            requireNotNull(contentDao.locator("locator-first")).copy(
+                locatorId = "locator-first-old",
+                uriValue = "content://media/first-old",
+                identityKey = "identity-first-old",
+            ),
+        )
+
+        val summary = contentDao.observeSourceSummaries().first().single()
+
+        assertEquals(2, summary.itemCount)
+    }
+
+    @Test
+    fun staleProgressCannotUpdateRevisedOrClearedQueue() = runBlocking {
+        insertContent("first", "content://media/first")
+        playbackDao.upsertQueueEntries(listOf(CurrentQueueEntryEntity("first", 0, 1L)))
+        playbackDao.upsertSession(
+            CurrentPlaybackSessionEntity(
+                currentContentId = "first",
+                queueRevision = 3L,
+                updatedAtMs = 1L,
+            ),
+        )
+
+        assertEquals(
+            0,
+            playbackDao.updateProgress("first", 100L, 1_000L, 1f, expectedRevision = 2L, updatedAtMs = 2L),
+        )
+        assertEquals(
+            1,
+            playbackDao.updateProgress("first", 100L, 1_000L, 1f, expectedRevision = 3L, updatedAtMs = 2L),
+        )
+        playbackDao.clearQueueEntries()
+        playbackDao.upsertSession(
+            requireNotNull(playbackDao.session()).copy(
+                currentContentId = null,
+                queueRevision = 4L,
+                updatedAtMs = 3L,
+            ),
+        )
+        assertEquals(
+            0,
+            playbackDao.updateProgress("first", 200L, 1_000L, 1f, expectedRevision = 3L, updatedAtMs = 4L),
+        )
+        assertTrue(playbackDao.queueEntries().isEmpty())
+        assertFalse(playbackDao.session()?.currentContentId == "first")
+    }
+
+    @Test
+    fun incompatiblePreReleaseSchemaIsDestructivelyReset() = runBlocking {
+        val path = temporaryFolder.root.resolve("incompatible.db").absolutePath
+        val driver = BundledSQLiteDriver()
+        driver.open(path).use { connection ->
+            connection.prepare("CREATE TABLE legacy_domain (id INTEGER PRIMARY KEY)").use { it.step() }
+            connection.prepare("INSERT INTO legacy_domain (id) VALUES (1)").use { it.step() }
+            connection.prepare("PRAGMA user_version = 99").use { it.step() }
+        }
+
+        val reset =
+            Room.databaseBuilder<VortexDatabase>(path) { VortexDatabase_Impl() }
+                .setDriver(driver)
+                .setQueryCoroutineContext(Dispatchers.IO)
+                .fallbackToDestructiveMigration(dropAllTables = true)
+                .build()
+        reset.contentDao().content("missing")
+        reset.close()
+
+        driver.open(path).use { connection ->
+            connection.prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('content', 'legacy_domain') ORDER BY name",
+            ).use { statement ->
+                val tables = buildList {
+                    while (statement.step()) add(statement.getText(0))
+                }
+                assertEquals(listOf("content"), tables)
+            }
+        }
+    }
+
+    private suspend fun insertContent(
+        contentId: String,
+        uri: String,
+        sourceId: String? = null,
+        generation: Long = 0L,
+        availability: String = "Available",
+        dateAdded: Long = 0L,
+    ) {
+        contentDao.upsertContent(ContentEntity(contentId, 1L))
+        contentDao.upsertIdentity(ContentIdentityEntity("identity-$contentId", contentId))
+        val locatorId = "locator-${contentId.removePrefix("content-")}"
+        contentDao.upsertLocator(
+            MediaLocatorEntity(
+                locatorId = locatorId,
+                contentId = contentId,
+                identityKey = "identity-$contentId",
+                sourceId = sourceId,
+                uriValue = uri,
+                displayName = "$contentId.mp3",
+                mimeType = "audio/mpeg",
+                title = "Title ${contentId.removePrefix("content-")}",
+                artist = null,
+                album = null,
+                durationMs = 1_000L,
+                folder = null,
+                dateAddedSeconds = dateAdded,
+                origin = "OpenDocument",
+                kind = "Audio",
+                sizeBytes = 10L,
+                videoWidth = 0,
+                videoHeight = 0,
+                availability = availability,
+                seenGeneration = generation,
+                updatedAtMs = 1L,
+            ),
+        )
+        contentDao.upsertActiveLocator(ActiveMediaLocatorEntity(contentId, locatorId))
+        assertNotNull(contentDao.summary(contentId))
+    }
+
+    private fun textTrack(trackId: String, contentId: String) =
+        TimedTextTrackEntity(
+            trackId = trackId,
+            contentId = contentId,
+            origin = "Sidecar",
+            locatorIdentity = "uri:content://text/$trackId",
+            uriValue = "content://text/$trackId",
+            embeddedTrackId = null,
+            displayName = "$trackId.srt",
+            mimeType = "application/x-subrip",
+            cachedFileName = null,
+            format = "srt",
+            language = null,
+            label = null,
+            matchBasis = "UserSelected",
+            readiness = "Ready",
+            failureMessage = null,
+        )
+}

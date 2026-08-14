@@ -3,6 +3,7 @@ package io.github.zvensmoluya.vortexcue.ui.home
 internal enum class MyContentTab {
     Collected,
     Recent,
+    Playlists,
 }
 
 internal fun defaultMyContentTab(collectedCount: Int): MyContentTab {
@@ -39,9 +40,10 @@ internal fun <T> orderCollectedContent(
     (recentItems.filter(isCollected) + collectedItems).distinctBy(stableKey)
 
 internal fun reconcileDiscoverySelection(
-    selectedUris: Set<String>,
-    knownUris: Set<String>,
-    availableUris: Set<String>,
-    defaultSelectedUris: Set<String>,
+    selectedContentIds: Set<String>,
+    knownContentIds: Set<String>,
+    availableContentIds: Set<String>,
+    defaultSelectedContentIds: Set<String>,
 ): Set<String> =
-    selectedUris.intersect(availableUris) + (defaultSelectedUris - knownUris)
+    selectedContentIds.intersect(availableContentIds) +
+        (defaultSelectedContentIds - knownContentIds)

@@ -14,6 +14,13 @@
 
 它不是当前规格。涉及产品定位、信息架构、功能范围或相关架构调整时应先理解这份背景，再以 `GUIDE.md` 确认当前实施要求。
 
+## 架构与产品决策
+
+- [`records/DECISION_2026-08-13_TONIGHT_IS_CURRENT_QUEUE.md`](records/DECISION_2026-08-13_TONIGHT_IS_CURRENT_QUEUE.md)：Tonight 收敛为当前可恢复播放 Session / Queue，不维护平行未来计划。
+- [`records/DECISION_2026-08-14_USE_ROOM_FOR_DURABLE_DOMAIN_DATA.md`](records/DECISION_2026-08-14_USE_ROOM_FOR_DURABLE_DOMAIN_DATA.md)：关系型持久领域数据升级为 Room，DataStore 收缩为轻量设置，Queue 恢复改用稳定内容 ID。
+
+决策记录保留变化原因和取舍，当前实施要求仍须同步进入 `GUIDE.md`；两者冲突时以 `GUIDE.md` 为准。
+
 ## 验证记录
 
 - [`records/M0A_VALIDATION.md`](records/M0A_VALIDATION.md)：M0A OLED 首轮真机记录。

@@ -35,46 +35,6 @@ data class LibraryShortcut(
     val key: String,
 )
 
-data class LibraryPlaylist(
-    val id: String,
-    val name: String,
-    val items: List<MediaSourceRef>,
-)
-
-data class LibraryConfig(
-    val contentUnits: List<PlayableContentUnit> = emptyList(),
-    val catalogItems: List<MediaSourceRef> = emptyList(),
-    val recentItems: List<MediaSourceRef> = emptyList(),
-    val folders: List<LibraryFolderRef> = emptyList(),
-    val playlists: List<LibraryPlaylist> = emptyList(),
-    val includedUris: List<String> = emptyList(),
-    val ignoredUris: List<String> = emptyList(),
-    val homeShortcuts: List<LibraryShortcut> = emptyList(),
-)
-
-data class MediaLibraryState(
-    val items: List<MediaSourceRef> = emptyList(),
-    val candidates: List<MediaSourceRef> = emptyList(),
-    val ignoredItems: List<MediaSourceRef> = emptyList(),
-    val config: LibraryConfig = LibraryConfig(),
-    val sources: List<LibrarySourceState> = emptyList(),
-    val suggestedTextTracks: List<TimedTextTrackCandidate> = emptyList(),
-    val isLoading: Boolean = false,
-    val scanningSourceIds: Set<String> = emptySet(),
-    val hasAudioAccess: Boolean = false,
-    val videoAccess: VideoLibraryAccess = VideoLibraryAccess.None,
-    val errorMessage: String? = null,
-) {
-    val hasVideoAccess: Boolean
-        get() = videoAccess != VideoLibraryAccess.None
-
-    val hasSystemAccess: Boolean
-        get() = hasAudioAccess || hasVideoAccess
-
-    val hasCompleteSystemAccess: Boolean
-        get() = hasAudioAccess && videoAccess == VideoLibraryAccess.Full
-}
-
 data class LibraryScanBatch(
     val media: List<MediaSourceRef> = emptyList(),
     val subtitleSuggestions: List<TimedTextTrackCandidate> = emptyList(),
@@ -126,3 +86,19 @@ val MediaSourceRef.libraryFolderName: String
 
 fun MediaSourceRef.toFolderShortcut(): LibraryShortcut =
     LibraryShortcut(LibraryShortcutType.Folder, libraryFolderKey())
+
+internal fun List<LibrarySourceState>.withSourceState(
+    source: LibrarySourceState,
+): List<LibrarySourceState> {
+    if (any { it.id == source.id }) {
+        return map { existing -> if (existing.id == source.id) source else existing }
+    }
+    return when (source.kind) {
+        LibrarySourceKind.SystemLibrary -> listOf(source) + this
+        LibrarySourceKind.Folder -> {
+            val looseIndex = indexOfFirst { it.kind == LibrarySourceKind.LooseFiles }
+            if (looseIndex < 0) this + source else take(looseIndex) + source + drop(looseIndex)
+        }
+        LibrarySourceKind.LooseFiles -> this + source
+    }
+}

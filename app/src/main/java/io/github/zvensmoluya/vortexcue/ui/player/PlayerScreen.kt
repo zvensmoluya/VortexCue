@@ -1546,7 +1546,7 @@ private fun Player.snapshot(): PlaybackSnapshot =
             (0 until mediaItemCount).map { index ->
                 val item = getMediaItemAt(index)
                 QueueItemSnapshot(
-                    mediaId = item.mediaId.ifBlank { item.localConfiguration?.uri.toString() },
+                    mediaId = item.mediaId,
                     title =
                         item.mediaMetadata.title
                             ?.toString()

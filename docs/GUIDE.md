@@ -135,7 +135,7 @@ Current Playback Session / 今晚
         ↓
 载入或追加到当前“今晚”
         ↓
-Player 执行并持久化同一份当前 Queue
+Player 执行当前 Queue，Room 保存恢复快照
 ```
 
 - Home 是应用启动后的首屏启动台，负责继续上次、开始或继续今晚，并提供少量“我的内容”和添加内容入口；
@@ -180,20 +180,17 @@ PlayableContentUnit
 
 CollectionEntry
 ├─ contentId
-├─ collectedAt
-└─ availability
+└─ collectedAt
 
 RecentEntry
 ├─ contentId
-├─ lastOpenedAt
-├─ position / duration / speed
-└─ lastSurface
+└─ lastOpenedAt
 
 CurrentPlaybackSession
 ├─ queueContentIds[]
 ├─ currentIndex / position
 ├─ repeat / shuffle / speed
-└─ lastSurface / sleep state
+└─ lastSurface
 ```
 
 `PlayableContentUnit` 表达用户正在消费的内容，URI 只表达应用当前如何定位它。同一物理内容可以因单文件打开、SAF Folder 或重新定位拥有多个 locator；内容的稳定 ID 一旦建立，不得仅因当前 URI 改变而重建。
@@ -204,6 +201,8 @@ CurrentPlaybackSession
 
 同一个 `PlayableContentUnit` 可以同时出现在最近、我的内容和当前播放 Session；这些关系不复制媒体文件。打开一次产生 `RecentEntry` 和可恢复的当前 Queue，只有明确收录才产生 `CollectionEntry`。
 
+`RecentEntry` 只表达最近打开关系和排序，不保存独立播放进度。当前项的位置、速度和最后表面只属于 `CurrentPlaybackSession`；Playlist 和 Queue 条目也不保存各自的进度。Sleep Timer 继续是 `PlaybackService` 的运行时状态，本阶段不承诺进程死亡后恢复定时。
+
 用户界面不出现 `PlayableContentUnit`、`CollectionEntry`、`Session` 或匹配置信度等内部术语。用户只看到：
 
 - 最近；
@@ -213,7 +212,21 @@ CurrentPlaybackSession
 - 来源；
 - 睡眠定时。
 
-首个正式 release 之前，应用持久化只支持当前 schema。开发版或不稳定内测版的旧 schema 不形成用户数据兼容承诺；版本不匹配时可以破坏性重置应用拥有的目录、会话、设置和缓存，但不得删除或修改用户原始媒体文件。此阶段保留 schema version 用于识别并重置不兼容状态，不维护跨开发版本迁移链、旧模型 fallback 或新旧结构双写。首个正式 release 冻结数据契约时，再从当时的当前 schema 开始承担向后兼容责任。
+首个正式 release 之前，应用持久化只支持当前 schema。开发版或不稳定内测版的旧 schema 不形成用户数据兼容承诺；版本不匹配时可以破坏性重置 Room 管理的内容目录、会话、任务状态和缓存，但不得删除或修改用户原始媒体文件。独立轻量设置只在自身 schema 不兼容时重置，不因内容数据库变化一并清除。此阶段不维护跨开发版本迁移链、旧模型 fallback 或新旧结构双写。首个正式 release 冻结数据契约时，再从当时的当前 schema 开始承担向后兼容责任。
+
+### 持久化数据边界
+
+持久化架构以 [`records/DECISION_2026-08-14_USE_ROOM_FOR_DURABLE_DOMAIN_DATA.md`](records/DECISION_2026-08-14_USE_ROOM_FOR_DURABLE_DOMAIN_DATA.md) 为当前决定：
+
+- Room 是 Content、locator、Source、文字轨、Recent、Collection、忽略决定、Playlist 和 Current Session / Queue 恢复快照的唯一持久来源；
+- Preferences DataStore 只保存显示预设、引导完成状态等少量独立设置，不保存内容集合、Queue、任务列表、跨对象引用或完整领域聚合 JSON；
+- 应用私有文件保存规范化字幕、诊断响应和临时处理工件，Room 只保存元数据、状态和文件引用；API key 等凭据使用 Android Keystore 保护；
+- Media3 Player 是进程存活时的实时 Queue 真相，Room 中的 Session 只负责恢复；`MediaItem.mediaId` 使用稳定 `contentId`，播放 URI 来自 active locator；
+- Home、我的内容、来源、发现和内容详情分别读取有界查询投影，不在冷启动时解码或加载完整目录再重建分区；
+- 单个动作只更新受影响的行，跨关系更新使用事务；不得以 `save(AllState)`、重写全部表或拆分多个完整 JSON 的方式延续快照架构；
+- Collection 与忽略决定对同一 Content 互斥；候选状态由来源发现和用户决定推导，不额外持久化一份候选集合；
+- Queue 结构和清空按操作顺序由 Playback 层的单一协调器持久化；位置更新可以采样，但旧位置写入不得越过较新的 Queue 操作；
+- Source 扫描按批次或 generation 增量提交，失败扫描不得把上一次有效快照误判为已删除。
 
 ## 应用结构
 
@@ -554,7 +567,7 @@ Glow 锁定只防止应用内误触，不冒充系统锁屏或 AOD，也不拦�
 
 `PlaybackService` 内的 Player / MediaSession 是播放状态唯一真相。离开界面、关闭屏幕或应用进程重建时，应用层不建立第二套播放事实。
 
-Continue 至少保存：
+Continue 的恢复投影至少可以从 Current Session、Content 与轻量设置共同重建：
 
 - 当前媒体；
 - 播放位置和已知时长；
@@ -611,22 +624,25 @@ Folder 的自然顺序、现有 Playlist 或用户明确选择的多个内容都
 
 ```text
 app       Activity、应用组合根与系统入口
-core      内容体验单元、共享模型与存储格式
-library   Source、发现索引、我的内容、Folder 与持久化
+core      内容体验单元、共享模型与纯领域规则
+data      Room、DataStore、私有资产引用与本地查询
+library   Source、发现索引、我的内容、Folder 与内容仓库
 playback  MediaSessionService、Current Playback Session / Queue 与 Sleep Timer
 subtitle  文字轨发现、读取、解析、时间轴与缓存
 ui        首次体验、Home、Player 和主题
 ```
 
 - `PlaybackService` 内的 Player / MediaSession 是播放状态唯一真相；
-- `PlayableContentUnit` 是媒体 locator、文字轨及用户选择的持久唯一真相；导入草稿只保留尚未确认的交互状态，Active Session 只保留已加载的运行时状态，两者都不重复持久化字幕事实；
+- Room 是关系型持久领域数据的唯一真相；`PlayableContentUnit` 的媒体 locator、文字轨及用户选择从该持久关系恢复，导入草稿和 Active Session 都不重复持久化字幕事实；
+- Current Session / Queue 只以 `contentId` 关系保存恢复快照，运行时 Queue 仍由 `PlaybackService` 持有；
 - 后台播放服务只接受本应用和系统认可的可信控制器，应用私有命令不向外部控制器开放；
 - `app` 连接系统入口和功能状态，不重新实现来源、字幕或播放规则；
-- Home 不直接拥有扫描和内容关系算法；
+- Home 不直接拥有扫描和内容关系算法，也不维护第二份持久化 Home 缓存；
 - “我的内容”只操作应用内目录和用户关系，不直接执行文件系统删除、移动或重命名；
-- 扫描、匹配、轨道排序、schema 判定和恢复规则保持为可测试的纯逻辑；
-- 首个正式 release 前只读取当前 schema；不兼容的开发数据直接重置，不为内部测试数据累积迁移代码；
+- 扫描计划、身份匹配和轨道排序保持为可测试的纯逻辑；持久关系、查询和原子更新由 DAO 与事务负责；
+- 首个正式 release 前只读取当前 Room schema；不兼容的开发数据库直接重置，不为内部测试数据累积迁移代码；
 - 媒体文件不复制到应用目录；授权、来源快照、内容目录、用户关系和小型文字缓存可以持久化；
+- Room schema 导出并纳入审查；首个正式 release 冻结数据契约后开始维护正式 migration；
 - 只有出现真实构建、隔离或复用需求时才增加 Gradle 模块。
 
 ## M3 实施顺序
@@ -672,7 +688,7 @@ ui        首次体验、Home、Player 和主题
 4. Playlist 中的内容继续按已收录关系参与目录，不与 Recent 混用；
 5. `includedUris` 暂时缺少媒体快照时继续保留，待对应当前来源可读时补全；
 6. 先提供领域层的收录 / 移出能力和当前 schema 测试，再接入最小用户动作；
-7. 不在该切片引入 Room、收藏、标签、命名 Playlist、后台常驻扫描或新导航结构。
+7. 当时不在该切片引入 Room、收藏、标签、命名 Playlist、后台常驻扫描或新导航结构；这是已结束切片的历史范围，不再约束 M3.4c 的持久化升级。
 
 这个切片完成后，代码中不再使用“单独打开列表”同时表达最近、收录和来源三个概念。
 
@@ -720,7 +736,7 @@ ui        首次体验、Home、Player 和主题
 
 本切片不删除已实现的 secondary 轨，不引入媒体全文哈希、文件移动或完整的 Home / Source 信息架构重做。“我的内容”列表、Folder Source 表面和新发现 Inbox 仍属于 M3.3。
 
-状态：代码实现、自动化检查与 Android 13 真机验收完成。单文件导入现在会在媒体确认后建立内容，导入草稿可分别选择、移除和并行读取可选 primary / secondary 外挂字幕；每次手动选择先完成内容目录写入再更新草稿状态，同一字幕文件不会同时占用两个显示槽。更换媒体按新内容恢复，启动只从内容目录恢复字幕，目录写入按操作顺序串行化。Library version 7 将 `PlayableContentUnit` 改为稳定内容 ID、`1..N` 个媒体 locator 与 active locator；SAF authority + document ID 作为强等价身份，单文件 URI 与 Tree URI 可以复用文字轨、选择和 offset，文件名、大小与时长不参与静默合并。明确重新定位只增加 locator，不再更换内容或文字轨 ID；Folder 刷新与移除只更新 locator 可用性，仍被 Recent、Collection、Playlist 或当前会话引用的内容事实继续保留。Session version 2 不再单独持久化 offset。详见 [`records/M3_IMPORT_HOME_VALIDATION.md`](records/M3_IMPORT_HOME_VALIDATION.md)。
+状态：代码实现、自动化检查与 Android 13 真机验收完成。单文件导入现在会在媒体确认后建立内容，导入草稿可分别选择、移除和并行读取可选 primary / secondary 外挂字幕；每次手动选择先完成内容目录写入再更新草稿状态，同一字幕文件不会同时占用两个显示槽。更换媒体按新内容恢复，启动只从内容目录恢复字幕，目录写入按操作顺序串行化。Library version 7 将 `PlayableContentUnit` 改为稳定内容 ID、`1..N` 个媒体 locator 与 active locator；SAF authority + document ID 作为强等价身份，单文件 URI 与 Tree URI 可以复用文字轨、选择和 offset，文件名、大小与时长不参与静默合并。明确重新定位只增加 locator，不再更换内容或文字轨 ID；Folder 刷新与移除只更新 locator 可用性，仍被 Recent、Collection、Playlist 或当前会话引用的内容事实继续保留。Session version 2 不再单独持久化 offset。这里记录的 Library / Session JSON 是历史实现，后续已由 M3.4c 的 Room schema v1 取代。详见 [`records/M3_IMPORT_HOME_VALIDATION.md`](records/M3_IMPORT_HOME_VALIDATION.md)。
 
 ### M3.3 建立我的内容与来源
 
@@ -784,6 +800,21 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 
 状态：代码实现和自动化验证完成；文件管理器与下载应用的冷启动、前台热启动、后台热启动、临时授权失效和不同 Provider URI 仍需真机验证。
 
+#### M3.4c 持久化架构升级
+
+本切片在继续扩展持久任务以前，把已经形成关系和局部更新需求的领域数据从完整 JSON 快照迁入 Room：
+
+1. 建立 Room database、当前 schema、实体、DAO、事务和 schema 导出，继续保持单一 `app` Gradle 模块；
+2. Content、locator、文字轨、Source、Recent、Collection、忽略决定和 Playlist 以稳定 ID 关系持久化，用户动作只更新受影响的行；
+3. Home、我的内容、来源、发现和内容详情改为读取各自的有界查询投影，冷启动不加载完整内容目录再做全量内存分区；
+4. Current Session / Queue 保存有序 `contentId`、当前项和当前项位置；`MediaItem.mediaId` 使用 `contentId`，active locator 只负责提供实际播放 URI；
+5. Session 恢复与写入顺序由 Playback 层统一协调，覆盖 Activity 重建、服务仍存活、进程重建、外部打开和清空 Queue 竞态；
+6. Preferences DataStore 只保留独立轻量设置；首次切换默认重置 Library v7 / Session v2 旧快照，不建立 JSON / Room 双写或旧模型 fallback；
+7. 删除完整 Library JSON、Queue JSON、内容单元压缩编码、encoding version、恢复专用全目录索引及其启动竞态协调；
+8. 不在本切片预建 ASR / 翻译任务表；未来任务进入实现时，再基于同一 Room 边界增加检查点关系。
+
+状态：代码实现和自动化验证完成，真机验收待执行。Room schema v1、Repository、Paging、应用级 `AppContainer`、Service 按需恢复和单一 Queue 写入边界已经启用；旧 Library / Session 领域 JSON、压缩索引和启动竞态桥接已经删除，没有双写或旧模型 fallback。当前自动化基线为 26 个 suite、113 项测试、0 失败，`lint` 与 `assembleDebug` 通过；完成覆盖安装、SAF、外部打开、耳机恢复、进程重建、Queue 编辑、Source 移除、破坏性 reset 和大目录冷启动的真机清单后，再进入 M3.5。
+
 ### M3.5 首次体验与行为验证
 
 1. 加入可合法分发的短样片；
@@ -828,7 +859,9 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 
 - 单文件打开进入 Recent 但不自动进入 Collection；
 - 收录内容和来源快照可以在不扫描的冷启动中恢复；
-- 当前 Library 与 Session schema 可以冷启动恢复，版本缺失或不匹配时按预发布策略重置；
+- Room 数据库可以首次创建和冷启动恢复；schema 不兼容时按预发布策略只重置应用拥有的关系数据，独立设置和用户原始媒体不受影响；
+- Home 启动只执行有界投影查询，不解码或装载完整内容目录；单项关系变化不重写全部内容；
+- Room foreign key、唯一约束和事务覆盖 locator、文字轨、Collection、Recent、Playlist 与 Queue 的引用不变量；
 - 文字轨匹配和排序；
 - 手动选择压过自动规则；
 - 媒体已确定后手动选择字幕，关闭导入界面、返回 Home、重新打开和进程重建后关系仍保留；
@@ -840,6 +873,8 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 - 内容目录是字幕关系的唯一持久来源，Draft 与 Last Session 不含字幕副本；
 - 当前 Queue 切换恢复每项自己的文字关系；
 - 当前 Queue 在进程重建后保留顺序、当前项和位置；
+- Queue 清空、替换、追加、移除、重排和位置采样按因果顺序落盘，较旧写入不会让已清空或已替换的 Queue 复活；
+- Activity 重建但 PlaybackService 仍存活时继续采用 Player 当前 Queue；整个进程重建时才从 Room 恢复快照；
 - `lastSurface`、位置、offset 和显示状态恢复；
 - 广泛扫描不会由普通冷启动触发。
 
@@ -852,13 +887,14 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 - 单文件和 SAF Folder 授权；
 - 从文件管理器或下载应用“用荧荧打开”音频与视频，分别覆盖冷启动、前台热启动和后台热启动；
 - 外部 `content:` URI 只有临时授权时完成本次播放，进程重建或授权失效后进入可解释的重新定位流程；
-- 安装带有不兼容开发 schema 的版本后，应用状态被重置且用户原始媒体文件不受影响；
+- 安装带有不兼容 Room schema 的版本后，应用关系数据被重置，独立设置按自身 schema 保留，用户原始媒体文件不受影响；
 - 单文件选择媒体后手动选择字幕，返回 Home 并重新打开后字幕仍属于该内容；
 - 将同一媒体所在 Folder 加入为 Source，再从 Folder 进入时恢复既有手动字幕关系；
 - 选择字幕后立即返回、强制停止并冷启动，关系和当前选择不丢失；
 - 打开一次、明确收录、移出我的内容和原文件仍存在；
 - 从已授权 Folder Source 再次进入时不重新经过系统文件选择器；
 - 从多个来源加入 Tonight、重排、跨项播放和第二天恢复；
+- 大内容目录下冷启动直接显示稳定 Home 投影，后台媒体与字幕验证不会先显示错误空状态或覆盖启动后的用户操作；
 - 内嵌与外挂文字轨；
 - 后台 MediaSession、通知、锁屏、耳机和蓝牙；
 - 进程重建与 URI 失效恢复；
@@ -876,4 +912,4 @@ M3.3 默认 M3.2d 已经保证同一内容从单文件和 Folder Source 进入�
 - **Rework D**：用户主要依赖 Recent / Continue，几乎不主动收录或建立 Tonight，收缩对应表面但保留底层关系；
 - **No-Go / 重新定位**：充分体验后仍普遍选择直接锁屏，或 Glow 只产生一次新奇而没有第二次使用。
 
-在完成 M3.5 的真实夜间使用前不开始 M4，也不以更多案头研究替代行为验证。M3.2 之后每个里程碑都必须带真实内容走通，不等待全部结构完成后再测试。
+M3.4c 完成后再开始 M3.5 的正式连续使用验证；在完成 M3.5 的真实夜间使用前不开始 M4，也不以更多案头研究替代行为验证。M3.2 之后每个里程碑都必须带真实内容走通，不等待全部结构完成后再测试。

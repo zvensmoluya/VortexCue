@@ -48,4 +48,12 @@ class PlaybackControllerPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun onlyMaterializedOrExplicitlyClearedPlayerOwnsRuntimeState() {
+        assertEquals(false, PlayerMaterializationState.NotLoaded.ownsRuntimePlaybackState())
+        assertEquals(false, PlayerMaterializationState.Materializing.ownsRuntimePlaybackState())
+        assertEquals(true, PlayerMaterializationState.Materialized.ownsRuntimePlaybackState())
+        assertEquals(true, PlayerMaterializationState.ExplicitlyCleared.ownsRuntimePlaybackState())
+    }
 }
