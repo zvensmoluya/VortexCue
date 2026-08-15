@@ -73,6 +73,13 @@ interface TranslationProtocolAdapter {
     val protocol: TranslationProtocol
 
     suspend fun translate(request: TranslationProviderRequest): TranslationProviderResponse
+
+    /**
+     * Streams a provider response when the protocol supports it. Keeping a default implementation
+     * preserves compatibility with test and third-party adapters that only implement full JSON.
+     */
+    suspend fun translateStreaming(request: TranslationProviderRequest): TranslationProviderResponse =
+        translate(request)
 }
 
 class TranslationAdapterRegistry(adapters: List<TranslationProtocolAdapter>) {
@@ -84,6 +91,7 @@ class TranslationAdapterRegistry(adapters: List<TranslationProtocolAdapter>) {
 
 class TranslationNetworkGateway(
     private val registry: TranslationAdapterRegistry,
+    private val streamResponses: Boolean = true,
     private val waitBeforeRetry: suspend (Long) -> Unit = { delay(it) },
 ) {
     suspend fun translate(
@@ -94,7 +102,13 @@ class TranslationNetworkGateway(
         var lastFailure: TranslationProtocolException? = null
         repeat(MaxNetworkAttempts) { index ->
             try {
-                val response = registry.adapter(protocol).translate(request)
+                val adapter = registry.adapter(protocol)
+                val response =
+                    if (streamResponses) {
+                        adapter.translateStreaming(request)
+                    } else {
+                        adapter.translate(request)
+                    }
                 onAttempt(TranslationNetworkAttempt(index + 1, response = response))
                 return response
             } catch (error: CancellationException) {
@@ -150,7 +164,36 @@ class BoundedHttpExecutor(
         error("Unreachable")
     }
 
-    private suspend fun executeOnce(request: Request): HttpExchange =
+    /**
+     * Reads a response incrementally while preserving the same redirect, cancellation, and size
+     * limits as [execute]. The callback receives complete UTF-8 response lines, which is the unit
+     * needed by SSE without exposing OkHttp response objects to protocol adapters.
+     */
+    suspend fun executeStreaming(
+        initial: Request,
+        onLine: (String) -> Unit,
+    ): HttpExchange {
+        var request = initial
+        repeat(MaxRedirects + 1) { redirectCount ->
+            val exchange = executeOnce(request, onLine)
+            if (exchange.status !in RedirectStatuses) return exchange
+            val location = exchange.headers["Location"]
+                ?: throw protocolFailure(exchange, "Redirect response omitted Location")
+            val next = request.url.resolve(location)
+                ?: throw protocolFailure(exchange, "Redirect Location is invalid")
+            if (!sameOrigin(request.url, next)) {
+                throw protocolFailure(exchange, "Cross-origin redirect was rejected")
+            }
+            if (redirectCount >= MaxRedirects) throw protocolFailure(exchange, "Too many redirects")
+            request = request.newBuilder().url(next).build()
+        }
+        error("Unreachable")
+    }
+
+    private suspend fun executeOnce(
+        request: Request,
+        onLine: ((String) -> Unit)? = null,
+    ): HttpExchange =
         suspendCancellableCoroutine { continuation ->
             val call = client.newCall(request)
             continuation.invokeOnCancellation { call.cancel() }
@@ -163,23 +206,12 @@ class BoundedHttpExecutor(
                     override fun onResponse(call: Call, response: Response) {
                         try {
                             response.use {
-                                val declaredLength = response.body.contentLength()
-                                if (declaredLength > maxResponseBytes) {
-                                    throw IOException("Response exceeds size limit")
-                                }
-                                val bytes = response.body.byteStream().use { stream ->
-                                    val buffer = ByteArray(8 * 1024)
-                                    val output = ByteArrayOutputStream()
-                                    var total = 0
-                                    while (true) {
-                                        val count = stream.read(buffer)
-                                        if (count < 0) break
-                                        total += count
-                                        if (total > maxResponseBytes) throw IOException("Response exceeds size limit")
-                                        output.write(buffer, 0, count)
+                                val bytes =
+                                    if (onLine != null && response.code in 200..299) {
+                                        readStreamingBody(response, onLine)
+                                    } else {
+                                        readBoundedBody(response)
                                     }
-                                    output.toByteArray()
-                                }
                                 if (!continuation.isCompleted) {
                                     continuation.resume(
                                         HttpExchange(
@@ -199,6 +231,45 @@ class BoundedHttpExecutor(
                 },
             )
         }
+
+    private fun readStreamingBody(response: Response, onLine: (String) -> Unit): ByteArray {
+        val declaredLength = response.body.contentLength()
+        if (declaredLength > maxResponseBytes) {
+            throw IOException("Response exceeds size limit")
+        }
+        val source = response.body.source()
+        val output = ByteArrayOutputStream()
+        var total = 0
+        while (true) {
+            val line = source.readUtf8Line() ?: break
+            val bytes = (line + "\n").toByteArray(Charsets.UTF_8)
+            total += bytes.size
+            if (total > maxResponseBytes) throw IOException("Response exceeds size limit")
+            output.write(bytes)
+            onLine(line)
+        }
+        return output.toByteArray()
+    }
+
+    private fun readBoundedBody(response: Response): ByteArray {
+        val declaredLength = response.body.contentLength()
+        if (declaredLength > maxResponseBytes) {
+            throw IOException("Response exceeds size limit")
+        }
+        return response.body.byteStream().use { stream ->
+            val buffer = ByteArray(8 * 1024)
+            val output = ByteArrayOutputStream()
+            var total = 0
+            while (true) {
+                val count = stream.read(buffer)
+                if (count < 0) break
+                total += count
+                if (total > maxResponseBytes) throw IOException("Response exceeds size limit")
+                output.write(buffer, 0, count)
+            }
+            output.toByteArray()
+        }
+    }
 
     private fun protocolFailure(exchange: HttpExchange, message: String) =
         TranslationProtocolException(
@@ -230,6 +301,45 @@ data class HttpExchange(
     val requestId: String?
         get() = headers["x-request-id"] ?: headers["request-id"] ?: headers["openai-request-id"]
 }
+
+internal class SseEventReader(
+    private val onEvent: (String) -> Unit,
+) {
+    private val data = StringBuilder()
+    var sawSseField: Boolean = false
+        private set
+
+    fun accept(line: String) {
+        when {
+            line.isEmpty() -> dispatch()
+            line.startsWith(":") -> sawSseField = true
+            line.startsWith("data:") -> {
+                sawSseField = true
+                if (data.isNotEmpty()) data.append('\n')
+                val value = line.removePrefix("data:")
+                data.append(if (value.startsWith(' ')) value.drop(1) else value)
+            }
+            line.startsWith("event:") || line.startsWith("id:") || line.startsWith("retry:") -> {
+                sawSseField = true
+            }
+        }
+    }
+
+    fun finish() {
+        dispatch()
+    }
+
+    private fun dispatch() {
+        if (data.isEmpty()) return
+        onEvent(data.toString())
+        data.setLength(0)
+    }
+}
+
+data class StreamingTextEvent(
+    val text: String = "",
+    val usage: UsageRecord = UsageRecord(),
+)
 
 abstract class JsonTranslationProtocolAdapter(
     private val executor: BoundedHttpExecutor,
@@ -288,6 +398,82 @@ abstract class JsonTranslationProtocolAdapter(
         )
     }
 
+    final override suspend fun translateStreaming(request: TranslationProviderRequest): TranslationProviderResponse {
+        val body = json.encodeToString(JsonObject.serializer(), streamingRequestBody(request))
+        val httpRequest =
+            Request.Builder()
+                .url(streamingEndpoint(request))
+                .header("Accept", "text/event-stream")
+                .header("Cache-Control", "no-cache")
+                .header("Content-Type", "application/json")
+                .apply { authenticationHeaders(request.apiKey).forEach { (name, value) -> header(name, value) } }
+                .post(body.toRequestBody(JsonMediaType))
+                .build()
+        val events = mutableListOf<StreamingTextEvent>()
+        val reader = SseEventReader { data ->
+            if (data.trim() != "[DONE]" && data.trimStart().startsWith("{")) {
+                events += parseStreamingEvent(data)
+            }
+        }
+        val exchange =
+            try {
+                executor.executeStreaming(httpRequest, reader::accept).also { reader.finish() }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: TranslationProtocolException) {
+                throw error
+            } catch (error: IOException) {
+                throw TranslationProtocolException(
+                    category = GenerationErrorCategory.TemporaryNetwork,
+                    retryable = true,
+                    capacityExceeded = false,
+                    message = "Streaming translation request failed before a valid response",
+                    cause = error,
+                )
+            } catch (error: Throwable) {
+                throw TranslationProtocolException(
+                    category = GenerationErrorCategory.InvalidResponse,
+                    retryable = false,
+                    capacityExceeded = false,
+                    message = "Streaming translation response was invalid",
+                    cause = error,
+                )
+            }
+        if (exchange.status !in 200..299) throw classifyHttpFailure(exchange, request.apiKey)
+
+        val text: String
+        val usage: UsageRecord
+        if (reader.sawSseField) {
+            text = events.joinToString(separator = "") { it.text }.trim()
+            usage = events.map(StreamingTextEvent::usage).sumRealUsage()
+        } else {
+            val root = parseRoot(exchange)
+            text = extractText(root).trim()
+            usage = extractUsage(root)
+        }
+        if (text.isBlank()) {
+            throw TranslationProtocolException(
+                category = GenerationErrorCategory.InvalidResponse,
+                retryable = false,
+                capacityExceeded = false,
+                httpStatus = exchange.status,
+                requestId = exchange.requestId,
+                rawResponse = exchange.body,
+                message = "Streaming translation response did not contain text",
+            )
+        }
+        return TranslationProviderResponse(
+            text = text,
+            usage = usage,
+            rawResponse = exchange.body,
+            httpStatus = exchange.status,
+            requestBytes = exchange.requestBytes,
+            responseBytes = exchange.body.size.toLong(),
+            requestId = exchange.requestId,
+            endpoint = exchange.endpoint,
+        )
+    }
+
     internal fun requestBodyForTest(request: TranslationProviderRequest): JsonObject = requestBody(request)
 
     internal fun endpointForTest(request: TranslationProviderRequest): String = endpoint(request).toString()
@@ -299,13 +485,19 @@ abstract class JsonTranslationProtocolAdapter(
 
     protected abstract fun endpoint(request: TranslationProviderRequest): HttpUrl
 
+    protected open fun streamingEndpoint(request: TranslationProviderRequest): HttpUrl = endpoint(request)
+
     protected abstract fun authenticationHeaders(apiKey: String): Map<String, String>
 
     protected abstract fun requestBody(request: TranslationProviderRequest): JsonObject
 
+    protected open fun streamingRequestBody(request: TranslationProviderRequest): JsonObject = requestBody(request)
+
     protected abstract fun extractText(root: JsonObject): String
 
     protected abstract fun extractUsage(root: JsonObject): UsageRecord
+
+    protected abstract fun parseStreamingEvent(data: String): StreamingTextEvent
 
     private fun parseRoot(exchange: HttpExchange): JsonObject =
         try {
@@ -402,6 +594,12 @@ class ResponsesTranslationAdapter(executor: BoundedHttpExecutor) : JsonTranslati
             )
         }
 
+    override fun streamingRequestBody(request: TranslationProviderRequest) =
+        buildJsonObject {
+            requestBody(request).forEach { (name, value) -> put(name, value) }
+            put("stream", true)
+        }
+
     override fun extractText(root: JsonObject): String {
         root.string("output_text")?.let { return it }
         return root.array("output")
@@ -412,6 +610,15 @@ class ResponsesTranslationAdapter(executor: BoundedHttpExecutor) : JsonTranslati
 
     override fun extractUsage(root: JsonObject): UsageRecord =
         root.objectValue("usage").toUsage("input_tokens", "output_tokens", "total_tokens")
+
+    override fun parseStreamingEvent(data: String): StreamingTextEvent {
+        val root = json.parseToJsonElement(data).jsonObject
+        val type = root.string("type")
+        val text = if (type == "response.output_text.delta") root.string("delta").orEmpty() else ""
+        val usageRoot = root.firstNonEmptyObject("usage")
+            ?: root.objectValue("response").firstNonEmptyObject("usage")
+        return StreamingTextEvent(text = text, usage = usageRoot?.toUsage("input_tokens", "output_tokens", "total_tokens") ?: UsageRecord())
+    }
 }
 
 class AnthropicMessagesTranslationAdapter(executor: BoundedHttpExecutor) : JsonTranslationProtocolAdapter(executor) {
@@ -436,6 +643,12 @@ class AnthropicMessagesTranslationAdapter(executor: BoundedHttpExecutor) : JsonT
             )
         }
 
+    override fun streamingRequestBody(request: TranslationProviderRequest) =
+        buildJsonObject {
+            requestBody(request).forEach { (name, value) -> put(name, value) }
+            put("stream", true)
+        }
+
     override fun extractText(root: JsonObject): String =
         root.array("content")
             .mapNotNull { (it as? JsonObject)?.takeIf { node -> node.string("type") == "text" }?.string("text") }
@@ -443,6 +656,21 @@ class AnthropicMessagesTranslationAdapter(executor: BoundedHttpExecutor) : JsonT
 
     override fun extractUsage(root: JsonObject): UsageRecord =
         root.objectValue("usage").toUsage("input_tokens", "output_tokens", "total_tokens")
+
+    override fun parseStreamingEvent(data: String): StreamingTextEvent {
+        val root = json.parseToJsonElement(data).jsonObject
+        val text =
+            if (root.string("type") == "content_block_delta") {
+                root.objectValue("delta").string("text").orEmpty()
+            } else {
+                ""
+            }
+        val usageRoot =
+            root.firstNonEmptyObject("usage")
+                ?: root.objectValue("message").firstNonEmptyObject("usage")
+                ?: root.objectValue("message_delta").firstNonEmptyObject("usage")
+        return StreamingTextEvent(text = text, usage = usageRoot?.toUsage("input_tokens", "output_tokens", "total_tokens") ?: UsageRecord())
+    }
 }
 
 class ChatCompletionsTranslationAdapter(executor: BoundedHttpExecutor) : JsonTranslationProtocolAdapter(executor) {
@@ -466,6 +694,13 @@ class ChatCompletionsTranslationAdapter(executor: BoundedHttpExecutor) : JsonTra
             )
         }
 
+    override fun streamingRequestBody(request: TranslationProviderRequest) =
+        buildJsonObject {
+            requestBody(request).forEach { (name, value) -> put(name, value) }
+            put("stream", true)
+            put("stream_options", buildJsonObject { put("include_usage", true) })
+        }
+
     override fun extractText(root: JsonObject): String {
         val message =
             root.array("choices").firstOrNull()
@@ -482,6 +717,19 @@ class ChatCompletionsTranslationAdapter(executor: BoundedHttpExecutor) : JsonTra
 
     override fun extractUsage(root: JsonObject): UsageRecord =
         root.objectValue("usage").toUsage("prompt_tokens", "completion_tokens", "total_tokens")
+
+    override fun parseStreamingEvent(data: String): StreamingTextEvent {
+        val root = json.parseToJsonElement(data).jsonObject
+        val choice = root.array("choices").firstOrNull() as? JsonObject
+        val delta = choice?.objectValue("delta")
+        val text =
+            when (val content = delta?.get("content")) {
+                is JsonPrimitive -> content.contentOrNull.orEmpty()
+                is JsonArray -> content.mapNotNull { (it as? JsonObject)?.string("text") }.joinToString("\n")
+                else -> ""
+            }
+        return StreamingTextEvent(text = text, usage = root.objectValue("usage").toUsage("prompt_tokens", "completion_tokens", "total_tokens"))
+    }
 }
 
 class GoogleGenerateContentTranslationAdapter(executor: BoundedHttpExecutor) : JsonTranslationProtocolAdapter(executor) {
@@ -489,6 +737,9 @@ class GoogleGenerateContentTranslationAdapter(executor: BoundedHttpExecutor) : J
 
     override fun endpoint(request: TranslationProviderRequest): HttpUrl =
         resolveGoogleEndpoint(request.endpoint, request.model)
+
+    override fun streamingEndpoint(request: TranslationProviderRequest): HttpUrl =
+        resolveGoogleStreamingEndpoint(request.endpoint, request.model)
 
     override fun authenticationHeaders(apiKey: String) = mapOf("x-goog-api-key" to apiKey)
 
@@ -526,6 +777,23 @@ class GoogleGenerateContentTranslationAdapter(executor: BoundedHttpExecutor) : J
 
     override fun extractUsage(root: JsonObject): UsageRecord =
         root.objectValue("usageMetadata").toUsage("promptTokenCount", "candidatesTokenCount", "totalTokenCount")
+
+    override fun parseStreamingEvent(data: String): StreamingTextEvent {
+        val root = json.parseToJsonElement(data).jsonObject
+        val text =
+            root.array("candidates")
+                .firstOrNull()
+                ?.let { it as? JsonObject }
+                ?.objectValue("content")
+                ?.array("parts")
+                ?.mapNotNull { (it as? JsonObject)?.string("text") }
+                ?.joinToString("\n")
+                .orEmpty()
+        return StreamingTextEvent(
+            text = text,
+            usage = root.objectValue("usageMetadata").toUsage("promptTokenCount", "candidatesTokenCount", "totalTokenCount"),
+        )
+    }
 }
 
 fun defaultTranslationAdapters(httpClient: SyncTextHttpClient): List<TranslationProtocolAdapter> {
@@ -569,6 +837,21 @@ private fun resolveGoogleEndpoint(endpoint: String, model: String): HttpUrl {
     return base
 }
 
+private fun resolveGoogleStreamingEndpoint(endpoint: String, model: String): HttpUrl {
+    val regular = resolveGoogleEndpoint(endpoint, model)
+    val path = regular.encodedPath
+    val streamPath =
+        when {
+            path.endsWith(":streamGenerateContent") -> path
+            path.endsWith(":generateContent") -> path.removeSuffix(":generateContent") + ":streamGenerateContent"
+            else -> path
+        }
+    return regular.newBuilder()
+        .encodedPath(streamPath)
+        .setQueryParameter("alt", "sse")
+        .build()
+}
+
 private fun JsonObject.string(name: String): String? =
     (get(name) as? JsonPrimitive)?.contentOrNull
 
@@ -577,6 +860,11 @@ private fun JsonObject.array(name: String): JsonArray =
 
 private fun JsonObject.objectValue(name: String): JsonObject =
     get(name) as? JsonObject ?: JsonObject(emptyMap())
+
+private fun JsonObject.firstNonEmptyObject(vararg names: String): JsonObject? =
+    names.asSequence()
+        .mapNotNull { get(it) as? JsonObject }
+        .firstOrNull { it.isNotEmpty() }
 
 private fun JsonObject.toUsage(inputName: String, outputName: String, totalName: String): UsageRecord {
     val input = (get(inputName) as? JsonPrimitive)?.longOrNull

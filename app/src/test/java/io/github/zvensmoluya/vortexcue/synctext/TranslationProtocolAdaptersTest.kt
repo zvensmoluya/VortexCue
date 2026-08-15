@@ -82,6 +82,145 @@ class TranslationProtocolAdaptersTest {
     }
 
     @Test
+    fun `chat completions streams deltas and keeps final usage`() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(
+                MockResponse(
+                    headers = headersOf("Content-Type", "text/event-stream"),
+                    body =
+                        """
+                        data: {"choices":[{"delta":{"content":"[cue-1] "}}]}
+
+                        data: {"choices":[{"delta":{"content":"one"}}]}
+
+                        data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":8,"total_tokens":15}}
+
+                        data: [DONE]
+
+                        """.trimIndent(),
+                ),
+            )
+            val adapter = ChatCompletionsTranslationAdapter(BoundedHttpExecutor(testClient()))
+
+            val response = adapter.translateStreaming(request(server.url("/").toString()))
+            val recorded = server.takeRequest()
+
+            assertEquals("/v1/chat/completions", recorded.target)
+            assertEquals("[cue-1] one", response.text)
+            assertEquals(7L, response.usage.inputTokens)
+            assertEquals(8L, response.usage.outputTokens)
+            val body = requireNotNull(recorded.body).utf8()
+            assertTrue(body.contains("\"stream\":true"))
+            assertTrue(body.contains("\"include_usage\":true"))
+        }
+    }
+
+    @Test
+    fun `responses anthropic and google adapters consume their stream shapes`() = runBlocking {
+        val cases =
+            listOf(
+                StreamingProtocolCase(
+                    adapter = { ResponsesTranslationAdapter(it) },
+                    expectedPath = "/v1/responses",
+                    response =
+                        """
+                        data: {"type":"response.output_text.delta","delta":"[cue-1] "}
+
+                        data: {"type":"response.output_text.delta","delta":"one"}
+
+                        data: {"type":"response.completed","response":{"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}
+
+                        data: [DONE]
+
+                        """.trimIndent(),
+                    input = 2L,
+                    output = 3L,
+                ),
+                StreamingProtocolCase(
+                    adapter = { AnthropicMessagesTranslationAdapter(it) },
+                    expectedPath = "/v1/messages",
+                    response =
+                        """
+                        event: message_start
+                        data: {"type":"message_start","message":{"usage":{"input_tokens":4,"output_tokens":0}}}
+
+                        event: content_block_delta
+                        data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"[cue-1] one"}}
+
+                        event: message_delta
+                        data: {"type":"message_delta","usage":{"output_tokens":6}}
+
+                        """.trimIndent(),
+                    input = 4L,
+                    output = 6L,
+                ),
+                StreamingProtocolCase(
+                    adapter = { GoogleGenerateContentTranslationAdapter(it) },
+                    expectedPath = "/v1beta/models/model-test:streamGenerateContent",
+                    response =
+                        """
+                        data: {"candidates":[{"content":{"parts":[{"text":"[cue-1] one"}]}}]}
+
+                        data: {"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":10,"totalTokenCount":19}}
+
+                        """.trimIndent(),
+                    input = 9L,
+                    output = 10L,
+                ),
+            )
+
+        cases.forEach { case ->
+            MockWebServer().use { server ->
+                server.start()
+                server.enqueue(
+                    MockResponse(
+                        headers = headersOf("Content-Type", "text/event-stream"),
+                        body = case.response,
+                    ),
+                )
+                val response = case.adapter(BoundedHttpExecutor(testClient())).translateStreaming(request(server.url("/").toString()))
+                val recorded = server.takeRequest()
+
+                assertTrue(recorded.target.startsWith(case.expectedPath))
+                assertEquals("[cue-1] one", response.text)
+                assertEquals(case.input, response.usage.inputTokens)
+                assertEquals(case.output, response.usage.outputTokens)
+            }
+        }
+    }
+
+    @Test
+    fun `streaming gateway has one switch and defaults to stream`() = runBlocking {
+        var streamingCalls = 0
+        var fullCalls = 0
+        val adapter =
+            object : TranslationProtocolAdapter {
+                override val protocol = TranslationProtocol.Responses
+
+                override suspend fun translate(request: TranslationProviderRequest): TranslationProviderResponse {
+                    fullCalls += 1
+                    return TranslationProviderResponse("full", UsageRecord(), byteArrayOf(), 200, 1L, 1L, null, request.endpoint)
+                }
+
+                override suspend fun translateStreaming(request: TranslationProviderRequest): TranslationProviderResponse {
+                    streamingCalls += 1
+                    return TranslationProviderResponse("stream", UsageRecord(), byteArrayOf(), 200, 1L, 1L, null, request.endpoint)
+                }
+            }
+
+        val response =
+            TranslationNetworkGateway(TranslationAdapterRegistry(listOf(adapter))).translate(
+                TranslationProtocol.Responses,
+                request("https://example.test/v1/responses"),
+            )
+
+        assertEquals("stream", response.text)
+        assertEquals(1, streamingCalls)
+        assertEquals(0, fullCalls)
+    }
+
+    @Test
     fun `authentication errors are categorized and secrets are redacted`() = runBlocking {
         MockWebServer().use { server ->
             server.start()
@@ -185,5 +324,13 @@ class TranslationProtocolAdaptersTest {
         val response: String,
         val expectedInput: Long,
         val expectedOutput: Long,
+    )
+
+    private data class StreamingProtocolCase(
+        val adapter: (BoundedHttpExecutor) -> JsonTranslationProtocolAdapter,
+        val expectedPath: String,
+        val response: String,
+        val input: Long,
+        val output: Long,
     )
 }

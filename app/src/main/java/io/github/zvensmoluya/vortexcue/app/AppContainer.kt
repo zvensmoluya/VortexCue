@@ -102,6 +102,7 @@ class AppContainer(context: Context) {
             translation =
                 TranslationNetworkGateway(
                     TranslationAdapterRegistry(defaultTranslationAdapters(syncTextHttpClient)),
+                    streamResponses = true,
                 ),
             networkState = syncTextNetworkState,
         )
