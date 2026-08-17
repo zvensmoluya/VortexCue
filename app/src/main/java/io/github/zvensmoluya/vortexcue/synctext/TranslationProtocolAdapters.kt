@@ -26,12 +26,13 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Headers
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Response
 
 data class TranslationProviderRequest(
     val endpoint: String,
@@ -39,6 +40,7 @@ data class TranslationProviderRequest(
     val apiKey: String,
     val systemPrompt: String,
     val userPrompt: String,
+    val userAgent: String? = null,
 )
 
 data class TranslationProviderResponse(
@@ -129,9 +131,10 @@ class TranslationNetworkGateway(
     }
 }
 
-class SyncTextHttpClient {
+class SyncTextHttpClient(appVersion: String = "unknown") {
     val client: OkHttpClient =
         OkHttpClient.Builder()
+            .addInterceptor(ClientIdentityInterceptor(vortexCueUserAgent(appVersion)))
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(6, TimeUnit.MINUTES)
             .writeTimeout(6, TimeUnit.MINUTES)
@@ -140,6 +143,43 @@ class SyncTextHttpClient {
             .followSslRedirects(false)
             .retryOnConnectionFailure(false)
             .build()
+}
+
+internal class ClientIdentityInterceptor(
+    private val defaultUserAgent: String,
+) : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        val builder = request.newBuilder()
+        if (request.header("User-Agent") == null) {
+            builder.header("User-Agent", defaultUserAgent)
+        }
+        if (request.url.host == OpenRouterHost) {
+            builder
+                .header("HTTP-Referer", VortexCueProjectUrl)
+                .header("X-OpenRouter-Title", VortexCueAppTitle)
+        }
+        return chain.proceed(builder.build())
+    }
+
+    companion object {
+        private const val OpenRouterHost = "openrouter.ai"
+        internal const val VortexCueAppTitle = "VortexCue"
+        internal const val VortexCueProjectUrl = "https://github.com/zvensmoluya/VortexCue"
+    }
+}
+
+internal fun vortexCueUserAgent(appVersion: String): String {
+    val safeVersion = appVersion.trim().map { character ->
+        if (character in 'a'..'z' || character in 'A'..'Z' || character in '0'..'9' ||
+            character == '.' || character == '_' || character == '-'
+        ) {
+            character
+        } else {
+            '_'
+        }
+    }.joinToString("").ifBlank { "unknown" }
+    return "VortexCue/$safeVersion (Android)"
 }
 
 class BoundedHttpExecutor(
@@ -353,6 +393,7 @@ abstract class JsonTranslationProtocolAdapter(
                 .url(endpoint(request))
                 .header("Accept", "application/json")
                 .header("Content-Type", "application/json")
+                .apply { request.userAgent?.let { header("User-Agent", it) } }
                 .apply { authenticationHeaders(request.apiKey).forEach { (name, value) -> header(name, value) } }
                 .post(body.toRequestBody(JsonMediaType))
                 .build()
@@ -406,6 +447,7 @@ abstract class JsonTranslationProtocolAdapter(
                 .header("Accept", "text/event-stream")
                 .header("Cache-Control", "no-cache")
                 .header("Content-Type", "application/json")
+                .apply { request.userAgent?.let { header("User-Agent", it) } }
                 .apply { authenticationHeaders(request.apiKey).forEach { (name, value) -> header(name, value) } }
                 .post(body.toRequestBody(JsonMediaType))
                 .build()

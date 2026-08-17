@@ -65,7 +65,7 @@ class AppContainer(context: Context) {
     val translationPolicyRegistry = TranslationPolicyRegistry.fromContext(appContext)
     val syncTextScheduler = AndroidSyncTextScheduler(appContext)
     val syncTextNetworkState = AndroidSyncTextNetworkState(appContext)
-    private val syncTextHttpClient = SyncTextHttpClient()
+    private val syncTextHttpClient = SyncTextHttpClient(appContext.appVersionName())
     private val pcmSpool = BoundedPcmSpool(appContext)
     private val audioWindowExtractor = PlatformAudioWindowExtractor(appContext)
     val syncTextRepository =
@@ -137,6 +137,10 @@ class AppContainer(context: Context) {
         }
     }
 }
+
+@Suppress("DEPRECATION")
+private fun Context.appVersionName(): String =
+    packageManager.getPackageInfo(packageName, 0).versionName ?: "unknown"
 
 val Context.appContainer: AppContainer
     get() = (applicationContext as VortexCueApplication).container

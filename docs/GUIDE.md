@@ -103,7 +103,7 @@ M4 解决 Glow 价值成立后最直接的供给缺口：优先翻译内容已�
 ### M4 完成条件
 
 - 用户可以保存多个完整同步文字方案，并指定一个默认方案；
-- 方案明确保存 ASR profile、ASR / 翻译凭据引用、翻译协议、Endpoint、Model、默认目标语言和展示模式；
+- 方案明确保存 ASR profile、ASR / 翻译凭据引用、翻译协议、Endpoint、可选翻译 `User-Agent`、Model、默认目标语言和展示模式；
 - 用户可以从已有、内嵌或媒体音轨创建任务；多音轨媒体必须明确选择音轨；
 - 同一内容和目标语言的重复提交复用未终结任务，重新生成期间旧结果继续可用；
 - 任务按 FIFO 排队并可重排、单项暂停、暂停全部、恢复、删除和换方案，进程重建后从 Room 检查点继续；
@@ -112,6 +112,7 @@ M4 解决 Glow 价值成立后最直接的供给缺口：优先翻译内容已�
 - source / target 作为同时间轴配对结果进入 Player / Glow，支持纯译文和“译文在上、较弱原文在下”；
 - 已有手动文字选择不被生成结果静默覆盖；播放中的结果替换在下一 cue 边界生效；
 - API key、生成资产、任务工件和数据库不进入 Android 备份；
+- 网络请求默认以 `VortexCue/<version> (Android)` 标识客户端；OpenRouter 请求携带固定项目归属，自定义翻译 Endpoint 可在方案高级设置中覆盖 `User-Agent`；
 - 上游未返回 usage / cost 时不显示推测价格。
 
 具体工程契约、固定 policy、协议、窗口、持久化与验收矩阵见 [`ASR_TRANSLATION_V1_SPEC.md`](ASR_TRANSLATION_V1_SPEC.md)。

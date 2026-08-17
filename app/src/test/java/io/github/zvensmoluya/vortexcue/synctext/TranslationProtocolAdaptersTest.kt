@@ -68,6 +68,7 @@ class TranslationProtocolAdaptersTest {
                 assertEquals("POST", recorded.method)
                 assertEquals(case.expectedPath, recorded.target)
                 assertEquals(case.authValue, recorded.headers[case.authName])
+                assertEquals("VortexCue-Test/1", recorded.headers["User-Agent"])
                 assertEquals("[cue-1] one", response.text)
                 assertEquals(case.expectedInput, response.usage.inputTokens)
                 assertEquals(case.expectedOutput, response.usage.outputTokens)
@@ -307,6 +308,7 @@ class TranslationProtocolAdaptersTest {
             apiKey = apiKey,
             systemPrompt = "system-policy",
             userPrompt = "translate-cues",
+            userAgent = "VortexCue-Test/1",
         )
 
     private fun testClient(): OkHttpClient =

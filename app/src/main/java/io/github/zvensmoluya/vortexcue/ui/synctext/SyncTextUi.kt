@@ -520,6 +520,8 @@ private fun SchemeForm(
     var asrCredentialId by remember { mutableStateOf(existing?.asrCredentialId ?: credentials.firstEligible(CredentialPurpose.Asr)?.credentialId) }
     var protocol by remember { mutableStateOf(existing?.translationProtocol ?: TranslationProtocol.Responses) }
     var endpoint by remember { mutableStateOf(existing?.translationEndpoint ?: protocol.defaultEndpoint()) }
+    var customUserAgentEnabled by remember { mutableStateOf(existing?.translationUserAgent != null) }
+    var userAgent by remember { mutableStateOf(existing?.translationUserAgent.orEmpty()) }
     var model by remember { mutableStateOf(existing?.translationModel.orEmpty()) }
     var translationCredentialId by remember { mutableStateOf(existing?.translationCredentialId ?: credentials.firstEligible(CredentialPurpose.Translation)?.credentialId) }
     var targetLanguage by remember { mutableStateOf(existing?.defaultTargetLanguage ?: "zh-CN") }
@@ -554,6 +556,19 @@ private fun SchemeForm(
             )
         }
         OutlinedTextField(value = endpoint, onValueChange = { endpoint = it }, label = { Text("HTTPS Endpoint / 模板") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = customUserAgentEnabled, onCheckedChange = { customUserAgentEnabled = it })
+            Text("自定义 User-Agent", color = AppPrimaryText)
+        }
+        if (customUserAgentEnabled) {
+            OutlinedTextField(
+                value = userAgent,
+                onValueChange = { userAgent = it },
+                label = { Text("User-Agent") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         OutlinedTextField(value = model, onValueChange = { model = it }, label = { Text("Model（手填）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         CredentialChoices("翻译凭据", translationCredentials, translationCredentialId) { translationCredentialId = it }
         LanguageTagField(
@@ -586,6 +601,7 @@ private fun SchemeForm(
                             asrCredentialId = requireNotNull(asrCredentialId),
                             translationProtocol = protocol,
                             translationEndpoint = endpoint,
+                            translationUserAgent = userAgent.takeIf { customUserAgentEnabled },
                             translationModel = model,
                             translationCredentialId = requireNotNull(translationCredentialId),
                             defaultTargetLanguage = requireNotNull(normalizedTarget),
