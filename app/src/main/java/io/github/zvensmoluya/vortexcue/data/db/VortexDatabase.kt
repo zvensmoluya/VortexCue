@@ -19,10 +19,9 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
         TimedTextTrackRoleEntity::class,
         TextSelectionEntity::class,
         ContentDispositionEntity::class,
+        ContentFolderEntity::class,
+        ContentFolderMembershipEntity::class,
         RecentEntryEntity::class,
-        PlaylistEntity::class,
-        PlaylistEntryEntity::class,
-        HomeShortcutEntity::class,
         CurrentDraftEntity::class,
         CurrentPlaybackSessionEntity::class,
         CurrentQueueEntryEntity::class,
@@ -39,7 +38,9 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
         SyncTextRunnerLeaseEntity::class,
         SyncTextQueueControlEntity::class,
     ],
-    version = 3,
+    // The new content model intentionally allows a destructive upgrade. Original
+    // media remains in user storage; only app-owned indexes are rebuilt.
+    version = 4,
     autoMigrations = [AutoMigration(from = 2, to = 3)],
     exportSchema = true,
 )

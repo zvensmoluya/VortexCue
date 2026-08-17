@@ -309,6 +309,53 @@ data class ContentDispositionEntity(
     val decidedAtMs: Long,
 )
 
+/** A user-created, single-level virtual folder. It never owns a filesystem path. */
+@Entity(
+    tableName = "content_folder",
+    indices = [Index(value = ["name"], unique = true)],
+)
+data class ContentFolderEntity(
+    @PrimaryKey
+    @ColumnInfo(name = "folder_id")
+    val folderId: String,
+    val name: String,
+    @ColumnInfo(name = "created_at_ms")
+    val createdAtMs: Long,
+    @ColumnInfo(name = "updated_at_ms")
+    val updatedAtMs: Long,
+)
+
+/** One content can belong to at most one virtual folder. No row means the root folder. */
+@Entity(
+    tableName = "content_folder_membership",
+    primaryKeys = ["content_id"],
+    foreignKeys = [
+        ForeignKey(
+            entity = ContentEntity::class,
+            parentColumns = ["content_id"],
+            childColumns = ["content_id"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = ContentFolderEntity::class,
+            parentColumns = ["folder_id"],
+            childColumns = ["folder_id"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("folder_id")],
+)
+data class ContentFolderMembershipEntity(
+    @ColumnInfo(name = "content_id")
+    val contentId: String,
+    @ColumnInfo(name = "folder_id")
+    val folderId: String,
+    @ColumnInfo(name = "moved_at_ms")
+    val movedAtMs: Long,
+)
+
 @Entity(
     tableName = "recent_entry",
     foreignKeys = [
@@ -328,90 +375,6 @@ data class RecentEntryEntity(
     val contentId: String,
     @ColumnInfo(name = "last_opened_at_ms")
     val lastOpenedAtMs: Long,
-)
-
-@Entity(tableName = "playlist")
-data class PlaylistEntity(
-    @PrimaryKey
-    @ColumnInfo(name = "playlist_id")
-    val playlistId: String,
-    val name: String,
-    @ColumnInfo(name = "created_at_ms")
-    val createdAtMs: Long,
-    @ColumnInfo(name = "updated_at_ms")
-    val updatedAtMs: Long,
-)
-
-@Entity(
-    tableName = "playlist_entry",
-    primaryKeys = ["playlist_id", "content_id"],
-    foreignKeys = [
-        ForeignKey(
-            entity = PlaylistEntity::class,
-            parentColumns = ["playlist_id"],
-            childColumns = ["playlist_id"],
-            onDelete = ForeignKey.CASCADE,
-            onUpdate = ForeignKey.CASCADE,
-        ),
-        ForeignKey(
-            entity = ContentEntity::class,
-            parentColumns = ["content_id"],
-            childColumns = ["content_id"],
-            onDelete = ForeignKey.CASCADE,
-            onUpdate = ForeignKey.CASCADE,
-        ),
-    ],
-    indices = [
-        Index("content_id"),
-        Index(value = ["playlist_id", "position"], unique = true),
-    ],
-)
-data class PlaylistEntryEntity(
-    @ColumnInfo(name = "playlist_id")
-    val playlistId: String,
-    @ColumnInfo(name = "content_id")
-    val contentId: String,
-    val position: Int,
-    @ColumnInfo(name = "added_at_ms")
-    val addedAtMs: Long,
-)
-
-@Entity(
-    tableName = "home_shortcut",
-    foreignKeys = [
-        ForeignKey(
-            entity = SourceEntity::class,
-            parentColumns = ["source_id"],
-            childColumns = ["source_id"],
-            onDelete = ForeignKey.CASCADE,
-            onUpdate = ForeignKey.CASCADE,
-        ),
-        ForeignKey(
-            entity = PlaylistEntity::class,
-            parentColumns = ["playlist_id"],
-            childColumns = ["playlist_id"],
-            onDelete = ForeignKey.CASCADE,
-            onUpdate = ForeignKey.CASCADE,
-        ),
-    ],
-    indices = [
-        Index(value = ["position"], unique = true),
-        Index("source_id"),
-        Index("playlist_id"),
-    ],
-)
-data class HomeShortcutEntity(
-    @PrimaryKey
-    @ColumnInfo(name = "shortcut_id")
-    val shortcutId: String,
-    val position: Int,
-    val type: String,
-    @ColumnInfo(name = "source_id")
-    val sourceId: String?,
-    @ColumnInfo(name = "folder_key")
-    val folderKey: String?,
-    @ColumnInfo(name = "playlist_id")
-    val playlistId: String?,
 )
 
 @Entity(
@@ -466,8 +429,6 @@ data class CurrentPlaybackSessionEntity(
     val shuffleEnabled: Boolean = false,
     @ColumnInfo(name = "repeat_mode")
     val repeatMode: Int = 0,
-    @ColumnInfo(name = "last_surface")
-    val lastSurface: String = "Normal",
     @ColumnInfo(name = "queue_revision")
     val queueRevision: Long = 0L,
     @ColumnInfo(name = "updated_at_ms")

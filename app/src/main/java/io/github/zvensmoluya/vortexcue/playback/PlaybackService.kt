@@ -22,7 +22,6 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import io.github.zvensmoluya.vortexcue.app.MainActivity
 import io.github.zvensmoluya.vortexcue.app.appContainer
-import io.github.zvensmoluya.vortexcue.core.model.PlayerSurface
 import io.github.zvensmoluya.vortexcue.data.ContentRepository
 import io.github.zvensmoluya.vortexcue.data.PlaybackRecoveryProjection
 import io.github.zvensmoluya.vortexcue.data.PlaybackStateRepository
@@ -547,12 +546,6 @@ class PlaybackService : MediaSessionService() {
                         PlaybackCommands.Materialize.customAction -> {
                             val projection = ensureMaterializedInside()
                             queueResult(projection)
-                        }
-                        PlaybackCommands.SetSurface.customAction -> {
-                            val surface =
-                                PlayerSurface.restoreLastSurface(args.getString(PlaybackCommands.Surface))
-                            playbackRepository.setLastSurface(surface)
-                            SessionResult(SessionResult.RESULT_SUCCESS)
                         }
                         PlaybackCommands.Relink.customAction -> {
                             val contentId = args.getString(PlaybackCommands.ContentId)

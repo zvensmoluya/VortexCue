@@ -77,6 +77,8 @@ data class SyncTextSchemeEntity(
     val createdAtMs: Long,
     @ColumnInfo(name = "updated_at_ms")
     val updatedAtMs: Long,
+    @ColumnInfo(name = "asr_endpoint")
+    val asrEndpoint: String = "https://openrouter.ai/api/v1/audio/transcriptions",
 )
 
 @Entity(
@@ -266,6 +268,8 @@ data class GenerationAttemptEntity(
     val createdAtMs: Long,
     @ColumnInfo(name = "finished_at_ms")
     val finishedAtMs: Long? = null,
+    @ColumnInfo(name = "asr_endpoint")
+    val asrEndpoint: String = "https://openrouter.ai/api/v1/audio/transcriptions",
 )
 
 @Entity(

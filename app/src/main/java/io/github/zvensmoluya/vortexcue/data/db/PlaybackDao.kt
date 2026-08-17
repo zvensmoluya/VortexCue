@@ -49,12 +49,6 @@ interface PlaybackDao {
         updatedAtMs: Long,
     ): Int
 
-    @Query(
-        "UPDATE current_playback_session SET last_surface = :lastSurface, updated_at_ms = :updatedAtMs " +
-            "WHERE singleton_id = 1",
-    )
-    suspend fun updateLastSurface(lastSurface: String, updatedAtMs: Long)
-
     companion object {
         const val QUEUE_SELECT =
             "SELECT q.position AS position, c.content_id AS contentId, l.locator_id AS locatorId, " +

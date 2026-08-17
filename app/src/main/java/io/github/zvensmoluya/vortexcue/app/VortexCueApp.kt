@@ -50,8 +50,6 @@ import io.github.zvensmoluya.vortexcue.core.storage.persistReadPermission
 import io.github.zvensmoluya.vortexcue.core.storage.readSubtitleBytes
 import io.github.zvensmoluya.vortexcue.data.ContentDetails
 import io.github.zvensmoluya.vortexcue.data.ContentDisposition
-import io.github.zvensmoluya.vortexcue.data.ContentSummary
-import io.github.zvensmoluya.vortexcue.data.HomeLibraryProjection
 import io.github.zvensmoluya.vortexcue.data.PlaybackRecoveryProjection
 import io.github.zvensmoluya.vortexcue.data.SettingsState
 import io.github.zvensmoluya.vortexcue.library.LibraryCoordinator
@@ -74,10 +72,11 @@ import io.github.zvensmoluya.vortexcue.subtitle.SubtitleAssetStore
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleParser
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleTimeline
 import io.github.zvensmoluya.vortexcue.synctext.GeneratedTextPresentation
-import io.github.zvensmoluya.vortexcue.ui.home.HomeScreen
-import io.github.zvensmoluya.vortexcue.ui.home.HomeSection
 import io.github.zvensmoluya.vortexcue.ui.player.PlayerScreen
+import io.github.zvensmoluya.vortexcue.ui.player.GlowCalibrationScreen
 import io.github.zvensmoluya.vortexcue.ui.player.rememberPlaybackSnapshot
+import io.github.zvensmoluya.vortexcue.ui.main.MainTab
+import io.github.zvensmoluya.vortexcue.ui.main.MainTabScreen
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextAction
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextUiHost
 import java.io.FileNotFoundException
@@ -90,15 +89,45 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class AppDestination {
-    Home,
+internal enum class AppDestination {
+    Main,
     Player,
 }
 
-private enum class MediaPickTarget {
-    Draft,
+internal data class AppRouteSnapshot(
+    val destination: AppDestination,
+    val mainTab: MainTab,
+    val playerSurface: PlayerSurface,
+)
+
+internal fun resolveBackRoute(
+    destination: AppDestination,
+    mainTab: MainTab,
+    playerOriginTab: MainTab,
+    playerSurface: PlayerSurface,
+): AppRouteSnapshot =
+    when {
+        destination == AppDestination.Player &&
+            playerSurface == PlayerSurface.Calibration &&
+            playerOriginTab == MainTab.Settings ->
+            AppRouteSnapshot(AppDestination.Main, playerOriginTab, PlayerSurface.Normal)
+        destination == AppDestination.Player && playerSurface != PlayerSurface.Normal ->
+            AppRouteSnapshot(AppDestination.Player, mainTab, PlayerSurface.Normal)
+        destination == AppDestination.Player ->
+            AppRouteSnapshot(AppDestination.Main, playerOriginTab, PlayerSurface.Normal)
+        mainTab != MainTab.Content ->
+            AppRouteSnapshot(AppDestination.Main, MainTab.Content, PlayerSurface.Normal)
+        else -> AppRouteSnapshot(destination, mainTab, playerSurface)
+    }
+
+internal enum class MediaPickTarget {
+    Import,
+    External,
     Relink,
 }
+
+internal val MediaPickTarget.collectsIntoContent: Boolean
+    get() = this == MediaPickTarget.Import
 
 private data class SubtitlePickTarget(
     val contentId: String,
@@ -129,29 +158,26 @@ internal fun VortexCueApp(
             LibraryCoordinator(context, scope, repository)
         }
 
-    val home by repository.homeProjection.collectAsState(initial = HomeLibraryProjection())
+    val sourceSummaries by repository.sources.collectAsState(initial = emptyList())
     val recovery by playbackRepository.recovery.collectAsState(initial = PlaybackRecoveryProjection())
-    val draftId by repository.observeDraft().collectAsState(initial = null)
-    val draftFlow: Flow<ContentSummary?> =
-        remember(repository, draftId) {
-            draftId?.let(repository::observeSummary) ?: flowOf(null)
-        }
-    val draftSummary by draftFlow.collectAsState(initial = null)
     val persistedSettings by settingsStore.state.collectAsState(initial = SettingsState())
     val playback = rememberPlaybackSnapshot(player)
     val embeddedTextRuntime = rememberEmbeddedTextRuntimeState(player)
     val syncTextUiState by container.syncTextUiController.state.collectAsState()
     val dispatchSyncTextAction = container.syncTextUiController::dispatch
 
-    var destination by rememberSaveable { mutableStateOf(AppDestination.Home) }
-    var homeSection by rememberSaveable { mutableStateOf(HomeSection.Home) }
+    var destination by rememberSaveable { mutableStateOf(AppDestination.Main) }
+    var mainTab by rememberSaveable { mutableStateOf(MainTab.Content) }
+    var playerOriginTab by rememberSaveable { mutableStateOf(MainTab.Content) }
+    var importHubRequest by rememberSaveable { mutableIntStateOf(0) }
     var playerSurface by rememberSaveable { mutableStateOf(PlayerSurface.Normal) }
-    var mediaPickTarget by remember { mutableStateOf(MediaPickTarget.Draft) }
+    var mediaPickTarget by remember { mutableStateOf(MediaPickTarget.Import) }
     var relinkContentId by remember { mutableStateOf<String?>(null) }
     var subtitlePickTarget by remember { mutableStateOf<SubtitlePickTarget?>(null) }
     var folderRelinkSourceId by remember { mutableStateOf<String?>(null) }
     var materialization by remember { mutableStateOf(PlayerMaterializationState.NotLoaded) }
     var displayProfile by remember { mutableStateOf(DisplayProfile.Balanced) }
+    var contentSort by remember { mutableStateOf(io.github.zvensmoluya.vortexcue.data.ContentSort.RecentAdded) }
     var glowCalibrationCompleted by remember { mutableStateOf(false) }
     var glowGestureHintSeen by remember { mutableStateOf(false) }
     var primarySubtitle by remember { mutableStateOf<LoadedSubtitle?>(null) }
@@ -162,6 +188,7 @@ internal fun VortexCueApp(
         displayProfile = persistedSettings.displayProfile
         glowCalibrationCompleted = persistedSettings.glowCalibrationCompleted
         glowGestureHintSeen = persistedSettings.glowGestureHintSeen
+        contentSort = persistedSettings.contentSort
     }
     LaunchedEffect(player) {
         materialization = runCatching { gateway.materializationState() }
@@ -334,7 +361,19 @@ internal fun VortexCueApp(
     }
 
     fun togglePlayback() {
-        if (player.isPlaying) player.pause() else startPlayback()
+        if (player.isPlaying) {
+            player.pause()
+        } else if (runtimeOwnsState) {
+            startPlayback()
+        } else if (recovery.queue.isNotEmpty()) {
+            scope.launch {
+                val result = gateway.materialize()
+                if (result.resultCode == SessionResult.RESULT_SUCCESS) {
+                    materialization = PlayerMaterializationState.Materialized
+                    startPlayback()
+                }
+            }
+        }
     }
 
     suspend fun openContentNow(contentIds: List<String>, index: Int): Boolean {
@@ -344,35 +383,25 @@ internal fun VortexCueApp(
         repository.recordOpened(contentIds[index])
         materialization = PlayerMaterializationState.Materialized
         playerSurface = PlayerSurface.Normal
+        playerOriginTab = mainTab
         destination = AppDestination.Player
         startPlayback()
         return true
     }
 
     fun openContent(contentIds: List<String>, index: Int) {
+        playerOriginTab = mainTab
         scope.launch { openContentNow(contentIds, index) }
     }
 
     fun continuePlayback() {
         if (recovery.queue.isEmpty() && playback.queue.isEmpty()) return
+        playerOriginTab = mainTab
         scope.launch {
             val result = gateway.materialize()
             if (result.resultCode != SessionResult.RESULT_SUCCESS) return@launch
             materialization = PlayerMaterializationState.Materialized
-            playerSurface = resolveResumeSurface(recovery.lastSurface, glowCalibrationCompleted)
-            destination = AppDestination.Player
-            startPlayback()
-        }
-    }
-
-    fun selectTonight(contentId: String) {
-        val index = recovery.queue.indexOfFirst { it.contentId == contentId }
-        if (index < 0) return
-        scope.launch {
-            val result = gateway.materialize()
-            if (result.resultCode != SessionResult.RESULT_SUCCESS) return@launch
-            materialization = PlayerMaterializationState.Materialized
-            player.seekToDefaultPosition(index)
+            // A cold launch always enters the readable Normal Player. Glow is an explicit action.
             playerSurface = PlayerSurface.Normal
             destination = AppDestination.Player
             startPlayback()
@@ -397,10 +426,11 @@ internal fun VortexCueApp(
         runCatchingSuspend { inspectOpenedMedia(uri) }
             .onSuccess { replacement ->
                 when (target) {
-                    MediaPickTarget.Draft -> {
+                    MediaPickTarget.Import,
+                    MediaPickTarget.External,
+                    -> {
                         val contentId = repository.resolveOrCreate(replacement)
-                        repository.setDraft(contentId)
-                        repository.recordOpened(contentId)
+                        if (target.collectsIntoContent) repository.collect(contentId)
                         if (playImmediately) openContentNow(listOf(contentId), 0)
                     }
                     MediaPickTarget.Relink -> {
@@ -421,7 +451,13 @@ internal fun VortexCueApp(
 
     val mediaPicker =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            uri?.let { consumeMediaUri(it, mediaPickTarget, playImmediately = false) }
+            uri?.let {
+                consumeMediaUri(
+                    it,
+                    mediaPickTarget,
+                    playImmediately = mediaPickTarget == MediaPickTarget.Import,
+                )
+            }
         }
     val subtitlePicker =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -453,12 +489,12 @@ internal fun VortexCueApp(
         }
     val libraryPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-            coordinator.scanAll()
+            coordinator.scanDevice(admitNew = true, audioOnly = true)
         }
 
     LaunchedEffect(externalMediaRequest?.id) {
         val request = externalMediaRequest ?: return@LaunchedEffect
-        handleMediaUri(request.uri, MediaPickTarget.Draft, playImmediately = true)
+        handleMediaUri(request.uri, MediaPickTarget.External, playImmediately = true)
         onExternalMediaRequestConsumed(request.id)
     }
 
@@ -504,121 +540,120 @@ internal fun VortexCueApp(
         }
     }
 
+    fun navigateBack() {
+        val next = resolveBackRoute(destination, mainTab, playerOriginTab, playerSurface)
+        destination = next.destination
+        mainTab = next.mainTab
+        playerSurface = next.playerSurface
+    }
+
     BackHandler(enabled = destination == AppDestination.Player) {
-        if (playerSurface != PlayerSurface.Normal) playerSurface = PlayerSurface.Normal
-        else {
-            homeSection = HomeSection.Home
-            destination = AppDestination.Home
-        }
+        navigateBack()
     }
 
     val sleepTimer = rememberSleepTimerState(player, sleepTimerRevision)
 
     when (destination) {
-        AppDestination.Home ->
-            HomeScreen(
-                section = homeSection,
-                onSectionChanged = { homeSection = it },
+        AppDestination.Main ->
+            MainTabScreen(
+                selectedTab = mainTab,
+                onTabChanged = { mainTab = it },
+                openImportHubRequest = importHubRequest,
+                onImportHubRequestConsumed = { importHubRequest = 0 },
                 repository = repository,
-                home = home,
+                sources = sourceSummaries,
                 coordinator = coordinator.state,
-                draft = draftSummary,
                 recovery = recovery,
-                runtimeCurrentIndex = if (runtimeOwnsState) playback.currentIndex else recovery.currentIndex,
-                runtimePositionMs = if (runtimeOwnsState) playback.positionMs else recovery.positionMs,
                 playback = playback,
+                gateway = gateway,
                 displayProfile = displayProfile,
+                contentSort = contentSort,
+                onContentSortChanged = { sort ->
+                    contentSort = sort
+                    scope.launch { settingsStore.saveContentSort(sort) }
+                },
                 onPickMedia = {
-                    mediaPickTarget = MediaPickTarget.Draft
+                    mediaPickTarget = MediaPickTarget.Import
                     mediaPicker.launch(arrayOf("audio/*", "video/*"))
                 },
                 onRequestLibraryAccess = {
                     val permissions = mediaLibraryPermissionsToRequest(context)
-                    if (permissions.isEmpty()) coordinator.scanAll()
+                    if (permissions.isEmpty()) coordinator.scanDevice(admitNew = true, audioOnly = true)
                     else libraryPermissionLauncher.launch(permissions)
                 },
-                onRefreshLibrary = coordinator::scanAll,
+                onRefreshLibrary = { coordinator.scanAll() },
                 onRefreshSource = coordinator::refreshSource,
+                onRelinkSource = { sourceId ->
+                    folderRelinkSourceId = sourceId
+                    folderPicker.launch(null)
+                },
                 onCancelScan = coordinator::cancelScan,
                 onAddFolder = {
                     folderRelinkSourceId = null
                     folderPicker.launch(null)
                 },
-                onRelinkFolder = { sourceId ->
-                    folderRelinkSourceId = sourceId
-                    folderPicker.launch(null)
-                },
                 onRemoveSource = coordinator::removeSource,
-                onCollect = { id -> scope.launch { repository.collect(id) } },
-                onUncollect = { id -> scope.launch { repository.clearDisposition(id) } },
-                onIgnore = { id -> scope.launch { repository.ignore(id) } },
-                onRestoreIgnored = { id -> scope.launch { repository.clearDisposition(id) } },
+                onPendingImportConsumed = coordinator::clearPendingImport,
                 onPlaySingle = { id -> openContent(listOf(id), 0) },
-                onPlayGroup = ::openContent,
-                onSelectTonight = ::selectTonight,
-                onAddToTonight = { id ->
-                    scope.launch {
-                        gateway.append(listOf(id))
-                        materialization = PlayerMaterializationState.Materialized
+                onQueueSelect = { index ->
+                    if (index in recovery.queue.indices) {
+                        playerOriginTab = MainTab.Queue
+                        scope.launch {
+                            val result = gateway.materialize()
+                            if (result.resultCode != SessionResult.RESULT_SUCCESS) return@launch
+                            materialization = PlayerMaterializationState.Materialized
+                            player.seekToDefaultPosition(index)
+                            recovery.queue.getOrNull(index)?.contentId?.let { repository.recordOpened(it) }
+                            playerSurface = PlayerSurface.Normal
+                            destination = AppDestination.Player
+                            startPlayback()
+                        }
                     }
                 },
-                onRemoveFromTonight = { id -> scope.launch { gateway.remove(id) } },
-                onMoveTonight = { from, to -> scope.launch { gateway.move(from, to) } },
-                onClearTonight = {
-                    scope.launch {
-                        gateway.clear()
-                        materialization = PlayerMaterializationState.ExplicitlyCleared
-                    }
-                },
-                onStartTonight = ::continuePlayback,
-                onCreatePlaylist = { name, seed ->
-                    scope.launch {
-                        val id = repository.createPlaylist(name)
-                        seed?.let { repository.addToPlaylist(id, it) }
-                    }
-                },
-                onAddToPlaylist = { playlistId, contentId ->
-                    scope.launch { repository.addToPlaylist(playlistId, contentId) }
-                },
-                onRemoveFromPlaylist = { playlistId, contentId ->
-                    scope.launch { repository.removeFromPlaylist(playlistId, contentId) }
-                },
-                onDeletePlaylist = { id -> scope.launch { repository.deletePlaylist(id) } },
                 onContinue = ::continuePlayback,
                 onPlayPause = ::togglePlayback,
+                onOpenSyncText = { summary ->
+                    scope.launch {
+                        repository.details(summary.contentId)?.let { details ->
+                            dispatchSyncTextAction(SyncTextAction.OpenGeneration(details))
+                        }
+                    }
+                },
+                syncTextUiState = syncTextUiState,
+                onSyncTextAction = dispatchSyncTextAction,
                 onDisplayProfileChanged = { profile ->
                     displayProfile = profile
                     scope.launch { settingsStore.saveDisplayProfile(profile) }
                 },
-                syncTextTaskCount = syncTextUiState.tasks.size,
-                onOpenSyncTextTasks = { dispatchSyncTextAction(SyncTextAction.OpenTaskDrawer) },
-                onOpenSyncTextSchemes = { dispatchSyncTextAction(SyncTextAction.OpenSchemeEditor) },
-                onGenerateSyncText = { details ->
-                    dispatchSyncTextAction(SyncTextAction.OpenGeneration(details))
-                },
-                onOpenGeneratedTextResult = { slotId ->
-                    dispatchSyncTextAction(SyncTextAction.OpenResultDetails(slotId))
-                },
-                onRelinkContent = { id ->
-                    relinkContentId = id
-                    mediaPickTarget = MediaPickTarget.Relink
-                    mediaPicker.launch(arrayOf("audio/*", "video/*"))
-                },
-                onSelectContentTextTrack = { contentId, slot, trackId ->
-                    scope.launch { repository.selectManualTextTrack(contentId, slot, trackId) }
-                },
-                onRestoreAutomaticContentTextTrack = { contentId, slot ->
-                    scope.launch { repository.restoreAutomaticTextTrack(contentId, slot) }
-                },
-                onAddContentTextTrack = { contentId, slot ->
-                    subtitlePickTarget = SubtitlePickTarget(contentId, slot)
-                    subtitlePicker.launch(arrayOf("*/*"))
+                onCalibrateGlow = {
+                    playerOriginTab = MainTab.Settings
+                    playerSurface = PlayerSurface.Calibration
+                    destination = AppDestination.Player
                 },
                 modifier = modifier,
             )
         AppDestination.Player -> {
             val session = activeSession
-            if (session == null) {
+            if (playerSurface == PlayerSurface.Calibration && playerOriginTab == MainTab.Settings) {
+                GlowCalibrationScreen(
+                    profile = displayProfile,
+                    onProfileChanged = { profile ->
+                        displayProfile = profile
+                        scope.launch { settingsStore.saveDisplayProfile(profile) }
+                    },
+                    onComplete = {
+                        glowCalibrationCompleted = true
+                        playerSurface = PlayerSurface.Normal
+                        destination = AppDestination.Main
+                        scope.launch { settingsStore.saveGlowOnboarding(true, glowGestureHintSeen) }
+                    },
+                    onCancel = {
+                        playerSurface = PlayerSurface.Normal
+                        destination = AppDestination.Main
+                    },
+                    modifier = modifier,
+                )
+            } else if (session == null) {
                 Box(
                     modifier = modifier.fillMaxSize().background(Color.Black),
                     contentAlignment = Alignment.Center,
@@ -647,15 +682,15 @@ internal fun VortexCueApp(
                                 requested
                             }
                         playerSurface = resolved
-                        scope.launch { gateway.setLastSurface(resolved) }
                     },
                     onBackToLibrary = {
-                        homeSection = HomeSection.Home
-                        destination = AppDestination.Home
+                        mainTab = playerOriginTab
+                        destination = AppDestination.Main
                     },
                     onOpenSources = {
-                        homeSection = HomeSection.Sources
-                        destination = AppDestination.Home
+                        mainTab = MainTab.Content
+                        importHubRequest += 1
+                        destination = AppDestination.Main
                     },
                     onRelinkMedia = {
                         currentContentId?.let { id ->
@@ -668,15 +703,15 @@ internal fun VortexCueApp(
                         val details = currentDetails ?: return@PlayerScreen
                         scope.launch {
                             if (details.disposition == ContentDisposition.Collected) {
-                                repository.clearDisposition(details.contentId)
+                                repository.ignore(details.contentId)
                             } else {
                                 repository.collect(details.contentId)
                             }
                         }
                     },
-                    onOpenTonight = {
-                        homeSection = HomeSection.Tonight
-                        destination = AppDestination.Home
+                    onOpenQueue = {
+                        mainTab = MainTab.Queue
+                        destination = AppDestination.Main
                     },
                     onQueueSelect = { index ->
                         if (index in playback.queue.indices) {
@@ -712,20 +747,21 @@ internal fun VortexCueApp(
                             subtitlePicker.launch(arrayOf("*/*"))
                         }
                     },
-                    syncTextTaskCount = syncTextUiState.tasks.size,
-                    onOpenSyncTextTasks = {
-                        dispatchSyncTextAction(SyncTextAction.OpenTaskDrawer)
-                    },
-                    onOpenSyncTextSchemes = {
-                        dispatchSyncTextAction(SyncTextAction.OpenSchemeEditor)
-                    },
+                    syncTextTask = syncTextUiState.tasks.firstOrNull { it.contentId == currentContentId },
                     onGenerateSyncText = {
                         currentDetails?.let { details ->
                             dispatchSyncTextAction(SyncTextAction.OpenGeneration(details))
                         }
                     },
-                    onOpenGeneratedTextResult = { slotId ->
-                        dispatchSyncTextAction(SyncTextAction.OpenResultDetails(slotId))
+                    onCancelSyncText = {
+                        currentContentId?.let { id ->
+                            dispatchSyncTextAction(SyncTextAction.CancelForContent(id))
+                        }
+                    },
+                    onRetrySyncText = {
+                        currentContentId?.let { id ->
+                            dispatchSyncTextAction(SyncTextAction.RetryForContent(id))
+                        }
                     },
                     onGeneratedPresentationModeChanged = { slotId, mode ->
                         dispatchSyncTextAction(SyncTextAction.SetPresentationMode(slotId, mode))
@@ -742,7 +778,6 @@ internal fun VortexCueApp(
                         playerSurface = PlayerSurface.Glow
                         scope.launch {
                             settingsStore.saveGlowOnboarding(true, glowGestureHintSeen)
-                            gateway.setLastSurface(PlayerSurface.Glow)
                         }
                     },
                     onGestureHintSeen = {
@@ -761,7 +796,7 @@ internal fun VortexCueApp(
                         player.stopAfterCurrentItem()
                         sleepTimerRevision += 1
                     },
-                    onStopAfterTonight = {
+                    onStopAfterQueue = {
                         player.stopAfterTonight()
                         sleepTimerRevision += 1
                     },
@@ -773,6 +808,10 @@ internal fun VortexCueApp(
                 )
             }
         }
+    }
+
+    BackHandler(enabled = destination == AppDestination.Main && mainTab != MainTab.Content) {
+        navigateBack()
     }
 
     SyncTextUiHost(
@@ -922,13 +961,3 @@ internal fun isMediaAccessErrorCode(errorCode: Int): Boolean =
             PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
             PlaybackException.ERROR_CODE_IO_NO_PERMISSION,
         )
-
-internal fun resolveResumeSurface(
-    lastSurface: PlayerSurface,
-    glowCalibrationCompleted: Boolean,
-): PlayerSurface =
-    when {
-        lastSurface.asLastSurface() != PlayerSurface.Glow -> PlayerSurface.Normal
-        glowCalibrationCompleted -> PlayerSurface.Glow
-        else -> PlayerSurface.Calibration
-    }

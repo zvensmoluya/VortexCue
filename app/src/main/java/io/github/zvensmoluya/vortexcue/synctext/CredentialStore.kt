@@ -27,6 +27,8 @@ interface CredentialStore {
     suspend fun delete(credentialId: String)
 
     suspend fun contains(credentialId: String): Boolean
+
+    suspend fun pruneExcept(credentialIds: Set<String>) = Unit
 }
 
 class CredentialUnavailableException(message: String, cause: Throwable? = null) :
@@ -111,6 +113,20 @@ class AndroidKeystoreCredentialStore(context: Context) : CredentialStore {
 
     override suspend fun contains(credentialId: String): Boolean =
         withContext(Dispatchers.IO) { file(requireSafeId(credentialId)).isFile }
+
+    override suspend fun pruneExcept(credentialIds: Set<String>) {
+        val retained = credentialIds.mapTo(mutableSetOf(), ::requireSafeId)
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                directory.listFiles()
+                    ?.filter { it.isFile && it.name.endsWith(".bin") }
+                    ?.forEach { candidate ->
+                        val id = candidate.name.removeSuffix(".bin")
+                        if (id !in retained) candidate.delete()
+                    }
+            }
+        }
+    }
 
     private fun file(credentialId: String) = File(directory, "$credentialId.bin")
 

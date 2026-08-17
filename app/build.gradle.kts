@@ -27,6 +27,7 @@ android {
     }
 
     testOptions {
+        unitTests.isIncludeAndroidResources = true
         unitTests.all {
             it.jvmArgs(
                 "--add-opens=java.base/java.lang=ALL-UNNAMED",
@@ -49,9 +50,16 @@ room3 {
 
 configurations.configureEach {
     if (name.endsWith("UnitTestCompileClasspath") || name.endsWith("UnitTestRuntimeClasspath")) {
+        exclude(group = "androidx.room3", module = "room3-runtime")
+        exclude(group = "androidx.room3", module = "room3-paging")
+        exclude(group = "androidx.room3", module = "room3-testing")
         exclude(group = "androidx.room3", module = "room3-runtime-android")
         exclude(group = "androidx.room3", module = "room3-paging-android")
         exclude(group = "androidx.room3", module = "room3-testing-android")
+        exclude(group = "androidx.sqlite", module = "sqlite")
+        exclude(group = "androidx.sqlite", module = "sqlite-async")
+        exclude(group = "androidx.sqlite", module = "sqlite-framework")
+        exclude(group = "androidx.sqlite", module = "sqlite-bundled")
         exclude(group = "androidx.sqlite", module = "sqlite-android")
         exclude(group = "androidx.sqlite", module = "sqlite-async-android")
         exclude(group = "androidx.sqlite", module = "sqlite-framework-android")
@@ -81,11 +89,15 @@ dependencies {
 
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons.extended)
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
+    debugImplementation(libs.compose.ui.test.manifest)
 
     testImplementation(libs.junit)
+    testImplementation(composeBom)
+    testImplementation(libs.compose.ui.test.junit4)
     testImplementation(libs.mockwebserver)
     testImplementation(libs.datastore.core.jvm)
     testImplementation(libs.datastore.core.okio.jvm)

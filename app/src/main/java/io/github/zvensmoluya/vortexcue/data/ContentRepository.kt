@@ -21,20 +21,17 @@ import io.github.zvensmoluya.vortexcue.data.db.ActiveMediaLocatorEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentDao
 import io.github.zvensmoluya.vortexcue.data.db.ContentDispositionEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentEntity
+import io.github.zvensmoluya.vortexcue.data.db.ContentFolderEntity
+import io.github.zvensmoluya.vortexcue.data.db.ContentFolderMembershipEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentIdentityEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentRedirectEntity
 import io.github.zvensmoluya.vortexcue.data.db.CurrentPlaybackSessionEntity
 import io.github.zvensmoluya.vortexcue.data.db.CurrentQueueEntryEntity
 import io.github.zvensmoluya.vortexcue.data.db.CurrentDraftEntity
-import io.github.zvensmoluya.vortexcue.data.db.HomeShortcutEntity
-import io.github.zvensmoluya.vortexcue.data.db.PlaylistEntity
-import io.github.zvensmoluya.vortexcue.data.db.PlaylistEntryEntity
 import io.github.zvensmoluya.vortexcue.data.db.RecentEntryEntity
 import io.github.zvensmoluya.vortexcue.data.db.SourceEntity
 import io.github.zvensmoluya.vortexcue.data.db.TextSelectionEntity
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase
-import io.github.zvensmoluya.vortexcue.library.LibraryShortcut
-import io.github.zvensmoluya.vortexcue.library.LibraryShortcutType
 import io.github.zvensmoluya.vortexcue.library.LibrarySourceIds
 import io.github.zvensmoluya.vortexcue.library.LibrarySourceKind
 import io.github.zvensmoluya.vortexcue.library.TextTrackCatalogState
@@ -56,46 +53,36 @@ class ContentRepository(
 ) {
     private val dao: ContentDao = database.contentDao()
 
-    val homeProjection: Flow<HomeLibraryProjection> =
-        combine(
-            combine(
-                dao.observeCollectedCount(),
-                dao.observeDiscoveryCount(),
-                dao.observeIgnoredCount(),
-                dao.observeRecentCount(),
-            ) { collected, discovery, ignored, recent ->
-                Counts(collected, discovery, ignored, recent)
-            },
-            combine(
-                dao.observeCollectedPreview(HomePreviewSize),
-                dao.observeRecentPreview(HomePreviewSize),
-            ) { collected, recent ->
-                Previews(collected.map { it.toDomain() }, recent.map { it.toDomain() })
-            },
-            combine(
-                dao.observeSourceSummaries(),
-                dao.observePlaylists(),
-                dao.observeHomeShortcuts(),
-            ) { sources, playlists, shortcuts ->
-                Navigation(
-                    sources = sources.map { it.toDomain() },
-                    playlists = playlists.map { PlaylistSummary(it.playlistId, it.name) },
-                    shortcuts = shortcuts.mapNotNull(HomeShortcutEntity::toDomain),
-                )
-            },
-        ) { counts, previews, navigation ->
-            HomeLibraryProjection(
-                collectedCount = counts.collected,
-                discoveryCount = counts.discovery,
-                ignoredCount = counts.ignored,
-                recentCount = counts.recent,
-                collectedPreview = previews.collected,
-                recentPreview = previews.recent,
-                sources = navigation.sources,
-                playlists = navigation.playlists,
-                shortcuts = navigation.shortcuts,
-            )
-        }
+    /** Virtual folders are deliberately independent from source folders. */
+    val contentFolders: Flow<List<ContentFolderSummary>> =
+        dao.observeContentFolders().map { rows -> rows.map { it.toDomain() } }
+
+    val ignoredContent: Flow<List<ContentSummary>> =
+        dao.observeIgnored(IgnoredPreviewLimit).map { rows -> rows.map { it.toDomain() } }
+
+    val sources: Flow<List<SourceSummary>> =
+        dao.observeSourceSummaries().map { rows -> rows.map { it.toDomain() } }
+
+    fun observeContent(
+        folderId: String?,
+        query: String = "",
+        sort: ContentSort = ContentSort.RecentAdded,
+    ): Flow<List<ContentSummary>> =
+        dao.observeContent(folderId, query.trim(), sort.name).map { rows -> rows.map { it.toDomain() } }
+
+    fun observeFolderContent(
+        folderId: String?,
+        query: String = "",
+        sort: ContentSort = ContentSort.RecentAdded,
+    ): Flow<List<ContentSummary>> = observeContent(folderId, query, sort)
+
+    suspend fun createFolder(name: String): ContentFolderSummary = createContentFolder(name)
+
+    suspend fun renameFolder(folderId: String, name: String) = renameContentFolder(folderId, name)
+
+    suspend fun deleteFolder(folderId: String) = deleteContentFolder(folderId)
+
+    suspend fun moveToFolder(contentId: String, folderId: String?) = moveContentToFolder(contentId, folderId)
 
     fun pagedCollected(): Flow<PagingData<ContentSummary>> =
         pager(dao::pagedCollected)
@@ -112,11 +99,66 @@ class ContentRepository(
     fun pagedSource(sourceId: String): Flow<PagingData<ContentSummary>> =
         pager { dao.pagedSource(sourceId) }
 
-    fun pagedPlaylist(playlistId: String): Flow<PagingData<ContentSummary>> =
-        pager { dao.pagedPlaylist(playlistId) }
-
     fun pagedSearch(query: String): Flow<PagingData<ContentSummary>> =
         pager { dao.pagedSearch(query.trim()) }
+
+    suspend fun createContentFolder(name: String): ContentFolderSummary {
+        val normalized = name.trim().replace(Regex("\\s+"), " ")
+        require(normalized.isNotBlank()) { "文件夹名称不能为空" }
+        require(normalized.length <= 80) { "文件夹名称过长" }
+        database.withWriteTransaction {
+            require(dao.contentFolderByName(normalized) == null) { "文件夹已存在" }
+            val timestamp = nowMs()
+            dao.upsertContentFolder(
+                ContentFolderEntity(
+                    folderId = "folder:${idFactory()}",
+                    name = normalized,
+                    createdAtMs = timestamp,
+                    updatedAtMs = timestamp,
+                ),
+            )
+        }
+        return requireNotNull(dao.contentFolders().firstOrNull { it.name == normalized }) { "文件夹创建失败" }.toDomain()
+    }
+
+    suspend fun renameContentFolder(folderId: String, name: String) {
+        val normalized = name.trim().replace(Regex("\\s+"), " ")
+        require(normalized.isNotBlank()) { "文件夹名称不能为空" }
+        require(normalized.length <= 80) { "文件夹名称过长" }
+        database.withWriteTransaction {
+            val folder = requireNotNull(dao.contentFolder(folderId)) { "文件夹不存在" }
+            val duplicate = dao.contentFolderByName(normalized)
+            require(duplicate == null || duplicate.folderId == folderId) { "文件夹已存在" }
+            dao.renameContentFolder(folderId, normalized, nowMs())
+        }
+    }
+
+    /** Deleting a folder removes only memberships, returning all members to root. */
+    suspend fun deleteContentFolder(folderId: String) {
+        database.withWriteTransaction {
+            requireNotNull(dao.contentFolder(folderId)) { "文件夹不存在" }
+            dao.clearContentFolderMemberships(folderId)
+            dao.deleteContentFolder(folderId)
+        }
+    }
+
+    suspend fun moveContentToFolder(contentId: String, folderId: String?) {
+        database.withWriteTransaction {
+            val canonical = resolveRedirect(contentId)
+            requireContent(canonical)
+            if (folderId == null) {
+                dao.clearContentFolderMembership(canonical)
+            } else {
+                requireNotNull(dao.contentFolder(folderId)) { "文件夹不存在" }
+                dao.upsertContentFolderMembership(
+                    ContentFolderMembershipEntity(canonical, folderId, nowMs()),
+                )
+            }
+        }
+    }
+
+    suspend fun folderForContent(contentId: String): String? =
+        dao.contentFolderMembership(resolveRedirect(contentId))?.folderId
 
     fun observeSummary(contentId: String): Flow<ContentSummary?> =
         dao.observeSummary(contentId).map { it?.toDomain() }
@@ -226,6 +268,38 @@ class ContentRepository(
             val canonical = resolveRedirect(contentId)
             requireContent(canonical)
             dao.upsertDisposition(ContentDispositionEntity(canonical, false, nowMs()))
+            dao.clearContentFolderMembership(canonical)
+        }
+    }
+
+    suspend fun undecidedContentIdsForSource(sourceId: String): List<String> =
+        dao.undecidedContentIdsForSource(sourceId)
+
+    suspend fun importContent(
+        contentIds: Collection<String>,
+        folderId: String?,
+        ignoredContentIds: Collection<String> = emptyList(),
+    ) {
+        database.withWriteTransaction {
+            if (folderId != null) requireNotNull(dao.contentFolder(folderId)) { "文件夹不存在" }
+            contentIds.distinct().forEach { contentId ->
+                val canonical = resolveRedirect(contentId)
+                requireContent(canonical)
+                dao.upsertDisposition(ContentDispositionEntity(canonical, true, nowMs()))
+                if (folderId == null) {
+                    dao.clearContentFolderMembership(canonical)
+                } else {
+                    dao.upsertContentFolderMembership(
+                        ContentFolderMembershipEntity(canonical, folderId, nowMs()),
+                    )
+                }
+            }
+            (ignoredContentIds - contentIds.toSet()).distinct().forEach { contentId ->
+                val canonical = resolveRedirect(contentId)
+                requireContent(canonical)
+                dao.upsertDisposition(ContentDispositionEntity(canonical, false, nowMs()))
+                dao.clearContentFolderMembership(canonical)
+            }
         }
     }
 
@@ -242,63 +316,6 @@ class ContentRepository(
             requireContent(canonical)
             dao.upsertRecent(RecentEntryEntity(canonical, nowMs()))
             dao.trimRecent(RecentLimit)
-        }
-    }
-
-    suspend fun createPlaylist(name: String): String {
-        val playlistId = idFactory()
-        val timestamp = nowMs()
-        dao.upsertPlaylist(
-            PlaylistEntity(
-                playlistId = playlistId,
-                name = name.trim().ifBlank { "未命名播放列表" },
-                createdAtMs = timestamp,
-                updatedAtMs = timestamp,
-            ),
-        )
-        return playlistId
-    }
-
-    suspend fun addToPlaylist(playlistId: String, contentId: String) {
-        database.withWriteTransaction {
-            val canonical = resolveRedirect(contentId)
-            val playlist = dao.playlists().firstOrNull { it.playlistId == playlistId } ?: return@withWriteTransaction
-            val entries = dao.playlistEntries(playlistId)
-            if (entries.none { it.contentId == canonical }) {
-                dao.upsertPlaylistEntry(
-                    PlaylistEntryEntity(
-                        playlistId = playlistId,
-                        contentId = canonical,
-                        position = entries.size,
-                        addedAtMs = nowMs(),
-                    ),
-                )
-            }
-            dao.upsertDisposition(ContentDispositionEntity(canonical, true, nowMs()))
-            dao.upsertPlaylist(playlist.copy(updatedAtMs = nowMs()))
-        }
-    }
-
-    suspend fun removeFromPlaylist(playlistId: String, contentId: String) {
-        database.withWriteTransaction {
-            val canonical = resolveRedirect(contentId)
-            val retained = dao.playlistEntries(playlistId).filterNot { it.contentId == canonical }
-            dao.clearPlaylistEntries(playlistId)
-            dao.upsertPlaylistEntriesNormalized(playlistId, retained, nowMs())
-        }
-    }
-
-    suspend fun deletePlaylist(playlistId: String) {
-        database.withWriteTransaction {
-            dao.playlists().firstOrNull { it.playlistId == playlistId }?.let { dao.deletePlaylist(it) }
-            garbageCollectInside()
-        }
-    }
-
-    suspend fun setHomeShortcuts(shortcuts: List<LibraryShortcut>) {
-        database.withWriteTransaction {
-            dao.clearHomeShortcuts()
-            dao.upsertHomeShortcuts(shortcuts.distinct().mapIndexed { index, shortcut -> shortcut.toEntity(index) })
         }
     }
 
@@ -758,18 +775,12 @@ class ContentRepository(
         val recentAt = maxOf(dao.recent(targetId)?.lastOpenedAtMs ?: 0L, dao.recent(absorbedId)?.lastOpenedAtMs ?: 0L)
         if (recentAt > 0L) dao.upsertRecent(RecentEntryEntity(targetId, recentAt))
 
-        val affectedPlaylists =
-            (dao.playlistEntriesForContent(targetId) + dao.playlistEntriesForContent(absorbedId))
-                .map { it.playlistId }
-                .distinct()
-        for (playlistId in affectedPlaylists) {
-            val mapped =
-                dao.playlistEntries(playlistId)
-                    .map { if (it.contentId == absorbedId) it.copy(contentId = targetId) else it }
-                    .distinctBy { it.contentId }
-            dao.clearPlaylistEntries(playlistId)
-            dao.upsertPlaylistEntriesNormalized(playlistId, mapped, timestamp)
+        val targetFolder = dao.contentFolderMembership(targetId)
+        val absorbedFolder = dao.contentFolderMembership(absorbedId)
+        if (targetFolder == null && absorbedFolder != null) {
+            dao.upsertContentFolderMembership(absorbedFolder.copy(contentId = targetId, movedAtMs = timestamp))
         }
+        dao.clearContentFolderMembership(absorbedId)
 
         val playbackDao = database.playbackDao()
         val session = playbackDao.session()
@@ -839,24 +850,6 @@ class ContentRepository(
     private suspend fun requireContent(contentId: String): ContentEntity =
         requireNotNull(dao.content(contentId)) { "Unknown contentId: $contentId" }
 
-    private data class Counts(
-        val collected: Int,
-        val discovery: Int,
-        val ignored: Int,
-        val recent: Int,
-    )
-
-    private data class Previews(
-        val collected: List<ContentSummary>,
-        val recent: List<ContentSummary>,
-    )
-
-    private data class Navigation(
-        val sources: List<SourceSummary>,
-        val playlists: List<PlaylistSummary>,
-        val shortcuts: List<LibraryShortcut>,
-    )
-
     private data class DetailBase(
         val content: ContentEntity?,
         val locators: List<io.github.zvensmoluya.vortexcue.data.db.MediaLocatorEntity>,
@@ -865,8 +858,8 @@ class ContentRepository(
 
     private companion object {
         const val PageSize = 50
-        const val HomePreviewSize = 3
         const val RecentLimit = 50
+        const val IgnoredPreviewLimit = 100
     }
 }
 
@@ -894,38 +887,4 @@ private fun TextTrackCatalogState.selectedTrack(slot: TextTrackSlot): TimedTextT
             TextTrackSlot.Secondary -> activeText.secondaryTrackId
         }
     return tracks.firstOrNull { it.stableId == trackId }
-}
-
-private suspend fun ContentDao.upsertPlaylistEntriesNormalized(
-    playlistId: String,
-    entries: List<PlaylistEntryEntity>,
-    updatedAtMs: Long,
-) {
-    entries.forEachIndexed { index, entry ->
-        upsertPlaylistEntry(entry.copy(playlistId = playlistId, position = index))
-    }
-    playlists().firstOrNull { it.playlistId == playlistId }?.let {
-        upsertPlaylist(it.copy(updatedAtMs = updatedAtMs))
-    }
-}
-
-private fun HomeShortcutEntity.toDomain(): LibraryShortcut? =
-    when (type.enumValueOrNull<LibraryShortcutType>()) {
-        LibraryShortcutType.Folder ->
-            folderKey?.let { LibraryShortcut(LibraryShortcutType.Folder, it) }
-        LibraryShortcutType.Playlist ->
-            playlistId?.let { LibraryShortcut(LibraryShortcutType.Playlist, it) }
-        null -> null
-    }
-
-private fun LibraryShortcut.toEntity(position: Int): HomeShortcutEntity {
-    val sourceId = if (type == LibraryShortcutType.Folder) key.substringBefore('|').ifBlank { null } else null
-    return HomeShortcutEntity(
-        shortcutId = "${type.name}:$key",
-        position = position,
-        type = type.name,
-        sourceId = sourceId,
-        folderKey = key.takeIf { type == LibraryShortcutType.Folder },
-        playlistId = key.takeIf { type == LibraryShortcutType.Playlist },
-    )
 }

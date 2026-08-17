@@ -3,7 +3,6 @@ package io.github.zvensmoluya.vortexcue.data.db
 import androidx.paging.PagingSource
 import androidx.room3.Dao
 import androidx.room3.DaoReturnTypeConverters
-import androidx.room3.Delete
 import androidx.room3.Insert
 import androidx.room3.OnConflictStrategy
 import androidx.room3.Query
@@ -79,23 +78,54 @@ interface ContentDao {
     @Query("SELECT * FROM content_disposition WHERE content_id = :contentId")
     fun observeDisposition(contentId: String): Flow<ContentDispositionEntity?>
 
+    @Query(
+        "SELECT f.folder_id AS folderId, f.name AS name, COUNT(m.content_id) AS itemCount " +
+            "FROM content_folder f LEFT JOIN content_folder_membership m ON m.folder_id = f.folder_id " +
+            "GROUP BY f.folder_id ORDER BY f.name COLLATE NOCASE, f.folder_id",
+    )
+    fun observeContentFolders(): Flow<List<ContentFolderSummaryRow>>
+
+    @Query(
+        "SELECT f.folder_id AS folderId, f.name AS name, COUNT(m.content_id) AS itemCount " +
+            "FROM content_folder f LEFT JOIN content_folder_membership m ON m.folder_id = f.folder_id " +
+            "GROUP BY f.folder_id ORDER BY f.name COLLATE NOCASE, f.folder_id",
+    )
+    suspend fun contentFolders(): List<ContentFolderSummaryRow>
+
+    @Query("SELECT * FROM content_folder WHERE folder_id = :folderId")
+    suspend fun contentFolder(folderId: String): ContentFolderEntity?
+
+    @Query("SELECT * FROM content_folder WHERE name = :name COLLATE NOCASE LIMIT 1")
+    suspend fun contentFolderByName(name: String): ContentFolderEntity?
+
+    @Query("SELECT * FROM content_folder_membership WHERE content_id = :contentId")
+    suspend fun contentFolderMembership(contentId: String): ContentFolderMembershipEntity?
+
+    @Query(
+        SUMMARY_SELECT +
+            " LEFT JOIN content_folder_membership fm ON fm.content_id = c.content_id " +
+            "WHERE (:query != '' OR (:folderId IS NULL AND fm.content_id IS NULL) OR fm.folder_id = :folderId) " +
+            "AND (" +
+            ":query = '' OR l.display_name LIKE '%' || :query || '%' COLLATE NOCASE " +
+            "OR l.title LIKE '%' || :query || '%' COLLATE NOCASE " +
+            "OR l.artist LIKE '%' || :query || '%' COLLATE NOCASE " +
+            "OR l.album LIKE '%' || :query || '%' COLLATE NOCASE" +
+            ") AND d.is_collected = 1 " +
+            "ORDER BY " +
+            "CASE WHEN :sort = 'Title' THEN COALESCE(NULLIF(l.title, ''), l.display_name) END COLLATE NOCASE ASC, " +
+            "CASE WHEN :sort = 'RecentPlayed' THEN COALESCE(r.last_opened_at_ms, 0) END DESC, " +
+            "CASE WHEN :sort = 'RecentAdded' THEN d.decided_at_ms END DESC, " +
+            "CASE WHEN :sort = 'Title' THEN l.date_added_seconds END DESC, " +
+            "c.content_id",
+    )
+    fun observeContent(
+        folderId: String?,
+        query: String,
+        sort: String,
+    ): Flow<List<ContentSummaryRow>>
+
     @Query("SELECT * FROM recent_entry WHERE content_id = :contentId")
     suspend fun recent(contentId: String): RecentEntryEntity?
-
-    @Query("SELECT * FROM playlist_entry WHERE content_id = :contentId ORDER BY playlist_id")
-    suspend fun playlistEntriesForContent(contentId: String): List<PlaylistEntryEntity>
-
-    @Query("SELECT * FROM playlist ORDER BY created_at_ms, playlist_id")
-    fun observePlaylists(): Flow<List<PlaylistEntity>>
-
-    @Query("SELECT * FROM playlist ORDER BY created_at_ms, playlist_id")
-    suspend fun playlists(): List<PlaylistEntity>
-
-    @Query("SELECT * FROM playlist_entry WHERE playlist_id = :playlistId ORDER BY position")
-    suspend fun playlistEntries(playlistId: String): List<PlaylistEntryEntity>
-
-    @Query("SELECT * FROM home_shortcut ORDER BY position")
-    fun observeHomeShortcuts(): Flow<List<HomeShortcutEntity>>
 
     @Query("SELECT * FROM source WHERE removed_at_ms IS NULL ORDER BY kind, display_name")
     fun observeSources(): Flow<List<SourceEntity>>
@@ -121,24 +151,6 @@ interface ContentDao {
     )
     fun observeSourceSummaries(): Flow<List<SourceSummaryRow>>
 
-    @Query("SELECT COUNT(*) FROM content_disposition WHERE is_collected = 1")
-    fun observeCollectedCount(): Flow<Int>
-
-    @Query("SELECT COUNT(*) FROM content_disposition WHERE is_collected = 0")
-    fun observeIgnoredCount(): Flow<Int>
-
-    @Query("SELECT COUNT(*) FROM content c WHERE NOT EXISTS (SELECT 1 FROM content_disposition d WHERE d.content_id = c.content_id)")
-    fun observeDiscoveryCount(): Flow<Int>
-
-    @Query("SELECT COUNT(*) FROM recent_entry")
-    fun observeRecentCount(): Flow<Int>
-
-    @Query(SUMMARY_SELECT + " WHERE d.is_collected = 1 ORDER BY l.date_added_seconds DESC, c.content_id LIMIT :limit")
-    fun observeCollectedPreview(limit: Int): Flow<List<ContentSummaryRow>>
-
-    @Query(SUMMARY_SELECT + " WHERE r.content_id IS NOT NULL ORDER BY r.last_opened_at_ms DESC, c.content_id LIMIT :limit")
-    fun observeRecentPreview(limit: Int): Flow<List<ContentSummaryRow>>
-
     @Query(SUMMARY_SELECT + " WHERE d.is_collected = 1 ORDER BY l.date_added_seconds DESC, c.content_id")
     fun pagedCollected(): PagingSource<Int, ContentSummaryRow>
 
@@ -151,15 +163,11 @@ interface ContentDao {
     @Query(SUMMARY_SELECT + " WHERE d.is_collected = 0 ORDER BY d.decided_at_ms DESC, c.content_id")
     fun pagedIgnored(): PagingSource<Int, ContentSummaryRow>
 
+    @Query(SUMMARY_SELECT + " WHERE d.is_collected = 0 ORDER BY d.decided_at_ms DESC, c.content_id LIMIT :limit")
+    fun observeIgnored(limit: Int): Flow<List<ContentSummaryRow>>
+
     @Query(SUMMARY_SELECT + " WHERE l.source_id = :sourceId ORDER BY l.date_added_seconds DESC, c.content_id")
     fun pagedSource(sourceId: String): PagingSource<Int, ContentSummaryRow>
-
-    @Query(
-        SUMMARY_SELECT +
-            " INNER JOIN playlist_entry pe ON pe.content_id = c.content_id " +
-            "WHERE pe.playlist_id = :playlistId ORDER BY pe.position",
-    )
-    fun pagedPlaylist(playlistId: String): PagingSource<Int, ContentSummaryRow>
 
     @Query(
         SUMMARY_SELECT +
@@ -219,6 +227,24 @@ interface ContentDao {
     @Upsert
     suspend fun upsertDisposition(entity: ContentDispositionEntity)
 
+    @Upsert
+    suspend fun upsertContentFolder(entity: ContentFolderEntity)
+
+    @Upsert
+    suspend fun upsertContentFolderMembership(entity: ContentFolderMembershipEntity)
+
+    @Query("DELETE FROM content_folder_membership WHERE content_id = :contentId")
+    suspend fun clearContentFolderMembership(contentId: String)
+
+    @Query("DELETE FROM content_folder_membership WHERE folder_id = :folderId")
+    suspend fun clearContentFolderMemberships(folderId: String)
+
+    @Query("DELETE FROM content_folder WHERE folder_id = :folderId")
+    suspend fun deleteContentFolder(folderId: String)
+
+    @Query("UPDATE content_folder SET name = :name, updated_at_ms = :updatedAtMs WHERE folder_id = :folderId")
+    suspend fun renameContentFolder(folderId: String, name: String, updatedAtMs: Long): Int
+
     @Query("DELETE FROM content_disposition WHERE content_id = :contentId")
     suspend fun deleteDisposition(contentId: String)
 
@@ -230,27 +256,6 @@ interface ContentDao {
             "(SELECT content_id FROM recent_entry ORDER BY last_opened_at_ms DESC, content_id LIMIT -1 OFFSET :limit)",
     )
     suspend fun trimRecent(limit: Int)
-
-    @Upsert
-    suspend fun upsertPlaylist(entity: PlaylistEntity)
-
-    @Delete
-    suspend fun deletePlaylist(entity: PlaylistEntity)
-
-    @Upsert
-    suspend fun upsertPlaylistEntry(entity: PlaylistEntryEntity)
-
-    @Query("DELETE FROM playlist_entry WHERE playlist_id = :playlistId AND content_id = :contentId")
-    suspend fun deletePlaylistEntry(playlistId: String, contentId: String)
-
-    @Query("DELETE FROM playlist_entry WHERE playlist_id = :playlistId")
-    suspend fun clearPlaylistEntries(playlistId: String)
-
-    @Upsert
-    suspend fun upsertHomeShortcuts(entities: List<HomeShortcutEntity>)
-
-    @Query("DELETE FROM home_shortcut")
-    suspend fun clearHomeShortcuts()
 
     @Upsert
     suspend fun upsertDraft(entity: CurrentDraftEntity)
@@ -296,6 +301,13 @@ interface ContentDao {
     suspend fun contentIdsForSource(sourceId: String): List<String>
 
     @Query(
+        "SELECT DISTINCT l.content_id FROM media_locator l " +
+            "LEFT JOIN content_disposition d ON d.content_id = l.content_id " +
+            "WHERE l.source_id = :sourceId AND d.content_id IS NULL",
+    )
+    suspend fun undecidedContentIdsForSource(sourceId: String): List<String>
+
+    @Query(
         "UPDATE media_locator SET availability = 'Unavailable', updated_at_ms = :updatedAtMs " +
             "WHERE source_id = :sourceId",
     )
@@ -314,7 +326,6 @@ interface ContentDao {
             "  AND (l.source_id IS NULL OR s.removed_at_ms IS NULL)) " +
             "AND NOT EXISTS (SELECT 1 FROM content_disposition d WHERE d.content_id = c.content_id) " +
             "AND NOT EXISTS (SELECT 1 FROM recent_entry r WHERE r.content_id = c.content_id) " +
-            "AND NOT EXISTS (SELECT 1 FROM playlist_entry p WHERE p.content_id = c.content_id) " +
             "AND NOT EXISTS (SELECT 1 FROM current_queue_entry q WHERE q.content_id = c.content_id) " +
             "AND NOT EXISTS (SELECT 1 FROM current_draft d WHERE d.content_id = c.content_id) " +
             "AND NOT EXISTS (SELECT 1 FROM text_selection x WHERE x.content_id = c.content_id AND x.mode = 'Manual') " +

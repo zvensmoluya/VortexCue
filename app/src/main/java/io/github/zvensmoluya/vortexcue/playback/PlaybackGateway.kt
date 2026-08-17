@@ -10,7 +10,6 @@ import com.google.common.util.concurrent.MoreExecutors
 import io.github.zvensmoluya.vortexcue.core.model.MediaKind
 import io.github.zvensmoluya.vortexcue.core.model.MediaOrigin
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
-import io.github.zvensmoluya.vortexcue.core.model.PlayerSurface
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -68,12 +67,6 @@ class PlaybackGateway(private val controller: MediaController) {
 
     suspend fun materialize(): SessionResult = send(PlaybackCommands.Materialize)
 
-    suspend fun setLastSurface(surface: PlayerSurface): SessionResult =
-        send(
-            PlaybackCommands.SetSurface,
-            Bundle().apply { putString(PlaybackCommands.Surface, surface.asLastSurface().name) },
-        )
-
     suspend fun relink(
         contentId: String,
         replacement: MediaSourceRef,
@@ -109,7 +102,6 @@ internal object PlaybackCommands {
     const val PositionMs = "position_ms"
     const val FromIndex = "from_index"
     const val ToIndex = "to_index"
-    const val Surface = "surface"
     const val Materialization = "materialization"
     const val QueueRevision = "queue_revision"
     const val RelinkPrefix = "relink_"
@@ -120,7 +112,6 @@ internal object PlaybackCommands {
     val Move = SessionCommand(Prefix + "MOVE", Bundle.EMPTY)
     val Clear = SessionCommand(Prefix + "CLEAR", Bundle.EMPTY)
     val Materialize = SessionCommand(Prefix + "MATERIALIZE", Bundle.EMPTY)
-    val SetSurface = SessionCommand(Prefix + "SET_SURFACE", Bundle.EMPTY)
     val Relink = SessionCommand(Prefix + "RELINK", Bundle.EMPTY)
     val GetMaterialization = SessionCommand(Prefix + "GET_MATERIALIZATION", Bundle.EMPTY)
     val All =
@@ -131,7 +122,6 @@ internal object PlaybackCommands {
             Move,
             Clear,
             Materialize,
-            SetSurface,
             Relink,
             GetMaterialization,
         )

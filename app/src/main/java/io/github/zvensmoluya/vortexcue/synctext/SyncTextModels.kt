@@ -52,6 +52,22 @@ data class SyncTextScheme(
     val isDefault: Boolean = false,
     val createdAtMs: Long,
     val updatedAtMs: Long,
+    val asrEndpoint: String = "https://openrouter.ai/api/v1/audio/transcriptions",
+)
+
+/** The product-facing single connection profile. Credential values stay in Keystore. */
+data class SyncTextConfig(
+    val configId: String,
+    val asrEndpoint: String,
+    val asrProfile: AsrProfile,
+    val asrCredentialId: String,
+    val translationProtocol: TranslationProtocol,
+    val translationEndpoint: String,
+    val translationModel: String,
+    val translationCredentialId: String,
+    val targetLanguage: String,
+    val presentationMode: TextPresentationMode,
+    val translationUserAgent: String? = null,
 )
 
 sealed interface GenerationInput {

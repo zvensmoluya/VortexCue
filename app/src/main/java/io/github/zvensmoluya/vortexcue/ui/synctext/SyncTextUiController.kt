@@ -1,16 +1,19 @@
 package io.github.zvensmoluya.vortexcue.ui.synctext
 
+import io.github.zvensmoluya.vortexcue.core.model.TimedTextOrigin
+import io.github.zvensmoluya.vortexcue.core.model.TimedTextReadiness
 import io.github.zvensmoluya.vortexcue.data.ContentDetails
 import io.github.zvensmoluya.vortexcue.synctext.AsrProfile
 import io.github.zvensmoluya.vortexcue.synctext.AudioTrackInfo
 import io.github.zvensmoluya.vortexcue.synctext.AudioWindowExtractor
 import io.github.zvensmoluya.vortexcue.synctext.CredentialMetadata
 import io.github.zvensmoluya.vortexcue.synctext.CredentialPurpose
-import io.github.zvensmoluya.vortexcue.synctext.GeneratedTextPresentation
+import io.github.zvensmoluya.vortexcue.synctext.GenerationInput
+import io.github.zvensmoluya.vortexcue.synctext.GenerationOutput
 import io.github.zvensmoluya.vortexcue.synctext.GenerationRequest
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskSummary
+import io.github.zvensmoluya.vortexcue.synctext.SyncTextConfig
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextRepository
-import io.github.zvensmoluya.vortexcue.synctext.SyncTextScheme
 import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocol
 import java.util.concurrent.CancellationException
@@ -23,33 +26,28 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-data class SyncTextSchemeDraft(
-    val name: String,
+data class SyncTextConfigDraft(
     val asrProfile: AsrProfile,
+    val asrEndpoint: String,
     val asrCredentialId: String,
     val translationProtocol: TranslationProtocol,
     val translationEndpoint: String,
     val translationUserAgent: String?,
     val translationModel: String,
     val translationCredentialId: String,
-    val defaultTargetLanguage: String,
-    val defaultPresentationMode: TextPresentationMode,
-    val isDefault: Boolean,
+    val targetLanguage: String,
+    val presentationMode: TextPresentationMode,
 )
 
 data class SyncTextUiState(
-    val schemes: List<SyncTextScheme> = emptyList(),
+    val config: SyncTextConfig? = null,
     val credentials: List<CredentialMetadata> = emptyList(),
     val tasks: List<GenerationTaskSummary> = emptyList(),
-    val pauseAll: Boolean = false,
     val generationContent: ContentDetails? = null,
     val audioTracks: List<AudioTrackInfo> = emptyList(),
     val inspectingAudioTracks: Boolean = false,
     val audioInspectionError: String? = null,
-    val taskDrawerVisible: Boolean = false,
-    val schemeEditorVisible: Boolean = false,
-    val resultDetails: GeneratedTextPresentation? = null,
-    val loadingResultDetails: Boolean = false,
+    val configEditorVisible: Boolean = false,
     val busy: Boolean = false,
     val message: String? = null,
 )
@@ -59,17 +57,11 @@ sealed interface SyncTextAction {
 
     data object CloseGeneration : SyncTextAction
 
-    data object OpenTaskDrawer : SyncTextAction
+    data class SubmitSelectedInput(val input: GenerationInput) : SyncTextAction
 
-    data object CloseTaskDrawer : SyncTextAction
+    data object OpenConfigEditor : SyncTextAction
 
-    data object OpenSchemeEditor : SyncTextAction
-
-    data object CloseSchemeEditor : SyncTextAction
-
-    data class OpenResultDetails(val slotId: String) : SyncTextAction
-
-    data object CloseResultDetails : SyncTextAction
+    data object CloseConfigEditor : SyncTextAction
 
     data object ClearMessage : SyncTextAction
 
@@ -82,31 +74,19 @@ sealed interface SyncTextAction {
 
     data class DeleteCredential(val credentialId: String) : SyncTextAction
 
-    data class SaveScheme(
-        val schemeId: String?,
-        val draft: SyncTextSchemeDraft,
+    data class SaveConfig(
+        val configId: String?,
+        val draft: SyncTextConfigDraft,
     ) : SyncTextAction
-
-    data class DeleteScheme(val schemeId: String) : SyncTextAction
-
-    data class Submit(val request: GenerationRequest) : SyncTextAction
-
-    data class PauseTask(val taskId: String) : SyncTextAction
-
-    data class ResumeTask(val taskId: String) : SyncTextAction
-
-    data class DeleteTask(val taskId: String) : SyncTextAction
-
-    data class MoveTask(val taskId: String, val targetPosition: Int) : SyncTextAction
-
-    data class ChangeTaskScheme(val taskId: String, val schemeId: String) : SyncTextAction
-
-    data class SetPauseAll(val paused: Boolean) : SyncTextAction
 
     data class SetPresentationMode(
         val slotId: String,
         val mode: TextPresentationMode,
     ) : SyncTextAction
+
+    data class CancelForContent(val contentId: String) : SyncTextAction
+
+    data class RetryForContent(val contentId: String) : SyncTextAction
 }
 
 private data class OverlayState(
@@ -114,10 +94,7 @@ private data class OverlayState(
     val audioTracks: List<AudioTrackInfo> = emptyList(),
     val inspectingAudioTracks: Boolean = false,
     val audioInspectionError: String? = null,
-    val taskDrawerVisible: Boolean = false,
-    val schemeEditorVisible: Boolean = false,
-    val resultDetails: GeneratedTextPresentation? = null,
-    val loadingResultDetails: Boolean = false,
+    val configEditorVisible: Boolean = false,
     val busy: Boolean = false,
     val message: String? = null,
 )
@@ -131,31 +108,20 @@ class SyncTextUiController(
 
     val state: StateFlow<SyncTextUiState> =
         combine(
-            repository.schemes,
+            repository.config,
             repository.credentialMetadata,
             repository.tasks,
-            repository.pauseAll,
             overlay,
-        ) {
-                schemes,
-                credentials,
-                tasks,
-                pauseAll,
-                local,
-            ->
+        ) { config, credentials, tasks, local ->
             SyncTextUiState(
-                schemes = schemes,
+                config = config,
                 credentials = credentials,
                 tasks = tasks,
-                pauseAll = pauseAll,
                 generationContent = local.generationContent,
                 audioTracks = local.audioTracks,
                 inspectingAudioTracks = local.inspectingAudioTracks,
                 audioInspectionError = local.audioInspectionError,
-                taskDrawerVisible = local.taskDrawerVisible,
-                schemeEditorVisible = local.schemeEditorVisible,
-                resultDetails = local.resultDetails,
-                loadingResultDetails = local.loadingResultDetails,
+                configEditorVisible = local.configEditorVisible,
                 busy = local.busy,
                 message = local.message,
             )
@@ -164,27 +130,16 @@ class SyncTextUiController(
     fun dispatch(action: SyncTextAction) {
         when (action) {
             is SyncTextAction.OpenGeneration -> openGeneration(action.content)
-            SyncTextAction.CloseGeneration ->
-                overlay.update {
-                    it.copy(
-                        generationContent = null,
-                        audioTracks = emptyList(),
-                        inspectingAudioTracks = false,
-                        audioInspectionError = null,
-                        message = null,
-                    )
-                }
-            SyncTextAction.OpenTaskDrawer ->
-                overlay.update { it.copy(taskDrawerVisible = true, message = null) }
-            SyncTextAction.CloseTaskDrawer ->
-                overlay.update { it.copy(taskDrawerVisible = false, message = null) }
-            SyncTextAction.OpenSchemeEditor ->
-                overlay.update { it.copy(schemeEditorVisible = true, message = null) }
-            SyncTextAction.CloseSchemeEditor ->
-                overlay.update { it.copy(schemeEditorVisible = false, message = null) }
-            is SyncTextAction.OpenResultDetails -> openResultDetails(action.slotId)
-            SyncTextAction.CloseResultDetails ->
-                overlay.update { it.copy(resultDetails = null, loadingResultDetails = false) }
+            SyncTextAction.CloseGeneration -> closeGeneration()
+            is SyncTextAction.SubmitSelectedInput -> {
+                val content = overlay.value.generationContent ?: return
+                val config = repository.config.value ?: return showConfigurationRequired()
+                submitGeneration(content, action.input, config)
+            }
+            SyncTextAction.OpenConfigEditor ->
+                overlay.update { it.copy(configEditorVisible = true, message = null) }
+            SyncTextAction.CloseConfigEditor ->
+                overlay.update { it.copy(configEditorVisible = false, message = null) }
             SyncTextAction.ClearMessage -> overlay.update { it.copy(message = null) }
             is SyncTextAction.SaveCredential -> runAction {
                 repository.saveCredential(
@@ -193,55 +148,50 @@ class SyncTextUiController(
                     purpose = action.purpose,
                     secret = action.secret,
                 )
-                "凭据已保存"
+                "密钥已保存"
             }
             is SyncTextAction.DeleteCredential -> runAction {
                 repository.deleteCredential(action.credentialId)
-                "凭据已删除"
+                "密钥已删除"
             }
-            is SyncTextAction.SaveScheme -> runAction {
-                saveScheme(action.schemeId, action.draft)
-                "方案已保存"
-            }
-            is SyncTextAction.DeleteScheme -> runAction {
-                check(repository.deleteScheme(action.schemeId)) { "方案不存在或仍被任务引用" }
-                "方案已删除"
-            }
-            is SyncTextAction.Submit -> runAction(onSuccess = {
-                overlay.update {
-                    it.copy(
-                        generationContent = null,
-                        taskDrawerVisible = true,
-                        message = "任务已进入队列",
-                    )
-                }
-            }) {
-                repository.submit(action.request)
-                null
-            }
-            is SyncTextAction.PauseTask -> runAction { repository.pauseTask(action.taskId); null }
-            is SyncTextAction.ResumeTask -> runAction { repository.resumeTask(action.taskId); null }
-            is SyncTextAction.DeleteTask -> runAction { repository.deleteTask(action.taskId); null }
-            is SyncTextAction.MoveTask -> runAction {
-                repository.moveTask(action.taskId, action.targetPosition)
-                null
-            }
-            is SyncTextAction.ChangeTaskScheme -> runAction {
-                repository.changeScheme(action.taskId, action.schemeId)
-                "已创建新尝试，完成的原文会继续复用"
-            }
-            is SyncTextAction.SetPauseAll -> runAction {
-                repository.setPauseAll(action.paused)
-                null
+            is SyncTextAction.SaveConfig -> runAction {
+                repository.saveConfig(action.draft.toConfig(action.configId))
+                "配置已保存"
             }
             is SyncTextAction.SetPresentationMode -> runAction {
                 repository.setPresentationMode(action.slotId, action.mode)
                 null
             }
+            is SyncTextAction.CancelForContent -> runAction {
+                repository.cancelForContent(action.contentId)
+                "同步文字已取消"
+            }
+            is SyncTextAction.RetryForContent -> runAction {
+                repository.retryForContent(action.contentId)
+                "同步文字已重试"
+            }
         }
     }
 
     private fun openGeneration(content: ContentDetails) {
+        val config = repository.config.value ?: return showConfigurationRequired()
+        when (val plan = planAutomaticGeneration(content)) {
+            is GenerationLaunchPlan.Submit -> submitGeneration(content, plan.input, config)
+            is GenerationLaunchPlan.Choose ->
+                overlay.update {
+                    it.copy(
+                        generationContent = content,
+                        audioTracks = emptyList(),
+                        inspectingAudioTracks = false,
+                        audioInspectionError = null,
+                        message = null,
+                    )
+                }
+            GenerationLaunchPlan.InspectAudio -> inspectAudio(content, config)
+        }
+    }
+
+    private fun inspectAudio(content: ContentDetails, config: SyncTextConfig) {
         overlay.update {
             it.copy(
                 generationContent = content,
@@ -254,16 +204,20 @@ class SyncTextUiController(
         scope.launch {
             runCatching { audio.inspect(content.activeMedia.uri) }
                 .onSuccess { tracks ->
-                    overlay.update { current ->
-                        if (current.generationContent?.contentId != content.contentId) {
-                            current
-                        } else {
-                            current.copy(
-                                audioTracks = tracks,
-                                inspectingAudioTracks = false,
-                                audioInspectionError = "媒体中没有可解码音轨".takeIf { tracks.isEmpty() },
-                            )
-                        }
+                    if (overlay.value.generationContent?.contentId != content.contentId) return@onSuccess
+                    when (tracks.size) {
+                        0 ->
+                            overlay.update {
+                                it.copy(
+                                    inspectingAudioTracks = false,
+                                    audioInspectionError = "媒体中没有可用于识别的音轨",
+                                )
+                            }
+                        1 -> submitGeneration(content, GenerationInput.AudioTrack(tracks.single().selectionId), config)
+                        else ->
+                            overlay.update {
+                                it.copy(audioTracks = tracks, inspectingAudioTracks = false)
+                            }
                     }
                 }.onFailure { error ->
                     if (error is CancellationException) throw error
@@ -282,70 +236,70 @@ class SyncTextUiController(
         }
     }
 
-    private fun openResultDetails(slotId: String) {
-        overlay.update { it.copy(loadingResultDetails = true, message = null) }
-        scope.launch {
-            runCatching { repository.loadPresentation(slotId) }
-                .onSuccess { presentation ->
-                    overlay.update {
-                        it.copy(
-                            resultDetails = presentation,
-                            loadingResultDetails = false,
-                            message = if (presentation == null) "生成结果已不可用" else null,
-                        )
-                    }
-                }.onFailure(::handleFailure)
-        }
-    }
-
-    private suspend fun saveScheme(schemeId: String?, draft: SyncTextSchemeDraft) {
-        if (schemeId == null) {
-            repository.createScheme(
-                name = draft.name,
-                asrProfile = draft.asrProfile,
-                asrCredentialId = draft.asrCredentialId,
-                translationProtocol = draft.translationProtocol,
-                translationEndpoint = draft.translationEndpoint,
-                translationUserAgent = draft.translationUserAgent,
-                translationModel = draft.translationModel,
-                translationCredentialId = draft.translationCredentialId,
-                defaultTargetLanguage = draft.defaultTargetLanguage,
-                defaultPresentationMode = draft.defaultPresentationMode,
-                isDefault = draft.isDefault,
-            )
-            return
-        }
-        val existing = requireNotNull(repository.schemes.value.firstOrNull { it.schemeId == schemeId }) {
-            "方案已不存在"
-        }
-        repository.saveScheme(
-            existing.copy(
-                name = draft.name,
-                asrProfile = draft.asrProfile,
-                asrCredentialId = draft.asrCredentialId,
-                translationProtocol = draft.translationProtocol,
-                translationEndpoint = draft.translationEndpoint,
-                translationUserAgent = draft.translationUserAgent,
-                translationModel = draft.translationModel,
-                translationCredentialId = draft.translationCredentialId,
-                defaultTargetLanguage = draft.defaultTargetLanguage,
-                defaultPresentationMode = draft.defaultPresentationMode,
-                isDefault = draft.isDefault,
-            ),
-        )
-    }
-
-    private fun runAction(
-        onSuccess: (() -> Unit)? = null,
-        block: suspend () -> String?,
+    private fun submitGeneration(
+        content: ContentDetails,
+        input: GenerationInput,
+        config: SyncTextConfig,
     ) {
         overlay.update { it.copy(busy = true, message = null) }
         scope.launch {
+            runCatching {
+                repository.submit(
+                    GenerationRequest(
+                        contentId = content.contentId,
+                        input = input,
+                        output =
+                            GenerationOutput.Translated(
+                                targetLanguage = config.targetLanguage,
+                                presentationMode = config.presentationMode,
+                            ),
+                        schemeId = config.configId,
+                    ),
+                )
+            }.onSuccess {
+                overlay.update {
+                    it.copy(
+                        generationContent = null,
+                        audioTracks = emptyList(),
+                        inspectingAudioTracks = false,
+                        audioInspectionError = null,
+                        busy = false,
+                        message = "同步文字已开始",
+                    )
+                }
+            }.onFailure(::handleFailure)
+        }
+    }
+
+    private fun closeGeneration() {
+        overlay.update {
+            it.copy(
+                generationContent = null,
+                audioTracks = emptyList(),
+                inspectingAudioTracks = false,
+                audioInspectionError = null,
+                busy = false,
+                message = null,
+            )
+        }
+    }
+
+    private fun showConfigurationRequired() {
+        overlay.update {
+            it.copy(
+                generationContent = null,
+                inspectingAudioTracks = false,
+                message = "请先在配置页填写 ASR、翻译和密钥",
+            )
+        }
+    }
+
+    private fun runAction(block: suspend () -> String?) {
+        overlay.update { it.copy(busy = true, message = null) }
+        scope.launch {
             runCatching { block() }
-                .onSuccess { message ->
-                    overlay.update { it.copy(busy = false, message = message) }
-                    onSuccess?.invoke()
-                }.onFailure(::handleFailure)
+                .onSuccess { message -> overlay.update { it.copy(busy = false, message = message) } }
+                .onFailure(::handleFailure)
         }
     }
 
@@ -354,9 +308,56 @@ class SyncTextUiController(
         overlay.update {
             it.copy(
                 busy = false,
-                loadingResultDetails = false,
+                inspectingAudioTracks = false,
                 message = error.message?.takeIf(String::isNotBlank) ?: "操作失败",
             )
         }
     }
 }
+
+internal sealed interface GenerationLaunchPlan {
+    data class Submit(val input: GenerationInput) : GenerationLaunchPlan
+
+    data class Choose(val inputs: List<GenerationInput>) : GenerationLaunchPlan
+
+    data object InspectAudio : GenerationLaunchPlan
+}
+
+internal fun planAutomaticGeneration(content: ContentDetails): GenerationLaunchPlan {
+    val inputs = content.availableTextInputs()
+    val selected = inputs.firstOrNull { it.trackId == content.activeText.primaryTrackId }
+    return when {
+        selected != null -> GenerationLaunchPlan.Submit(selected)
+        inputs.size == 1 -> GenerationLaunchPlan.Submit(inputs.single())
+        inputs.size > 1 -> GenerationLaunchPlan.Choose(inputs)
+        else -> GenerationLaunchPlan.InspectAudio
+    }
+}
+
+private fun ContentDetails.availableTextInputs(): List<GenerationInput> =
+    timedTextTracks
+        .filter { it.readiness !in setOf(TimedTextReadiness.Unreadable, TimedTextReadiness.ParseFailed) }
+        .mapNotNull { track ->
+            when (track.origin) {
+                TimedTextOrigin.Embedded ->
+                    track.locator.embeddedTrackId?.let {
+                        GenerationInput.EmbeddedTrack(track.stableId, it)
+                    }
+                else -> GenerationInput.ExistingTrack(track.stableId)
+            }
+        }
+
+private fun SyncTextConfigDraft.toConfig(configId: String?): SyncTextConfig =
+    SyncTextConfig(
+        configId = configId.orEmpty(),
+        asrEndpoint = asrEndpoint,
+        asrProfile = asrProfile,
+        asrCredentialId = asrCredentialId,
+        translationProtocol = translationProtocol,
+        translationEndpoint = translationEndpoint,
+        translationModel = translationModel,
+        translationCredentialId = translationCredentialId,
+        targetLanguage = targetLanguage,
+        presentationMode = presentationMode,
+        translationUserAgent = translationUserAgent,
+    )

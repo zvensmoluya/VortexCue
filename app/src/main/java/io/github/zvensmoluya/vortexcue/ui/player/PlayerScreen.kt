@@ -18,11 +18,32 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.QueueMusic
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Forward10
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Pause
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Remove
+import androidx.compose.material.icons.outlined.Repeat
+import androidx.compose.material.icons.outlined.RepeatOne
+import androidx.compose.material.icons.outlined.Replay10
+import androidx.compose.material.icons.outlined.Shuffle
+import androidx.compose.material.icons.outlined.SkipNext
+import androidx.compose.material.icons.outlined.SkipPrevious
+import androidx.compose.material.icons.outlined.Subtitles
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
@@ -62,6 +83,10 @@ import io.github.zvensmoluya.vortexcue.playback.*
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleCue
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleTimeline
 import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
+import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskState
+import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskSummary
+import io.github.zvensmoluya.vortexcue.ui.queue.QueueItemRow
+import io.github.zvensmoluya.vortexcue.ui.synctext.generationProductStatus
 import io.github.zvensmoluya.vortexcue.ui.theme.*
 
 private val GlowTrackColor = Color(0xFF242424)
@@ -86,18 +111,17 @@ internal fun PlayerScreen(
     onOpenSources: () -> Unit,
     onRelinkMedia: () -> Unit,
     onToggleCollected: () -> Unit,
-    onOpenTonight: () -> Unit,
+    onOpenQueue: () -> Unit,
     onQueueSelect: (Int) -> Unit,
     onQueueMove: (Int, Int) -> Unit,
     onQueueRemove: (Int) -> Unit,
     onSelectTextTrack: (TextTrackSlot, String?) -> Unit,
     onRestoreAutomaticTextTrack: (TextTrackSlot) -> Unit,
     onAddTextTrack: (TextTrackSlot) -> Unit,
-    syncTextTaskCount: Int,
-    onOpenSyncTextTasks: () -> Unit,
-    onOpenSyncTextSchemes: () -> Unit,
+    syncTextTask: GenerationTaskSummary?,
     onGenerateSyncText: () -> Unit,
-    onOpenGeneratedTextResult: (String) -> Unit,
+    onCancelSyncText: () -> Unit,
+    onRetrySyncText: () -> Unit,
     onGeneratedPresentationModeChanged: (String, TextPresentationMode) -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
     onDisplayProfileChanged: (DisplayProfile) -> Unit,
@@ -105,7 +129,7 @@ internal fun PlayerScreen(
     onGestureHintSeen: () -> Unit,
     onSetSleepTimer: (Long) -> Unit,
     onStopAfterCurrent: () -> Unit,
-    onStopAfterTonight: () -> Unit,
+    onStopAfterQueue: () -> Unit,
     onCancelSleepTimer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -187,13 +211,12 @@ internal fun PlayerScreen(
                 onOpenSources = onOpenSources,
                 onRelinkMedia = onRelinkMedia,
                 onToggleCollected = onToggleCollected,
-                onOpenTonight = onOpenTonight,
+                onOpenQueue = onOpenQueue,
                 onQueueSelect = onQueueSelect,
                 onQueueMove = onQueueMove,
                 onQueueRemove = onQueueRemove,
                 onManageTextTracks = { textTracksVisible = true },
-                syncTextTaskCount = syncTextTaskCount,
-                onOpenSyncTextTasks = onOpenSyncTextTasks,
+                syncTextStatus = generationProductStatus(syncTextTask, session.generatedText != null),
                 onEnterGlow = { onSurfaceChanged(PlayerSurface.Glow) },
                 onEnterCalibration = { onSurfaceChanged(PlayerSurface.Calibration) },
                 onSubtitleOffsetChanged = onSubtitleOffsetChanged,
@@ -201,7 +224,7 @@ internal fun PlayerScreen(
                 modifier = modifier,
             )
         PlayerSurface.Calibration ->
-            GlowCalibration(
+            GlowCalibrationScreen(
                 profile = displayProfile,
                 onProfileChanged = onDisplayProfileChanged,
                 onComplete = onCalibrationCompleted,
@@ -242,11 +265,10 @@ internal fun PlayerScreen(
                 onAddTextTrack(slot)
             },
             generatedText = session.generatedText,
-            syncTextTaskCount = syncTextTaskCount,
-            onOpenSyncTextTasks = onOpenSyncTextTasks,
-            onOpenSyncTextSchemes = onOpenSyncTextSchemes,
+            syncTextTask = syncTextTask,
             onGenerateSyncText = onGenerateSyncText,
-            onOpenGeneratedTextResult = onOpenGeneratedTextResult,
+            onCancelSyncText = onCancelSyncText,
+            onRetrySyncText = onRetrySyncText,
             onPresentationModeChanged = onGeneratedPresentationModeChanged,
         )
     }
@@ -261,9 +283,9 @@ internal fun PlayerScreen(
                 onStopAfterCurrent()
                 timerVisible = false
             },
-            showEndOfTonight = playback.queue.isNotEmpty(),
-            onEndOfTonight = {
-                onStopAfterTonight()
+            showEndOfQueue = playback.queue.isNotEmpty(),
+            onEndOfQueue = {
+                onStopAfterQueue()
                 timerVisible = false
             },
             onCancelTimer = {
@@ -276,7 +298,7 @@ internal fun PlayerScreen(
 }
 
 @Composable
-private fun GlowCalibration(
+internal fun GlowCalibrationScreen(
     profile: DisplayProfile,
     onProfileChanged: (DisplayProfile) -> Unit,
     onComplete: () -> Unit,
@@ -432,13 +454,12 @@ private fun NormalPlayer(
     onOpenSources: () -> Unit,
     onRelinkMedia: () -> Unit,
     onToggleCollected: () -> Unit,
-    onOpenTonight: () -> Unit,
+    onOpenQueue: () -> Unit,
     onQueueSelect: (Int) -> Unit,
     onQueueMove: (Int, Int) -> Unit,
     onQueueRemove: (Int) -> Unit,
     onManageTextTracks: () -> Unit,
-    syncTextTaskCount: Int,
-    onOpenSyncTextTasks: () -> Unit,
+    syncTextStatus: String?,
     onEnterGlow: () -> Unit,
     onEnterCalibration: () -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
@@ -462,8 +483,8 @@ private fun NormalPlayer(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = onBackToLibrary) {
-                Text("首页", color = AppSecondaryText)
+            IconButton(onClick = onBackToLibrary) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回", tint = AppSecondaryText)
             }
             Text(
                 text = session.media.displayTitle,
@@ -475,8 +496,8 @@ private fun NormalPlayer(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            TextButton(onClick = onOpenSources) {
-                Text("来源", color = AppSecondaryText)
+            IconButton(onClick = onOpenSources) {
+                Icon(Icons.Outlined.Add, contentDescription = "添加内容", tint = AppSecondaryText)
             }
         }
 
@@ -487,7 +508,7 @@ private fun NormalPlayer(
         ) {
             TextButton(onClick = onToggleCollected) {
                 Text(
-                    text = if (isCollected) "移出我的内容" else "加入我的内容",
+                    text = if (isCollected) "移出内容" else "加入内容",
                     color = if (isCollected) AppMutedText else AppSecondaryText,
                     fontSize = 12.sp,
                 )
@@ -506,22 +527,22 @@ private fun NormalPlayer(
                     fontSize = 12.sp,
                 )
             }
-            TextButton(onClick = onOpenTonight) {
+            TextButton(onClick = onOpenQueue) {
                 Text(
-                    text = "查看今晚",
+                    text = "播放列表",
                     color = AppMutedText,
                     fontSize = 12.sp,
                 )
             }
         }
 
-        if (syncTextTaskCount > 0) {
-            TextButton(
-                onClick = onOpenSyncTextTasks,
-                modifier = Modifier.align(Alignment.CenterHorizontally),
-            ) {
-                Text("同步文字任务 $syncTextTaskCount", color = AppAccent, fontSize = 11.sp)
-            }
+        if (syncTextStatus != null) {
+            Text(
+                "同步文字 · $syncTextStatus",
+                color = if (syncTextStatus == "失败") AppError else AppAccent,
+                fontSize = 11.sp,
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(vertical = 8.dp),
+            )
         }
 
         if (playback.playbackState == Player.STATE_BUFFERING) {
@@ -686,11 +707,10 @@ private fun TextTrackDialog(
     onRestoreAutomatic: (TextTrackSlot) -> Unit,
     onAddTrack: (TextTrackSlot) -> Unit,
     generatedText: LoadedGeneratedText?,
-    syncTextTaskCount: Int,
-    onOpenSyncTextTasks: () -> Unit,
-    onOpenSyncTextSchemes: () -> Unit,
+    syncTextTask: GenerationTaskSummary?,
     onGenerateSyncText: () -> Unit,
-    onOpenGeneratedTextResult: (String) -> Unit,
+    onCancelSyncText: () -> Unit,
+    onRetrySyncText: () -> Unit,
     onPresentationModeChanged: (String, TextPresentationMode) -> Unit,
 ) {
     val tracks = contentUnit?.timedTextTracks.orEmpty()
@@ -699,19 +719,29 @@ private fun TextTrackDialog(
     val secondary = tracks.firstOrNull { it.stableId == selection.secondaryTrackId }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("字幕轨", color = AppPrimaryText) },
+        title = { Text("同步文字", color = AppPrimaryText) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                val productStatus = generationProductStatus(syncTextTask, generatedText != null)
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    TextButton(onClick = onGenerateSyncText) {
+                    TextButton(
+                        onClick = onGenerateSyncText,
+                        enabled = syncTextTask == null || syncTextTask.state == GenerationTaskState.Completed,
+                    ) {
                         Text("生成", color = AppAccent, fontSize = 12.sp)
                     }
-                    TextButton(onClick = onOpenSyncTextSchemes) {
-                        Text("方案", color = AppSecondaryText, fontSize = 12.sp)
-                    }
-                    if (syncTextTaskCount > 0) {
-                        TextButton(onClick = onOpenSyncTextTasks) {
-                            Text("任务 $syncTextTaskCount", color = AppAccent, fontSize = 12.sp)
+                    if (productStatus != null) {
+                        val failed = productStatus == "失败"
+                        Text(
+                            productStatus,
+                            color = if (failed) AppError else AppAccent,
+                            fontSize = 12.sp,
+                            modifier = Modifier.align(Alignment.CenterVertically),
+                        )
+                        if (productStatus != "完成") {
+                            TextButton(onClick = if (failed) onRetrySyncText else onCancelSyncText) {
+                                Text(if (failed) "重试" else "取消", color = AppSecondaryText, fontSize = 12.sp)
+                            }
                         }
                     }
                 }
@@ -743,9 +773,6 @@ private fun TextTrackDialog(
                             )
                         }
                     }
-                    TextButton(onClick = { onOpenGeneratedTextResult(generatedText.slotId) }) {
-                        Text("结果详情", color = AppSecondaryText, fontSize = 11.sp)
-                    }
                 }
                 TextSelectionSummary(
                     title = "主轨",
@@ -765,20 +792,6 @@ private fun TextTrackDialog(
                     onRestoreAutomatic = onRestoreAutomatic,
                     onAddTrack = onAddTrack,
                 )
-                if (tracks.any { it.origin == TimedTextOrigin.Embedded }) {
-                    Text(
-                        "同一时间可启用一条内嵌文字轨；它可以与一条外挂字幕组成主次轨。",
-                        color = AppMutedText,
-                        fontSize = 10.sp,
-                        lineHeight = 14.sp,
-                    )
-                    Text(
-                        "内嵌轨由媒体时间直接驱动；字幕偏移仅作用于外挂轨。",
-                        color = AppMutedText,
-                        fontSize = 10.sp,
-                        lineHeight = 14.sp,
-                    )
-                }
                 Spacer(modifier = Modifier.fillMaxWidth().height(1.dp).background(AppHairline))
                 if (tracks.isEmpty()) {
                     Text(
@@ -804,10 +817,6 @@ private fun TextTrackDialog(
                                 onSelectSecondary = {
                                     onSelectTrack(TextTrackSlot.Secondary, track.stableId)
                                 },
-                                onOpenGeneratedResult =
-                                    track.locator.generatedSlotId?.let { slotId ->
-                                        { onOpenGeneratedTextResult(slotId) }
-                                    },
                             )
                             if (index != tracks.lastIndex) {
                                 Spacer(
@@ -888,7 +897,6 @@ private fun TextTrackChoiceRow(
     isSecondary: Boolean,
     onSelectPrimary: () -> Unit,
     onSelectSecondary: () -> Unit,
-    onOpenGeneratedResult: (() -> Unit)?,
 ) {
     val failed =
         track.readiness in
@@ -933,11 +941,6 @@ private fun TextTrackChoiceRow(
                         },
                     fontSize = 11.sp,
                 )
-            }
-            onOpenGeneratedResult?.let { open ->
-                TextButton(onClick = open) {
-                    Text("详情", color = AppSecondaryText, fontSize = 11.sp)
-                }
             }
         }
     }
@@ -1194,17 +1197,21 @@ private fun GlowPlayer(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    TextButton(onClick = onShowTimer) {
-                        Text(sleepTimerLabel(sleepTimer), color = controlColor, fontSize = 11.sp)
+                    IconButton(onClick = onShowTimer) {
+                        Icon(
+                            Icons.Outlined.Timer,
+                            contentDescription = "睡眠定时：${sleepTimerLabel(sleepTimer)}",
+                            tint = controlColor,
+                        )
                     }
-                    TextButton(onClick = { controlsVisible = false }) {
-                        Text("锁定", color = controlColor)
+                    IconButton(onClick = { controlsVisible = false }) {
+                        Icon(Icons.Outlined.Lock, contentDescription = "隐藏控制", tint = controlColor)
                     }
-                    TextButton(onClick = onManageTextTracks) {
-                        Text("字幕轨", color = controlColor)
+                    IconButton(onClick = onManageTextTracks) {
+                        Icon(Icons.Outlined.Subtitles, contentDescription = "同步文字", tint = controlColor)
                     }
-                    TextButton(onClick = onExitGlow) {
-                        Text("退出微光", color = controlColor)
+                    IconButton(onClick = onExitGlow) {
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "退出微光", tint = controlColor)
                     }
                 }
                 playback.errorMessage?.let { message ->
@@ -1313,31 +1320,49 @@ private fun PlaybackControls(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(
+        IconButton(
             onClick = {
                 onInteraction()
                 player.seekToPreviousMediaItem()
             },
             enabled = playback.hasPrevious,
         ) {
-            Text("上一项", color = if (playback.hasPrevious) contentColor else trackColor)
+            Icon(
+                Icons.Outlined.SkipPrevious,
+                contentDescription = "上一项",
+                tint = if (playback.hasPrevious) contentColor else trackColor,
+            )
         }
-        TextButton(
+        IconButton(
             onClick = {
                 onInteraction()
                 onPlayPause()
             },
+            modifier = Modifier.size(56.dp),
         ) {
-            Text(playPauseLabel(playback), color = contentColor, fontWeight = FontWeight.Medium)
+            Icon(
+                when {
+                    playback.errorMessage != null -> Icons.Outlined.Refresh
+                    playback.isPlaying -> Icons.Outlined.Pause
+                    else -> Icons.Outlined.PlayArrow
+                },
+                contentDescription = playPauseLabel(playback),
+                tint = contentColor,
+                modifier = Modifier.size(32.dp),
+            )
         }
-        TextButton(
+        IconButton(
             onClick = {
                 onInteraction()
                 player.seekToNextMediaItem()
             },
             enabled = playback.hasNext,
         ) {
-            Text("下一项", color = if (playback.hasNext) contentColor else trackColor)
+            Icon(
+                Icons.Outlined.SkipNext,
+                contentDescription = "下一项",
+                tint = if (playback.hasNext) contentColor else trackColor,
+            )
         }
     }
 
@@ -1346,13 +1371,13 @@ private fun PlaybackControls(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(
+        IconButton(
             onClick = {
                 onInteraction()
                 player.seekWithinMedia(-10_000L)
             },
         ) {
-            Text("−10 秒", color = contentColor)
+            Icon(Icons.Outlined.Replay10, contentDescription = "后退 10 秒", tint = contentColor)
         }
         TextButton(
             onClick = {
@@ -1362,13 +1387,13 @@ private fun PlaybackControls(
         ) {
             Text(formatSpeed(playback.speed), color = contentColor)
         }
-        TextButton(
+        IconButton(
             onClick = {
                 onInteraction()
                 player.seekWithinMedia(10_000L)
             },
         ) {
-            Text("+10 秒", color = contentColor)
+            Icon(Icons.Outlined.Forward10, contentDescription = "前进 10 秒", tint = contentColor)
         }
     }
 
@@ -1378,22 +1403,22 @@ private fun PlaybackControls(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(
+            IconButton(
                 onClick = {
                     onInteraction()
                     onSubtitleOffsetChanged((subtitleOffsetMs - 500L).coerceAtLeast(-60_000L))
                 },
             ) {
-                Text("字幕 −0.5 秒", color = contentColor)
+                Icon(Icons.Outlined.Remove, contentDescription = "字幕偏移减少 0.5 秒", tint = contentColor)
             }
-            Text(formatOffset(subtitleOffsetMs), color = secondaryColor, fontSize = 11.sp)
-            TextButton(
+            Text("字幕 ${formatOffset(subtitleOffsetMs)}", color = secondaryColor, fontSize = 11.sp)
+            IconButton(
                 onClick = {
                     onInteraction()
                     onSubtitleOffsetChanged((subtitleOffsetMs + 500L).coerceAtMost(60_000L))
                 },
             ) {
-                Text("+0.5 秒", color = contentColor)
+                Icon(Icons.Outlined.Add, contentDescription = "字幕偏移增加 0.5 秒", tint = contentColor)
             }
         }
     }
@@ -1412,28 +1437,32 @@ private fun PlayerOptions(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = { player.shuffleModeEnabled = !playback.shuffleEnabled }) {
-            Text(
-                "随机",
-                color = if (playback.shuffleEnabled) AppAccent else AppMutedText,
-                fontSize = 12.sp,
+        IconButton(onClick = { player.shuffleModeEnabled = !playback.shuffleEnabled }) {
+            Icon(
+                Icons.Outlined.Shuffle,
+                contentDescription = if (playback.shuffleEnabled) "关闭随机播放" else "开启随机播放",
+                tint = if (playback.shuffleEnabled) AppAccent else AppMutedText,
             )
         }
-        TextButton(onClick = { player.repeatMode = nextRepeatMode(playback.repeatMode) }) {
-            Text(repeatModeLabel(playback.repeatMode), color = AppMutedText, fontSize = 12.sp)
-        }
-        TextButton(onClick = onShowQueue) {
-            Text(
-                "今晚 ${playback.queue.size}",
-                color = AppMutedText,
-                fontSize = 12.sp,
+        IconButton(onClick = { player.repeatMode = nextRepeatMode(playback.repeatMode) }) {
+            Icon(
+                if (playback.repeatMode == Player.REPEAT_MODE_ONE) Icons.Outlined.RepeatOne else Icons.Outlined.Repeat,
+                contentDescription = repeatModeLabel(playback.repeatMode),
+                tint = if (playback.repeatMode == Player.REPEAT_MODE_OFF) AppMutedText else AppAccent,
             )
         }
-        TextButton(onClick = onShowTimer) {
-            Text(
-                sleepTimerLabel(sleepTimer),
-                color = if (sleepTimer.isActive) AppAccent else AppMutedText,
-                fontSize = 12.sp,
+        IconButton(onClick = onShowQueue) {
+            Icon(
+                Icons.AutoMirrored.Outlined.QueueMusic,
+                contentDescription = "播放列表，共 ${playback.queue.size} 项",
+                tint = AppMutedText,
+            )
+        }
+        IconButton(onClick = onShowTimer) {
+            Icon(
+                Icons.Outlined.Timer,
+                contentDescription = "睡眠定时：${sleepTimerLabel(sleepTimer)}",
+                tint = if (sleepTimer.isActive) AppAccent else AppMutedText,
             )
         }
     }
@@ -1449,85 +1478,24 @@ private fun QueueDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("今晚", color = AppPrimaryText) },
+        title = { Text("播放列表", color = AppPrimaryText) },
         text = {
             LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
                 itemsIndexed(
                     items = playback.queue,
                     key = { index, item -> "queue-$index-${item.mediaId}" },
                 ) { index, item ->
-                    Column {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(2.dp),
-                            ) {
-                                TextButton(
-                                    onClick = {
-                                        onSelect(index)
-                                    },
-                                ) {
-                                    Column {
-                                        Text(
-                                            item.title,
-                                            color =
-                                                if (index == playback.currentIndex) {
-                                                    AppAccent
-                                                } else {
-                                                    AppPrimaryText
-                                                },
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                        item.artist?.let {
-                                            Text(it, color = AppMutedText, fontSize = 11.sp)
-                                        }
-                                    }
-                                }
-                            }
-                            TextButton(
-                                onClick = { onMove(index, index - 1) },
-                                enabled = index > 0,
-                            ) {
-                                Text("↑", color = if (index > 0) AppSecondaryText else AppMutedText)
-                            }
-                            TextButton(
-                                onClick = { onMove(index, index + 1) },
-                                enabled = index < playback.queue.lastIndex,
-                            ) {
-                                Text(
-                                    "↓",
-                                    color =
-                                        if (index < playback.queue.lastIndex) {
-                                            AppSecondaryText
-                                        } else {
-                                            AppMutedText
-                                        },
-                                )
-                            }
-                            TextButton(
-                                onClick = { onRemove(index) },
-                                enabled = true,
-                            ) {
-                                Text(
-                                    "移除",
-                                    color = AppMutedText,
-                                    fontSize = 11.sp,
-                                )
-                            }
-                        }
-                        Spacer(
-                            modifier =
-                                Modifier
-                                    .fillMaxWidth()
-                                    .height(1.dp)
-                                    .background(AppHairline),
-                        )
-                    }
+                    QueueItemRow(
+                        itemKey = item.mediaId,
+                        index = index,
+                        itemCount = playback.queue.size,
+                        title = item.title,
+                        artist = item.artist,
+                        isCurrent = index == playback.currentIndex,
+                        onSelect = { onSelect(index) },
+                        onMove = onMove,
+                        onRemove = { onRemove(index) },
+                    )
                 }
             }
         },
@@ -1543,8 +1511,8 @@ private fun SleepTimerDialog(
     state: SleepTimerState,
     onSetDuration: (Long) -> Unit,
     onEndOfItem: () -> Unit,
-    showEndOfTonight: Boolean,
-    onEndOfTonight: () -> Unit,
+    showEndOfQueue: Boolean,
+    onEndOfQueue: () -> Unit,
     onCancelTimer: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1568,9 +1536,9 @@ private fun SleepTimerDialog(
                 TextButton(onClick = onEndOfItem) {
                     Text("当前内容结束后停止", color = AppPrimaryText)
                 }
-                if (showEndOfTonight) {
-                    TextButton(onClick = onEndOfTonight) {
-                        Text("今晚结束后停止", color = AppPrimaryText)
+                if (showEndOfQueue) {
+                    TextButton(onClick = onEndOfQueue) {
+                    Text("播放列表结束后停止", color = AppPrimaryText)
                     }
                 }
                 if (state.isActive) {
@@ -1749,7 +1717,7 @@ private fun sleepTimerLabel(state: SleepTimerState): String =
     when (state.mode) {
         SleepTimerMode.None -> "定时"
         SleepTimerMode.EndOfItem -> "本曲结束"
-        SleepTimerMode.EndOfTonight -> "今晚结束"
+        SleepTimerMode.EndOfTonight -> "播放列表结束"
         SleepTimerMode.Duration -> {
             val minutes = ((state.remainingMs + 59_999L) / 60_000L).coerceAtLeast(1L)
             "剩余 $minutes 分"

@@ -115,6 +115,17 @@ class SettingsStoreTest {
         assertTrue(legacyLibrary.data.first().asMap().isEmpty())
     }
 
+    @Test
+    fun contentSortPersistsWithoutChangingGlowSettings() = runBlocking {
+        store.saveDisplayProfile(DisplayProfile.Soft)
+
+        store.saveContentSort(ContentSort.Title)
+
+        val loaded = store.load()
+        assertEquals(ContentSort.Title, loaded.contentSort)
+        assertEquals(DisplayProfile.Soft, loaded.displayProfile)
+    }
+
     private fun dataStore(fileName: String): DataStore<Preferences> {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         scopes += scope

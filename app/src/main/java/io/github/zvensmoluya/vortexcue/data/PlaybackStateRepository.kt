@@ -1,7 +1,6 @@
 package io.github.zvensmoluya.vortexcue.data
 
 import androidx.room3.withWriteTransaction
-import io.github.zvensmoluya.vortexcue.core.model.PlayerSurface
 import io.github.zvensmoluya.vortexcue.data.db.CurrentPlaybackSessionEntity
 import io.github.zvensmoluya.vortexcue.data.db.CurrentQueueEntryEntity
 import io.github.zvensmoluya.vortexcue.data.db.PlaybackDao
@@ -9,6 +8,7 @@ import io.github.zvensmoluya.vortexcue.data.db.QueueItemRow
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 
 class PlaybackStateRepository(
     private val database: VortexDatabase,
@@ -22,6 +22,14 @@ class PlaybackStateRepository(
         combine(playbackDao.observeSession(), playbackDao.observeQueueItems()) { session, queue ->
             projection(session ?: emptySession(), queue)
         }
+
+    val currentQueue: Flow<List<PlaybackItem>> = recovery.map { it.queue }
+
+    suspend fun appendUnique(contentId: String): Boolean {
+        val before = recovery().queue.map { it.contentId }.toSet()
+        append(listOf(contentId))
+        return contentRepository.canonicalContentId(contentId) !in before
+    }
 
     suspend fun initialize() {
         database.withWriteTransaction {
@@ -182,10 +190,6 @@ class PlaybackStateRepository(
             updatedAtMs = nowMs(),
         ) == 1
 
-    suspend fun setLastSurface(surface: PlayerSurface) {
-        playbackDao.updateLastSurface(surface.asLastSurface().name, nowMs())
-    }
-
     private suspend fun writeStructure(
         contentIds: List<String>,
         currentContentId: String?,
@@ -255,7 +259,6 @@ class PlaybackStateRepository(
             playbackSpeed = session.playbackSpeed,
             shuffleEnabled = session.shuffleEnabled,
             repeatMode = session.repeatMode,
-            lastSurface = PlayerSurface.restoreLastSurface(session.lastSurface),
             queueRevision = session.queueRevision,
         )
     }

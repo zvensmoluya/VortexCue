@@ -61,6 +61,41 @@ class SyncTextRepositoryTest {
     }
 
     @Test
+    fun `single config validates HTTPS endpoints and keeps a stable id`() = runBlocking {
+        repository.saveCredential("shared", "Shared", CredentialPurpose.Shared, "secret")
+        fun config(
+            asrEndpoint: String = "https://openrouter.example/v1/audio/transcriptions/",
+            translationEndpoint: String = "https://translation.example/v1/responses/",
+            model: String = "model-v1",
+        ) =
+            SyncTextConfig(
+                configId = "",
+                asrEndpoint = asrEndpoint,
+                asrProfile = AsrProfile.OpenRouterWhisperV1,
+                asrCredentialId = "shared",
+                translationProtocol = TranslationProtocol.Responses,
+                translationEndpoint = translationEndpoint,
+                translationModel = model,
+                translationCredentialId = "shared",
+                targetLanguage = "zh",
+                presentationMode = TextPresentationMode.SourceTarget,
+            )
+
+        assertTrue(runCatching { repository.saveConfig(config(asrEndpoint = "http://openrouter.example")) }.isFailure)
+        assertTrue(runCatching { repository.saveConfig(config(translationEndpoint = "http://translation.example")) }.isFailure)
+
+        val first = repository.saveConfig(config())
+        val second = repository.saveConfig(config(model = "model-v2"))
+
+        assertEquals(first.configId, second.configId)
+        assertEquals(1, database.syncTextDao().schemes().size)
+        assertEquals("https://openrouter.example/v1/audio/transcriptions", second.asrEndpoint)
+        assertEquals("https://translation.example/v1/responses", second.translationEndpoint)
+        assertEquals("zh-CN", second.targetLanguage)
+        assertEquals("model-v2", repository.loadConfig()?.translationModel)
+    }
+
+    @Test
     fun `task snapshots dedupe attempts and generated slot replacement stay atomic`() = runBlocking {
         insertContentWithTextTrack()
         repository.saveCredential("asr-key", "ASR", CredentialPurpose.Asr, "asr-secret")

@@ -345,6 +345,7 @@ class SyncTextTaskRunner(
                         asr.transcribe(
                             AsrRequest(
                                 profile = attempt.asrProfile.enumValueOr(AsrProfile.OpenRouterWhisperV1),
+                                endpoint = attempt.asrEndpoint,
                                 apiKey = key,
                                 wavFile = wav,
                                 window = plan,

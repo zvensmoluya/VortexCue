@@ -122,6 +122,8 @@ class AppContainer(context: Context) {
             settingsStore.initializeFromLegacyAndCleanDomainStores()
             val retained = database.contentDao().referencedSubtitleCacheFiles().toSet()
             withContext(Dispatchers.IO) { subtitleAssetStore.pruneExcept(retained) }
+            val retainedCredentials = database.syncTextDao().credentialIds().toSet()
+            credentialStore.pruneExcept(retainedCredentials)
             val nowMs = System.currentTimeMillis()
             database.syncTextDao().pruneExpiredRequestAttempts(nowMs)
             database.syncTextDao().pruneTerminalTasks(nowMs - SyncTextTerminalRetentionMs)

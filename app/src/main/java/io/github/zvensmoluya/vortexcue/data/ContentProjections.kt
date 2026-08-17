@@ -6,8 +6,24 @@ import io.github.zvensmoluya.vortexcue.core.model.MediaLocator
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
 import io.github.zvensmoluya.vortexcue.core.model.PlayableContentUnit
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextTrack
-import io.github.zvensmoluya.vortexcue.library.LibraryShortcut
 import io.github.zvensmoluya.vortexcue.library.LibrarySourceKind
+
+/** Ordering used by the Content tab. The value is persisted in Settings DataStore. */
+enum class ContentSort {
+    RecentAdded,
+    RecentPlayed,
+    Title,
+
+    ;
+
+    val displayName: String
+        get() =
+            when (this) {
+                RecentAdded -> "最近加入"
+                RecentPlayed -> "最近播放"
+                Title -> "标题"
+            }
+}
 
 enum class ContentDisposition {
     Collected,
@@ -59,21 +75,10 @@ data class SourceSummary(
     val itemCount: Int,
 )
 
-data class PlaylistSummary(
-    val playlistId: String,
+data class ContentFolderSummary(
+    val folderId: String,
     val name: String,
-)
-
-data class HomeLibraryProjection(
-    val collectedCount: Int = 0,
-    val discoveryCount: Int = 0,
-    val ignoredCount: Int = 0,
-    val recentCount: Int = 0,
-    val collectedPreview: List<ContentSummary> = emptyList(),
-    val recentPreview: List<ContentSummary> = emptyList(),
-    val sources: List<SourceSummary> = emptyList(),
-    val playlists: List<PlaylistSummary> = emptyList(),
-    val shortcuts: List<LibraryShortcut> = emptyList(),
+    val itemCount: Int = 0,
 )
 
 data class SourceScanDescriptor(

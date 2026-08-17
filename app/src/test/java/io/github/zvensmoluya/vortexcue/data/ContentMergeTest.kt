@@ -1,5 +1,6 @@
 package io.github.zvensmoluya.vortexcue.data
 
+import android.app.Application
 import android.net.Uri
 import androidx.room3.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
@@ -9,13 +10,13 @@ import io.github.zvensmoluya.vortexcue.core.model.stableTimedTextTrackId
 import io.github.zvensmoluya.vortexcue.data.db.ActiveMediaLocatorEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentDispositionEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentEntity
+import io.github.zvensmoluya.vortexcue.data.db.ContentFolderEntity
+import io.github.zvensmoluya.vortexcue.data.db.ContentFolderMembershipEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentIdentityEntity
 import io.github.zvensmoluya.vortexcue.data.db.CurrentDraftEntity
 import io.github.zvensmoluya.vortexcue.data.db.CurrentPlaybackSessionEntity
 import io.github.zvensmoluya.vortexcue.data.db.CurrentQueueEntryEntity
 import io.github.zvensmoluya.vortexcue.data.db.MediaLocatorEntity
-import io.github.zvensmoluya.vortexcue.data.db.PlaylistEntity
-import io.github.zvensmoluya.vortexcue.data.db.PlaylistEntryEntity
 import io.github.zvensmoluya.vortexcue.data.db.RecentEntryEntity
 import io.github.zvensmoluya.vortexcue.data.db.TextSelectionEntity
 import io.github.zvensmoluya.vortexcue.data.db.TimedTextTrackEntity
@@ -27,7 +28,6 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -40,7 +40,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], manifest = Config.NONE)
+@Config(sdk = [35], manifest = Config.NONE, application = Application::class)
 class ContentMergeTest {
     private lateinit var database: VortexDatabase
 
@@ -69,9 +69,8 @@ class ContentMergeTest {
         dao.upsertDisposition(ContentDispositionEntity("duplicate", true, 3L))
         dao.upsertRecent(RecentEntryEntity("primary", 10L))
         dao.upsertRecent(RecentEntryEntity("duplicate", 20L))
-        dao.upsertPlaylist(PlaylistEntity("playlist", "Test", 1L, 1L))
-        dao.upsertPlaylistEntry(PlaylistEntryEntity("playlist", "primary", 0, 1L))
-        dao.upsertPlaylistEntry(PlaylistEntryEntity("playlist", "duplicate", 1, 2L))
+        dao.upsertContentFolder(ContentFolderEntity("folder", "Test", 1L, 1L))
+        dao.upsertContentFolderMembership(ContentFolderMembershipEntity("duplicate", "folder", 2L))
         dao.upsertDraft(CurrentDraftEntity(contentId = "duplicate", updatedAtMs = 2L))
 
         val primaryTrackId = stableTimedTextTrackId("primary", TimedTextOrigin.Sidecar, SharedTextIdentity)
@@ -112,7 +111,7 @@ class ContentMergeTest {
         assertEquals(25L, dao.content("primary")?.subtitleOffsetMs)
         assertEquals(true, dao.disposition("primary")?.isCollected)
         assertEquals(20L, dao.recent("primary")?.lastOpenedAtMs)
-        assertEquals(listOf("primary"), dao.playlistEntries("playlist").map { it.contentId })
+        assertEquals("folder", dao.contentFolderMembership("primary")?.folderId)
         assertEquals("primary", dao.draft()?.contentId)
         assertEquals(listOf("primary", "other"), playbackDao.queueEntries().map { it.contentId })
         assertEquals("primary", playbackDao.session()?.currentContentId)
@@ -222,27 +221,6 @@ class ContentMergeTest {
         repository.removeSource(descriptor.sourceId)
         assertEquals("Unavailable", repository.summary(previousId)?.availability?.name)
         assertNull(repository.summary(replacementId))
-    }
-
-    @Test
-    fun homeProjectionReturnsCountsAndThreeItemPreviews() = runBlocking {
-        val dao = database.contentDao()
-        repeat(5) { index ->
-            val contentId = "home-$index"
-            seedContent(contentId, "locator-$contentId", "identity-$contentId", 0L)
-            dao.upsertDisposition(ContentDispositionEntity(contentId, true, index.toLong()))
-            dao.upsertRecent(RecentEntryEntity(contentId, index.toLong()))
-        }
-
-        val home =
-            ContentRepository(database).homeProjection.first {
-                it.collectedCount == 5 && it.recentCount == 5
-            }
-
-        assertEquals(5, home.collectedCount)
-        assertEquals(5, home.recentCount)
-        assertEquals(3, home.collectedPreview.size)
-        assertEquals(3, home.recentPreview.size)
     }
 
     private suspend fun seedContent(

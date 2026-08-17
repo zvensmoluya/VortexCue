@@ -25,6 +25,7 @@ data class AsrRequest(
     val wavFile: File,
     val window: AsrWindowPlan,
     val sourceLanguage: String? = null,
+    val endpoint: String = OpenRouterAsrEngine.OpenRouterTranscriptionUrl,
 )
 
 data class AsrWindowResult(
@@ -73,7 +74,7 @@ class OpenRouterAsrEngine(
         try {
             val httpRequest =
                 Request.Builder()
-                    .url(OpenRouterTranscriptionUrl)
+                    .url(validatedEndpoint(request.endpoint))
                     .header("Accept", "application/json")
                     .header("Authorization", "Bearer ${request.apiKey}")
                     .post(body)
@@ -218,6 +219,20 @@ class OpenRouterAsrEngine(
     companion object {
         const val OpenRouterTranscriptionUrl = "https://openrouter.ai/api/v1/audio/transcriptions"
         const val MaxEncodedRequestBytes = 24L * 1024L * 1024L
+    }
+
+    private fun validatedEndpoint(value: String): String {
+        val endpoint = value.trim().removeSuffix("/")
+        val uri = runCatching { java.net.URI(endpoint) }.getOrNull()
+        require(
+            uri?.scheme.equals("https", ignoreCase = true) &&
+                !uri?.host.isNullOrBlank() &&
+                uri.userInfo == null &&
+                uri.fragment == null,
+        ) {
+            "ASR endpoint must be HTTPS"
+        }
+        return endpoint
     }
 }
 

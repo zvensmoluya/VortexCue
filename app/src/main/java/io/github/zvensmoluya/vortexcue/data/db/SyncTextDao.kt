@@ -15,6 +15,9 @@ interface SyncTextDao {
     @Query("SELECT * FROM sync_text_credential WHERE credential_id = :credentialId")
     suspend fun credential(credentialId: String): CredentialMetadataEntity?
 
+    @Query("SELECT credential_id FROM sync_text_credential")
+    suspend fun credentialIds(): List<String>
+
     @Upsert
     suspend fun upsertCredential(entity: CredentialMetadataEntity)
 
@@ -73,6 +76,9 @@ interface SyncTextDao {
 
     @Query("SELECT * FROM generation_task WHERE scheme_id = :schemeId AND state NOT IN ('Completed', 'Deleted') ORDER BY queue_position")
     suspend fun activeTasksForScheme(schemeId: String): List<GenerationTaskEntity>
+
+    @Query("SELECT * FROM generation_task WHERE content_id = :contentId AND state NOT IN ('Completed', 'Deleted') ORDER BY queue_position")
+    suspend fun activeTasksForContent(contentId: String): List<GenerationTaskEntity>
 
     @Query("SELECT * FROM generation_task WHERE waiting_for_network = 1 AND state NOT IN ('Completed', 'Deleted') ORDER BY queue_position")
     suspend fun networkWaitingTasks(): List<GenerationTaskEntity>

@@ -2,7 +2,6 @@ package io.github.zvensmoluya.vortexcue.data
 
 import io.github.zvensmoluya.vortexcue.core.model.ContentAvailability
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
-import io.github.zvensmoluya.vortexcue.core.model.PlayerSurface
 
 data class PlaybackItem(
     val contentId: String,
@@ -19,7 +18,6 @@ data class PlaybackRecoveryProjection(
     val playbackSpeed: Float = 1f,
     val shuffleEnabled: Boolean = false,
     val repeatMode: Int = 0,
-    val lastSurface: PlayerSurface = PlayerSurface.Normal,
     val queueRevision: Long = 0L,
 ) {
     val currentItem: PlaybackItem?

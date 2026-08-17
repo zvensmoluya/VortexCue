@@ -25,16 +25,6 @@ data class LibrarySourceState(
     val isScanned: Boolean = true,
 )
 
-enum class LibraryShortcutType {
-    Folder,
-    Playlist,
-}
-
-data class LibraryShortcut(
-    val type: LibraryShortcutType,
-    val key: String,
-)
-
 data class LibraryScanBatch(
     val media: List<MediaSourceRef> = emptyList(),
     val subtitleSuggestions: List<TimedTextTrackCandidate> = emptyList(),
@@ -72,20 +62,6 @@ object LibrarySourceIds {
     const val SystemLibrary = "system-library"
     const val LooseFiles = "loose-files"
 }
-
-fun MediaSourceRef.libraryFolderKey(): String =
-    "${sourceId.orEmpty()}|${folder.orEmpty()}"
-
-val MediaSourceRef.libraryFolderName: String
-    get() =
-        folder
-            ?.trimEnd('/')
-            ?.substringAfterLast('/')
-            ?.takeIf(String::isNotBlank)
-            ?: if (sourceId == LibrarySourceIds.LooseFiles) "单独打开" else "未分类"
-
-fun MediaSourceRef.toFolderShortcut(): LibraryShortcut =
-    LibraryShortcut(LibraryShortcutType.Folder, libraryFolderKey())
 
 internal fun List<LibrarySourceState>.withSourceState(
     source: LibrarySourceState,

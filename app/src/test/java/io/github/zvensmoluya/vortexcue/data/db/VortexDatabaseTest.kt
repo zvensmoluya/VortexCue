@@ -75,12 +75,9 @@ class VortexDatabaseTest {
     }
 
     @Test
-    fun playlistAndTonightKeepOneEntryPerContent() = runBlocking {
+    fun currentQueueKeepsOneEntryPerContent() = runBlocking {
         insertContent("first", "content://media/first")
         val now = 10L
-        contentDao.upsertPlaylist(PlaylistEntity("playlist", "Test", now, now))
-        contentDao.upsertPlaylistEntry(PlaylistEntryEntity("playlist", "first", 0, now))
-        contentDao.upsertPlaylistEntry(PlaylistEntryEntity("playlist", "first", 0, now + 1))
         playbackDao.upsertQueueEntries(
             listOf(CurrentQueueEntryEntity("first", 0, now)),
         )
@@ -88,22 +85,15 @@ class VortexDatabaseTest {
             listOf(CurrentQueueEntryEntity("first", 0, now + 1)),
         )
 
-        assertEquals(1, contentDao.playlistEntries("playlist").size)
         assertEquals(1, playbackDao.queueEntries().size)
     }
 
     @Test
-    fun dispositionIsMutuallyExclusiveAndPlaylistCollectionIsAtomic() = runBlocking {
+    fun dispositionIsMutuallyExclusive() = runBlocking {
         insertContent("first", "content://media/first")
         contentDao.upsertDisposition(ContentDispositionEntity("first", false, 1L))
-        database.withWriteTransaction {
-            contentDao.upsertPlaylist(PlaylistEntity("playlist", "Test", 2L, 2L))
-            contentDao.upsertPlaylistEntry(PlaylistEntryEntity("playlist", "first", 0, 2L))
-            contentDao.upsertDisposition(ContentDispositionEntity("first", true, 2L))
-        }
+        contentDao.upsertDisposition(ContentDispositionEntity("first", true, 2L))
 
-        assertEquals(true, contentDao.disposition("first")?.isCollected)
-        contentDao.deletePlaylistEntry("playlist", "first")
         assertEquals(true, contentDao.disposition("first")?.isCollected)
     }
 
@@ -131,7 +121,7 @@ class VortexDatabaseTest {
         insertContent("collected", "content://media/collected", availability = "Unavailable")
         insertContent("ignored", "content://media/ignored", availability = "Unavailable")
         insertContent("recent", "content://media/recent", availability = "Unavailable")
-        insertContent("playlist", "content://media/playlist", availability = "Unavailable")
+        insertContent("folder", "content://media/folder", availability = "Unavailable")
         insertContent("queued", "content://media/queued", availability = "Unavailable")
         insertContent("draft", "content://media/draft", availability = "Unavailable")
         insertContent("manual-track", "content://media/manual-track", availability = "Unavailable")
@@ -140,8 +130,8 @@ class VortexDatabaseTest {
         contentDao.upsertDisposition(ContentDispositionEntity("collected", true, 1L))
         contentDao.upsertDisposition(ContentDispositionEntity("ignored", false, 1L))
         contentDao.upsertRecent(RecentEntryEntity("recent", 1L))
-        contentDao.upsertPlaylist(PlaylistEntity("playlist-root", "Root", 1L, 1L))
-        contentDao.upsertPlaylistEntry(PlaylistEntryEntity("playlist-root", "playlist", 0, 1L))
+        contentDao.upsertContentFolder(ContentFolderEntity("folder-root", "Root", 1L, 1L))
+        contentDao.upsertContentFolderMembership(ContentFolderMembershipEntity("folder", "folder-root", 1L))
         playbackDao.upsertQueueEntries(listOf(CurrentQueueEntryEntity("queued", 0, 1L)))
         contentDao.upsertDraft(CurrentDraftEntity(contentId = "draft", updatedAtMs = 1L))
         contentDao.upsertTextTrack(textTrack("track-manual", "manual-track"))
@@ -154,7 +144,7 @@ class VortexDatabaseTest {
 
         val candidates = contentDao.garbageCollectableContentIds().toSet()
 
-        assertEquals(setOf("orphan"), candidates)
+        assertEquals(setOf("folder", "orphan"), candidates)
     }
 
     @Test
@@ -272,12 +262,19 @@ class VortexDatabaseTest {
 
         driver.open(path).use { connection ->
             connection.prepare(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('content', 'legacy_domain') ORDER BY name",
+                "SELECT name FROM sqlite_master WHERE type = 'table' " +
+                    "AND name IN ('content', 'legacy_domain', 'playlist', 'playlist_entry', 'home_shortcut') ORDER BY name",
             ).use { statement ->
                 val tables = buildList {
                     while (statement.step()) add(statement.getText(0))
                 }
                 assertEquals(listOf("content"), tables)
+            }
+            connection.prepare("PRAGMA table_info(current_playback_session)").use { statement ->
+                val columns = buildList {
+                    while (statement.step()) add(statement.getText(1))
+                }
+                assertFalse("last_surface" in columns)
             }
         }
     }

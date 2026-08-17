@@ -35,6 +35,12 @@ data class SourceSummaryRow(
     val itemCount: Int,
 )
 
+data class ContentFolderSummaryRow(
+    val folderId: String,
+    val name: String,
+    val itemCount: Int,
+)
+
 data class QueueItemRow(
     val position: Int,
     val contentId: String,

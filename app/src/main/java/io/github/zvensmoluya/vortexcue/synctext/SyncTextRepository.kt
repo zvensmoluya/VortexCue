@@ -66,6 +66,13 @@ class SyncTextRepository(
             .map { entities -> entities.map(SyncTextSchemeEntity::toDomain) }
             .stateIn(scope, SharingStarted.Eagerly, emptyList())
 
+    /** Product-facing view of the single active configuration. */
+    val config: StateFlow<SyncTextConfig?> =
+        schemes
+            .map { list -> list.firstOrNull { it.isDefault } ?: list.firstOrNull() }
+            .map { it?.toConfig() }
+            .stateIn(scope, SharingStarted.Eagerly, null)
+
     val credentialMetadata: StateFlow<List<CredentialMetadata>> =
         dao.observeCredentials()
             .map { entities -> entities.map(CredentialMetadataEntity::toDomain) }
@@ -82,6 +89,50 @@ class SyncTextRepository(
                 entity.toSummary(queuePosition = index, pauseAll = control?.pauseAll == true)
             }
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    suspend fun loadConfig(): SyncTextConfig? =
+        (dao.defaultScheme() ?: dao.schemes().firstOrNull())?.toDomain()?.toConfig()
+
+    suspend fun saveConfig(config: SyncTextConfig): SyncTextConfig {
+        val stableConfigId =
+            config.configId.takeIf(String::isNotBlank)
+                ?: dao.defaultScheme()?.schemeId
+                ?: dao.schemes().firstOrNull()?.schemeId
+                ?: newId()
+        val existing = dao.scheme(stableConfigId)?.toDomain()
+        val scheme =
+            (existing ?: SyncTextScheme(
+                schemeId = stableConfigId,
+                name = "默认配置",
+                asrProfile = config.asrProfile,
+                asrEndpoint = config.asrEndpoint,
+                asrCredentialId = config.asrCredentialId,
+                translationProtocol = config.translationProtocol,
+                translationEndpoint = config.translationEndpoint,
+                translationModel = config.translationModel,
+                translationCredentialId = config.translationCredentialId,
+                defaultTargetLanguage = config.targetLanguage,
+                defaultPresentationMode = config.presentationMode,
+                translationUserAgent = config.translationUserAgent,
+                isDefault = true,
+                createdAtMs = 0L,
+                updatedAtMs = 0L,
+            )).copy(
+                name = "默认配置",
+                asrProfile = config.asrProfile,
+                asrEndpoint = config.asrEndpoint,
+                asrCredentialId = config.asrCredentialId,
+                translationProtocol = config.translationProtocol,
+                translationEndpoint = config.translationEndpoint,
+                translationModel = config.translationModel,
+                translationCredentialId = config.translationCredentialId,
+                defaultTargetLanguage = config.targetLanguage,
+                defaultPresentationMode = config.presentationMode,
+                translationUserAgent = config.translationUserAgent,
+                isDefault = true,
+            )
+        return saveScheme(scheme).toConfig()
+    }
 
     suspend fun saveCredential(
         credentialId: String? = null,
@@ -140,6 +191,7 @@ class SyncTextRepository(
     suspend fun createScheme(
         name: String,
         asrProfile: AsrProfile,
+        asrEndpoint: String = OpenRouterAsrEngine.OpenRouterTranscriptionUrl,
         asrCredentialId: String,
         translationProtocol: TranslationProtocol,
         translationEndpoint: String,
@@ -155,6 +207,7 @@ class SyncTextRepository(
                 schemeId = newId(),
                 name = name,
                 asrProfile = asrProfile,
+                asrEndpoint = asrEndpoint,
                 asrCredentialId = asrCredentialId,
                 translationProtocol = translationProtocol,
                 translationEndpoint = translationEndpoint,
@@ -312,6 +365,14 @@ class SyncTextRepository(
             )
         }
         scheduler.schedule()
+    }
+
+    suspend fun cancelForContent(contentId: String) {
+        dao.activeTasksForContent(contentId).forEach { deleteTask(it.taskId) }
+    }
+
+    suspend fun retryForContent(contentId: String) {
+        dao.activeTasksForContent(contentId).forEach { resumeTask(it.taskId) }
     }
 
     suspend fun changeScheme(taskId: String, schemeId: String) {
@@ -701,6 +762,7 @@ class SyncTextRepository(
             ordinal = ordinal,
             schemeId = schemeId,
             asrProfile = asrProfile,
+            asrEndpoint = asrEndpoint,
             asrCredentialId = asrCredentialId,
             translationProtocol = translationProtocol,
             translationEndpoint = translationEndpoint,
@@ -722,9 +784,15 @@ class SyncTextRepository(
         )
 
     private fun SyncTextScheme.normalizedAndValidated(): SyncTextScheme {
+        val normalizedAsrEndpoint = normalizeHttpsEndpoint(asrEndpoint, "ASR endpoint")
         val endpoint = translationEndpoint.trim().removeSuffix("/")
-        val uri = runCatching { URI(endpoint) }.getOrNull()
-        require(uri?.scheme.equals("https", ignoreCase = true) && !uri?.host.isNullOrBlank()) {
+        val uri = runCatching { URI(endpoint.replace("{model}", "model")) }.getOrNull()
+        require(
+            uri?.scheme.equals("https", ignoreCase = true) &&
+                !uri?.host.isNullOrBlank() &&
+                uri.userInfo == null &&
+                uri.fragment == null,
+        ) {
             "Translation endpoint must be HTTPS"
         }
         val userAgent = translationUserAgent?.trim()?.takeIf(String::isNotBlank)
@@ -736,6 +804,7 @@ class SyncTextRepository(
         }
         return copy(
             name = name.trim().also { require(it.isNotBlank()) },
+            asrEndpoint = normalizedAsrEndpoint,
             translationEndpoint = endpoint,
             translationUserAgent = userAgent,
             translationModel = translationModel.trim().also { require(it.isNotBlank()) },
@@ -771,6 +840,7 @@ private fun SyncTextSchemeEntity.toDomain() =
         schemeId = schemeId,
         name = name,
         asrProfile = asrProfile.enumValueOr(AsrProfile.OpenRouterWhisperV1),
+        asrEndpoint = asrEndpoint,
         asrCredentialId = asrCredentialId,
         translationProtocol = translationProtocol.enumValueOr(TranslationProtocol.Responses),
         translationEndpoint = translationEndpoint,
@@ -784,11 +854,41 @@ private fun SyncTextSchemeEntity.toDomain() =
         updatedAtMs = updatedAtMs,
     )
 
+private fun SyncTextScheme.toConfig() =
+    SyncTextConfig(
+        configId = schemeId,
+        asrEndpoint = asrEndpoint,
+        asrProfile = asrProfile,
+        asrCredentialId = asrCredentialId,
+        translationProtocol = translationProtocol,
+        translationEndpoint = translationEndpoint,
+        translationModel = translationModel,
+        translationCredentialId = translationCredentialId,
+        targetLanguage = defaultTargetLanguage,
+        presentationMode = defaultPresentationMode,
+        translationUserAgent = translationUserAgent,
+    )
+
+private fun normalizeHttpsEndpoint(value: String, label: String): String {
+    val endpoint = value.trim().removeSuffix("/")
+    val uri = runCatching { URI(endpoint) }.getOrNull()
+    require(
+        uri?.scheme.equals("https", ignoreCase = true) &&
+            !uri?.host.isNullOrBlank() &&
+            uri.userInfo == null &&
+            uri.fragment == null,
+    ) {
+        "$label must be HTTPS"
+    }
+    return endpoint
+}
+
 private fun SyncTextScheme.toEntity() =
     SyncTextSchemeEntity(
         schemeId = schemeId,
         name = name,
         asrProfile = asrProfile.name,
+        asrEndpoint = asrEndpoint,
         asrCredentialId = asrCredentialId,
         translationProtocol = translationProtocol.name,
         translationEndpoint = translationEndpoint,

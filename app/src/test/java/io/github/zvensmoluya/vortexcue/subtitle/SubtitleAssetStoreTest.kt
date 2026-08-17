@@ -1,5 +1,6 @@
 package io.github.zvensmoluya.vortexcue.subtitle
 
+import android.app.Application
 import android.content.Context
 import java.io.File
 import org.junit.After
@@ -13,7 +14,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], manifest = Config.NONE)
+@Config(sdk = [35], manifest = Config.NONE, application = Application::class)
 class SubtitleAssetStoreTest {
     private val context: Context
         get() = RuntimeEnvironment.getApplication()

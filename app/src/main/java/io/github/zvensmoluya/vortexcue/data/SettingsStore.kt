@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import io.github.zvensmoluya.vortexcue.core.model.DisplayProfile
+import io.github.zvensmoluya.vortexcue.data.ContentSort
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -22,6 +23,7 @@ data class SettingsState(
     val displayProfile: DisplayProfile = DisplayProfile.Balanced,
     val glowCalibrationCompleted: Boolean = false,
     val glowGestureHintSeen: Boolean = false,
+    val contentSort: ContentSort = ContentSort.RecentAdded,
 )
 
 class SettingsStore internal constructor(
@@ -75,6 +77,13 @@ class SettingsStore internal constructor(
         }
     }
 
+    suspend fun saveContentSort(sort: ContentSort) {
+        dataStore.edit { preferences ->
+            preferences[Keys.SchemaVersion] = CurrentSchemaVersion
+            preferences[Keys.contentSort] = sort.name
+        }
+    }
+
     private fun decode(preferences: Preferences): SettingsState =
         if (preferences[Keys.SchemaVersion] == CurrentSchemaVersion) {
             preferences.toSettings(Keys)
@@ -98,6 +107,9 @@ class SettingsStore internal constructor(
                 ),
             glowCalibrationCompleted = this[keys.glowCalibrationCompleted] ?: false,
             glowGestureHintSeen = this[keys.glowGestureHintSeen] ?: false,
+            contentSort = this[keys.contentSort]?.let { value ->
+                ContentSort.entries.firstOrNull { it.name == value }
+            } ?: ContentSort.RecentAdded,
         )
 
     private fun androidx.datastore.preferences.core.MutablePreferences.write(state: SettingsState) {
@@ -121,6 +133,7 @@ class SettingsStore internal constructor(
         val displaySubtitleVerticalBias: Preferences.Key<Float>
         val glowCalibrationCompleted: Preferences.Key<Boolean>
         val glowGestureHintSeen: Preferences.Key<Boolean>
+        val contentSort: Preferences.Key<String>
     }
 
     private object Keys : SettingsKeys {
@@ -133,6 +146,7 @@ class SettingsStore internal constructor(
         override val displaySubtitleVerticalBias = floatPreferencesKey("display_subtitle_vertical_bias")
         override val glowCalibrationCompleted = booleanPreferencesKey("glow_calibration_completed")
         override val glowGestureHintSeen = booleanPreferencesKey("glow_gesture_hint_seen")
+        override val contentSort = stringPreferencesKey("content_sort")
     }
 
     private object LegacyKeys : SettingsKeys {
@@ -144,6 +158,7 @@ class SettingsStore internal constructor(
         override val displaySubtitleVerticalBias = floatPreferencesKey("display_subtitle_vertical_bias")
         override val glowCalibrationCompleted = booleanPreferencesKey("glow_calibration_completed")
         override val glowGestureHintSeen = booleanPreferencesKey("glow_gesture_hint_seen")
+        override val contentSort = stringPreferencesKey("content_sort")
     }
 
     private companion object {

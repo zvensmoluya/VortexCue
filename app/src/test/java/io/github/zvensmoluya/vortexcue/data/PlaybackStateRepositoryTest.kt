@@ -1,8 +1,8 @@
 package io.github.zvensmoluya.vortexcue.data
 
+import android.app.Application
 import androidx.room3.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
-import io.github.zvensmoluya.vortexcue.core.model.PlayerSurface
 import io.github.zvensmoluya.vortexcue.data.db.ActiveMediaLocatorEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentIdentityEntity
@@ -27,7 +27,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], manifest = Config.NONE)
+@Config(sdk = [35], manifest = Config.NONE, application = Application::class)
 class PlaybackStateRepositoryTest {
     private lateinit var database: VortexDatabase
     private lateinit var repository: PlaybackStateRepository
@@ -100,7 +100,6 @@ class PlaybackStateRepositoryTest {
     fun clearInvalidatesOldProgressAndRecoveryRetainsPlaybackParameters() = runBlocking {
         val active = repository.replace(listOf("one", "two"), currentIndex = 0, positionMs = 200L)
         repository.updatePlaybackParameters(playbackSpeed = 1.5f, shuffleEnabled = true, repeatMode = 2)
-        repository.setLastSurface(PlayerSurface.Glow)
 
         val cleared = repository.clear()
 
@@ -120,7 +119,6 @@ class PlaybackStateRepositoryTest {
         assertEquals(1.5f, recovery.playbackSpeed)
         assertEquals(true, recovery.shuffleEnabled)
         assertEquals(2, recovery.repeatMode)
-        assertEquals(PlayerSurface.Glow, recovery.lastSurface)
     }
 
     @Test
