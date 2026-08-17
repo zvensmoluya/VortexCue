@@ -443,7 +443,7 @@ private fun SchemeEditorDialog(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("同步文字方案", color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Text("同步文字设置", color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                 TextButton(onClick = onDismiss) { Text("完成", color = AppAccent) }
             }
             state.message?.let { Text(it, color = if (it.endsWith("已保存") || it.endsWith("已删除")) AppSecondaryText else AppError, fontSize = 12.sp) }

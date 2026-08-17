@@ -229,6 +229,7 @@ internal fun HomeScreen(
             onDisplay = { onSectionChanged(HomeSection.Display) },
             syncTextTaskCount = syncTextTaskCount,
             onOpenSyncTextTasks = onOpenSyncTextTasks,
+            onOpenSyncTextSchemes = onOpenSyncTextSchemes,
         )
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -447,6 +448,7 @@ private fun HomeHeader(
     onDisplay: () -> Unit,
     syncTextTaskCount: Int,
     onOpenSyncTextTasks: () -> Unit,
+    onOpenSyncTextSchemes: () -> Unit,
 ) {
     val title = nestedTitle ?: when (section) {
         HomeSection.Home -> "VortexCue"
@@ -484,6 +486,7 @@ private fun HomeHeader(
             }
         }
         if (section == HomeSection.Home) {
+            TextButton(onClick = onOpenSyncTextSchemes) { Text("同步文字", color = AppAccent) }
             TextButton(onClick = onDisplay) { Text("显示", color = AppSecondaryText) }
         }
     }
