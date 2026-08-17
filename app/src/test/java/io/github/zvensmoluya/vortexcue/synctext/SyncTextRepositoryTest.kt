@@ -72,6 +72,7 @@ class SyncTextRepositoryTest {
                 asrCredentialId = "asr-key",
                 translationProtocol = TranslationProtocol.Responses,
                 translationEndpoint = "https://example.test/v1/responses",
+                translationUserAgent = "PrivateGatewayClient/4.1",
                 translationModel = "model-v1",
                 translationCredentialId = "translation-key",
                 defaultTargetLanguage = "zh",
@@ -90,9 +91,10 @@ class SyncTextRepositoryTest {
         assertEquals(first.taskId, duplicate.taskId)
         assertEquals("zh-CN", database.syncTextDao().taskSnapshot(first.taskId)?.targetLanguage)
 
-        repository.saveScheme(scheme.copy(translationModel = "model-v2"))
+        repository.saveScheme(scheme.copy(translationModel = "model-v2", translationUserAgent = "PrivateGatewayClient/5.0"))
         val firstTask = requireNotNull(database.syncTextDao().task(first.taskId))
         assertEquals("model-v1", database.syncTextDao().attempt(firstTask.currentAttemptId)?.translationModel)
+        assertEquals("PrivateGatewayClient/4.1", database.syncTextDao().attempt(firstTask.currentAttemptId)?.translationUserAgent)
 
         val source = CueIdNormalizer.normalize(listOf(SubtitleCue(0L, 1_000L, "source")))
         val target = source.map { it.copy(text = "target") }

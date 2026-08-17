@@ -513,6 +513,7 @@ class SyncTextTaskRunner(
                             apiKey = key,
                             systemPrompt = systemPrompt,
                             userPrompt = userPrompt,
+                            userAgent = attempt.translationUserAgent,
                         ),
                     onAttempt = { networkAttempt -> recordTranslationAttempt(attempt, protocol, networkAttempt) },
                 )

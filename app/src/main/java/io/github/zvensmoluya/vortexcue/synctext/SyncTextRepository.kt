@@ -143,6 +143,7 @@ class SyncTextRepository(
         asrCredentialId: String,
         translationProtocol: TranslationProtocol,
         translationEndpoint: String,
+        translationUserAgent: String? = null,
         translationModel: String,
         translationCredentialId: String,
         defaultTargetLanguage: String,
@@ -157,6 +158,7 @@ class SyncTextRepository(
                 asrCredentialId = asrCredentialId,
                 translationProtocol = translationProtocol,
                 translationEndpoint = translationEndpoint,
+                translationUserAgent = translationUserAgent,
                 translationModel = translationModel,
                 translationCredentialId = translationCredentialId,
                 defaultTargetLanguage = defaultTargetLanguage,
@@ -702,6 +704,7 @@ class SyncTextRepository(
             asrCredentialId = asrCredentialId,
             translationProtocol = translationProtocol,
             translationEndpoint = translationEndpoint,
+            translationUserAgent = translationUserAgent,
             translationModel = translationModel,
             translationCredentialId = translationCredentialId,
             policyId = policy?.policyId ?: NoTranslationPolicyId,
@@ -724,9 +727,17 @@ class SyncTextRepository(
         require(uri?.scheme.equals("https", ignoreCase = true) && !uri?.host.isNullOrBlank()) {
             "Translation endpoint must be HTTPS"
         }
+        val userAgent = translationUserAgent?.trim()?.takeIf(String::isNotBlank)
+        require(userAgent == null || userAgent.length <= MaxUserAgentLength) {
+            "Translation User-Agent must not exceed $MaxUserAgentLength characters"
+        }
+        require(userAgent == null || userAgent.all { it.code in 0x20..0x7e }) {
+            "Translation User-Agent must contain printable ASCII only"
+        }
         return copy(
             name = name.trim().also { require(it.isNotBlank()) },
             translationEndpoint = endpoint,
+            translationUserAgent = userAgent,
             translationModel = translationModel.trim().also { require(it.isNotBlank()) },
             defaultTargetLanguage = LanguageTags.normalize(defaultTargetLanguage),
         )
@@ -740,6 +751,7 @@ class SyncTextRepository(
         private const val AsrMaxEncodedBytes = 24L * 1024L * 1024L
         private const val SourcePublishedProgress = 0.55f
         private const val MaxErrorMessageLength = 600
+        private const val MaxUserAgentLength = 256
 
         private fun stableSlotId(contentId: String, targetKey: String): String =
             "slot-${sha256("$contentId|$targetKey").take(32)}"
@@ -762,6 +774,7 @@ private fun SyncTextSchemeEntity.toDomain() =
         asrCredentialId = asrCredentialId,
         translationProtocol = translationProtocol.enumValueOr(TranslationProtocol.Responses),
         translationEndpoint = translationEndpoint,
+        translationUserAgent = translationUserAgent,
         translationModel = translationModel,
         translationCredentialId = translationCredentialId,
         defaultTargetLanguage = defaultTargetLanguage,
@@ -779,6 +792,7 @@ private fun SyncTextScheme.toEntity() =
         asrCredentialId = asrCredentialId,
         translationProtocol = translationProtocol.name,
         translationEndpoint = translationEndpoint,
+        translationUserAgent = translationUserAgent,
         translationModel = translationModel,
         translationCredentialId = translationCredentialId,
         defaultTargetLanguage = defaultTargetLanguage,

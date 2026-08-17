@@ -1,6 +1,7 @@
 package io.github.zvensmoluya.vortexcue.data.db
 
 import android.content.Context
+import androidx.room3.AutoMigration
 import androidx.room3.Database
 import androidx.room3.Room
 import androidx.room3.RoomDatabase
@@ -38,7 +39,8 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
         SyncTextRunnerLeaseEntity::class,
         SyncTextQueueControlEntity::class,
     ],
-    version = 2,
+    version = 3,
+    autoMigrations = [AutoMigration(from = 2, to = 3)],
     exportSchema = true,
 )
 abstract class VortexDatabase : RoomDatabase() {

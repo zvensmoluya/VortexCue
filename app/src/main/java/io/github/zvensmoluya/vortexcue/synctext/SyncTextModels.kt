@@ -44,6 +44,7 @@ data class SyncTextScheme(
     val asrCredentialId: String,
     val translationProtocol: TranslationProtocol,
     val translationEndpoint: String,
+    val translationUserAgent: String? = null,
     val translationModel: String,
     val translationCredentialId: String,
     val defaultTargetLanguage: String,

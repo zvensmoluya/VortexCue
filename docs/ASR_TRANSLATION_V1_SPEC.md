@@ -115,6 +115,8 @@ Endpoint 可以使用界面模板或自定义 HTTPS 地址。Model 只允许手�
 
 网络层使用单例 OkHttp：
 
+- 默认发送 `VortexCue/<version> (Android)` 作为 `User-Agent`，不包含设备品牌、型号或 Android 小版本；方案可以为自定义翻译 Endpoint 保存可选覆盖值，值只允许最多 256 个可打印 ASCII 字符，并复制进 attempt snapshot；
+- 仅当目标主机严格等于 `openrouter.ai` 时发送固定 `HTTP-Referer` 与 `X-OpenRouter-Title` 项目归属头，不把这些头发送给其他自定义 Endpoint；
 - 禁止跨源重定向，连接失败不交给 OkHttp 隐式重试；
 - 不记录请求 / 响应正文和认证头；错误信息必须脱敏；
 - 请求与响应使用 kotlinx.serialization 的结构化 JSON API；响应体上限 8 MiB；
