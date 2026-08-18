@@ -2,6 +2,7 @@ package io.github.zvensmoluya.vortexcue.ui.synctext
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -26,8 +28,6 @@ import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -86,13 +86,18 @@ import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocol
 import io.github.zvensmoluya.vortexcue.ui.theme.AppAccent
 import io.github.zvensmoluya.vortexcue.ui.theme.AppError
+import io.github.zvensmoluya.vortexcue.ui.theme.AppHairline
 import io.github.zvensmoluya.vortexcue.ui.theme.AppMutedText
 import io.github.zvensmoluya.vortexcue.ui.theme.AppPrimaryText
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSecondaryText
+import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceSelected
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceRaised
 import java.net.URI
 import java.security.MessageDigest
 import kotlinx.coroutines.launch
+
+private val ConfigControlHeight = 58.dp
+private val ConfigControlShape = RoundedCornerShape(8.dp)
 
 @Composable
 fun SyncTextUiHost(
@@ -362,12 +367,9 @@ private fun TranslationPage(
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().navigationBarsPadding().testTag("sync-text-translation-page"),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
-        item {
-            Text("翻译服务", color = AppPrimaryText, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
-        }
         item {
             ProtocolPicker(
                 value = draft.protocol,
@@ -429,14 +431,18 @@ private fun TranslationPage(
             )
         }
         item {
-            ConnectionStatusRow(
-                state = connectionTest,
-                stale = stale,
-                enabled = !busy && isHttpsEndpoint(draft.endpoint) && draft.model.isNotBlank() &&
-                    (draft.credentialId != null || draft.secret.isNotBlank()),
-                onClick = { onTest(fingerprint) },
-                onDetails = { detailsVisible = true },
-            )
+            ConnectionSection(
+                modifier = Modifier.padding(top = 6.dp),
+            ) {
+                ConnectionStatusRow(
+                    state = connectionTest,
+                    stale = stale,
+                    enabled = !busy && isHttpsEndpoint(draft.endpoint) && draft.model.isNotBlank() &&
+                        (draft.credentialId != null || draft.secret.isNotBlank()),
+                    onClick = { onTest(fingerprint) },
+                    onDetails = { detailsVisible = true },
+                )
+            }
         }
     }
     if (detailsVisible) {
@@ -464,11 +470,18 @@ private fun AsrPage(
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().navigationBarsPadding().testTag("sync-text-asr-page"),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
         item {
-            Text("语音识别", color = AppPrimaryText, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+            AsrModelPicker(
+                value = draft.profile,
+                onValueChange = {
+                    val next = draft.copy(profile = it)
+                    onDraftChanged(next)
+                    onCommit(next)
+                },
+            )
         }
         item {
             BaseUrlField(
@@ -481,18 +494,6 @@ private fun AsrPage(
             )
         }
         item {
-            ChoiceButtons(
-                options = AsrProfile.entries,
-                selected = draft.profile,
-                label = { it.displayLabel() },
-                onSelected = {
-                    val next = draft.copy(profile = it)
-                    onDraftChanged(next)
-                    onCommit(next)
-                },
-            )
-        }
-        item {
             ApiKeyField(
                 value = draft.secret,
                 hasSavedKey = draft.credentialId != null,
@@ -502,14 +503,18 @@ private fun AsrPage(
             )
         }
         item {
-            ConnectionStatusRow(
-                state = connectionTest,
-                stale = stale,
-                enabled = !busy && isHttpsEndpoint(draft.endpoint) &&
-                    (draft.credentialId != null || draft.secret.isNotBlank()),
-                onClick = { onTest(fingerprint) },
-                onDetails = { detailsVisible = true },
-            )
+            ConnectionSection(
+                modifier = Modifier.padding(top = 6.dp),
+            ) {
+                ConnectionStatusRow(
+                    state = connectionTest,
+                    stale = stale,
+                    enabled = !busy && isHttpsEndpoint(draft.endpoint) &&
+                        (draft.credentialId != null || draft.secret.isNotBlank()),
+                    onClick = { onTest(fingerprint) },
+                    onDetails = { detailsVisible = true },
+                )
+            }
         }
     }
     if (detailsVisible) {
@@ -537,8 +542,8 @@ private fun BaseUrlField(
     LaunchedEffect(value) {
         if (!wasFocused && input.text != value) input = TextFieldValue(value)
     }
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        Text("服务地址", color = AppSecondaryText, fontSize = 12.sp)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ConfigFieldLabel("服务地址")
         OutlinedTextField(
             value = input,
             onValueChange = {
@@ -546,7 +551,6 @@ private fun BaseUrlField(
                 onValueChange(it.text)
             },
             placeholder = { Text(placeholder, color = AppMutedText) },
-            supportingText = supportingText?.let { { Text(it, color = if (isError) AppError else AppMutedText) } },
             isError = isError,
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
@@ -558,10 +562,11 @@ private fun BaseUrlField(
                 focusedContainerColor = AppSurfaceRaised,
                 unfocusedContainerColor = AppSurfaceRaised,
                 focusedBorderColor = AppAccent,
-                unfocusedBorderColor = io.github.zvensmoluya.vortexcue.ui.theme.AppHairline,
+                unfocusedBorderColor = AppHairline,
                 errorContainerColor = AppSurfaceRaised,
             ),
-            modifier = Modifier.fillMaxWidth().onFocusChanged { focusState ->
+            shape = ConfigControlShape,
+            modifier = Modifier.fillMaxWidth().heightIn(min = ConfigControlHeight).onFocusChanged { focusState ->
                 if (focusState.isFocused) {
                     wasFocused = true
                     if (selectAllOnFocus) {
@@ -575,6 +580,9 @@ private fun BaseUrlField(
                 }
             },
         )
+        supportingText?.let {
+            Text(it, color = if (isError) AppError else AppMutedText, fontSize = 12.sp)
+        }
     }
 }
 
@@ -590,58 +598,60 @@ private fun ApiKeyField(
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     var wasFocused by remember { mutableStateOf(false) }
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        placeholder = { Text(if (hasSavedKey) "已配置，留空保持不变" else "输入 API Key", color = AppMutedText) },
-        supportingText = {
-            when {
-                authenticationFailed -> Text("认证失败，请检查密钥", color = AppError)
-                hasSavedKey && value.isBlank() -> Text("已配置，留空保持不变", color = AppMutedText)
-            }
-        },
-        visualTransformation = PasswordVisualTransformation(),
-        singleLine = true,
-        isError = authenticationFailed,
-        trailingIcon = {
-            IconButton(
-                onClick = {
-                    scope.launch {
-                        clipboard.getClipEntry()
-                            ?.clipData
-                            ?.getItemAt(0)
-                            ?.text
-                            ?.toString()
-                            ?.takeIf(String::isNotBlank)
-                            ?.let {
-                                onValueChange(it)
-                                onCommit(it)
-                            }
-                    }
-                },
-                modifier = Modifier.semantics { contentDescription = "粘贴 API Key" },
-            ) { Icon(Icons.Outlined.ContentPaste, contentDescription = null, tint = AppSecondaryText) }
-        },
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-        keyboardActions = KeyboardActions(onDone = {
-            onCommit(value)
-            focusManager.clearFocus()
-        }),
-        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = AppSurfaceRaised,
-            unfocusedContainerColor = AppSurfaceRaised,
-            focusedBorderColor = AppAccent,
-            unfocusedBorderColor = io.github.zvensmoluya.vortexcue.ui.theme.AppHairline,
-            errorContainerColor = AppSurfaceRaised,
-        ),
-        modifier = Modifier.fillMaxWidth().onFocusChanged { focusState ->
-            if (focusState.isFocused) wasFocused = true
-            else if (wasFocused) {
-                wasFocused = false
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ConfigFieldLabel("API Key")
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            placeholder = { Text(if (hasSavedKey) "已配置，留空保持不变" else "输入 API Key", color = AppMutedText) },
+            visualTransformation = PasswordVisualTransformation(),
+            singleLine = true,
+            isError = authenticationFailed,
+            trailingIcon = {
+                IconButton(
+                    onClick = {
+                        scope.launch {
+                            clipboard.getClipEntry()
+                                ?.clipData
+                                ?.getItemAt(0)
+                                ?.text
+                                ?.toString()
+                                ?.takeIf(String::isNotBlank)
+                                ?.let {
+                                    onValueChange(it)
+                                    onCommit(it)
+                                }
+                        }
+                    },
+                    modifier = Modifier.semantics { contentDescription = "粘贴 API Key" },
+                ) { Icon(Icons.Outlined.ContentPaste, contentDescription = null, tint = AppSecondaryText) }
+            },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = {
                 onCommit(value)
-            }
-        },
-    )
+                focusManager.clearFocus()
+            }),
+            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = AppSurfaceRaised,
+                unfocusedContainerColor = AppSurfaceRaised,
+                focusedBorderColor = AppAccent,
+                unfocusedBorderColor = AppHairline,
+                errorContainerColor = AppSurfaceRaised,
+            ),
+            shape = ConfigControlShape,
+            modifier = Modifier.fillMaxWidth().heightIn(min = ConfigControlHeight).onFocusChanged { focusState ->
+                if (focusState.isFocused) wasFocused = true
+                else if (wasFocused) {
+                    wasFocused = false
+                    onCommit(value)
+                }
+            },
+        )
+        when {
+            authenticationFailed -> Text("认证失败，请检查密钥", color = AppError, fontSize = 12.sp)
+            hasSavedKey && value.isBlank() -> Text("已配置，留空保持不变", color = AppMutedText, fontSize = 12.sp)
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -686,7 +696,7 @@ private fun ModelPicker(
     var visible by remember { mutableStateOf(false) }
     var manualEntry by remember { mutableStateOf(false) }
     var manualValue by remember(value) { mutableStateOf(value) }
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ConfigChoiceRow(label = "模型", value = value.ifBlank { "选择模型" }, onClick = {
             onOpen()
             manualEntry = false
@@ -694,9 +704,9 @@ private fun ModelPicker(
             visible = true
         })
         when {
-            loading -> Text("正在自动查找模型…", color = AppMutedText, fontSize = 11.sp)
-            message != null -> Text(message, color = AppMutedText, fontSize = 11.sp)
-            options.isNotEmpty() -> Text("已找到 ${options.size} 个可用模型", color = AppMutedText, fontSize = 11.sp)
+            loading -> Text("正在自动查找模型…", color = AppMutedText, fontSize = 12.sp)
+            message != null -> Text(message, color = AppMutedText, fontSize = 12.sp)
+            options.isNotEmpty() -> Text("已找到 ${options.size} 个可用模型", color = AppMutedText, fontSize = 12.sp)
         }
     }
     if (visible) {
@@ -756,19 +766,66 @@ private fun ConfigChoiceRow(
     value: String,
     onClick: () -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        Text(label, color = AppSecondaryText, fontSize = 12.sp)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ConfigFieldLabel(label)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 56.dp)
-                .background(AppSurfaceRaised, RoundedCornerShape(8.dp))
+                .heightIn(min = ConfigControlHeight)
+                .background(AppSurfaceRaised, ConfigControlShape)
+                .border(1.dp, AppHairline, ConfigControlShape)
                 .clickable(onClick = onClick)
                 .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(value, color = AppPrimaryText, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text("›", color = AppSecondaryText, fontSize = 22.sp)
+        }
+    }
+}
+
+@Composable
+private fun ConfigFieldLabel(label: String) {
+    Text(label, color = AppSecondaryText, fontSize = 12.sp)
+}
+
+@Composable
+private fun AsrModelPicker(
+    value: AsrProfile,
+    onValueChange: (AsrProfile) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ConfigFieldLabel("识别模型")
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = ConfigControlHeight)
+                .background(AppSurfaceRaised, ConfigControlShape)
+                .border(1.dp, AppHairline, ConfigControlShape)
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            AsrProfile.entries.forEach { profile ->
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(ConfigControlHeight - 8.dp)
+                        .background(
+                            if (profile == value) AppSurfaceSelected else Color.Transparent,
+                            RoundedCornerShape(6.dp),
+                        )
+                        .clickable { onValueChange(profile) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        profile.displayLabel(),
+                        color = if (profile == value) AppPrimaryText else AppSecondaryText,
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
     }
 }
@@ -824,6 +881,20 @@ private fun ConnectionStatusRow(
             failure -> TextButton(onClick = onDetails) { Text("查看详情", color = AppAccent) }
             else -> TextButton(enabled = enabled, onClick = onClick) { Text("未测试", color = AppSecondaryText) }
         }
+    }
+}
+
+@Composable
+private fun ConnectionSection(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(modifier = Modifier.fillMaxWidth().heightIn(min = 1.dp).background(AppHairline))
+        content()
     }
 }
 
@@ -973,38 +1044,6 @@ private fun SelectionRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(title, color = AppPrimaryText, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(detail, color = AppMutedText, fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-    }
-}
-
-@Composable
-private fun <T> ChoiceButtons(
-    options: List<T>,
-    selected: T,
-    label: (T) -> String,
-    onSelected: (T) -> Unit,
-) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        options.forEach { option ->
-            FilterChip(
-                selected = selected == option,
-                onClick = { onSelected(option) },
-                label = {
-                    Text(
-                        label(option),
-                        color = if (selected == option) AppPrimaryText else AppSecondaryText,
-                        fontSize = 11.sp,
-                        maxLines = 2,
-                    )
-                },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = AppSurfaceRaised,
-                    containerColor = Color.Transparent,
-                    selectedLabelColor = AppPrimaryText,
-                    labelColor = AppSecondaryText,
-                ),
-                modifier = Modifier.weight(1f),
-            )
         }
     }
 }
