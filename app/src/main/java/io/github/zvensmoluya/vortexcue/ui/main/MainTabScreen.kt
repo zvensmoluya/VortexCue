@@ -182,6 +182,12 @@ internal fun MainTabScreen(
             onImportHubRequestConsumed()
         }
     }
+    // “同步文字”是一个直接可用的工作区；切换到底部入口时直接打开编辑器。
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == MainTab.Config) {
+            onSyncTextAction(SyncTextAction.OpenConfigEditor)
+        }
+    }
     val content by remember(repository, selectedFolderId, query, contentSort) {
         repository.observeContent(selectedFolderId, query, contentSort)
     }.collectAsState(initial = emptyList())
@@ -199,7 +205,7 @@ internal fun MainTabScreen(
                         when (selectedTab) {
                             MainTab.Content -> "内容"
                             MainTab.Queue -> "播放列表"
-                            MainTab.Config -> "配置"
+                            MainTab.Config -> "同步文字"
                             MainTab.Settings -> "设置"
                         },
                         color = AppPrimaryText,
@@ -263,7 +269,13 @@ internal fun MainTabScreen(
                 }
                 MainNavigationBar(
                     selectedTab = selectedTab,
-                    onTabChanged = onTabChanged,
+                    onTabChanged = { tab ->
+                        if (tab == MainTab.Config && selectedTab == MainTab.Config) {
+                            onSyncTextAction(SyncTextAction.OpenConfigEditor)
+                        } else {
+                            onTabChanged(tab)
+                        }
+                    },
                     onOpenImport = { importVisible = true },
                     modifier = Modifier.navigationBarsPadding(),
                 )
@@ -321,8 +333,6 @@ internal fun MainTabScreen(
                     )
                 MainTab.Config ->
                     ConfigTab(
-                        state = syncTextUiState,
-                        onAction = onSyncTextAction,
                         listState = configListState,
                     )
                 MainTab.Settings ->
@@ -722,40 +732,12 @@ private fun QueueTab(
 
 @Composable
 private fun ConfigTab(
-    state: SyncTextUiState,
-    onAction: (SyncTextAction) -> Unit,
     listState: LazyListState,
 ) {
-    val config = state.config
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize().safeDrawingPadding(), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Text("同步文字", color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            Text("正在打开同步文字设置…", color = AppSecondaryText)
         }
-        item {
-            ConfigLine("翻译模型", config?.translationModel ?: "尚未设置", Icons.Outlined.Translate)
-            ConfigLine(
-                "OpenRouter · ASR",
-                config?.asrProfile?.let { if (it.experimental) "Grok" else "OpenAI Whisper" } ?: "尚未设置",
-                Icons.Outlined.AudioFile,
-            )
-        }
-        item {
-            Button(onClick = { onAction(SyncTextAction.OpenConfigEditor) }, colors = ButtonDefaults.buttonColors(containerColor = AppSurfaceRaised, contentColor = AppPrimaryText)) {
-                Icon(Icons.Outlined.Tune, null)
-                Spacer(Modifier.width(8.dp))
-                Text(if (config == null) "开始配置同步文字" else "打开配置")
-            }
-        }
-    }
-}
-
-@Composable
-private fun ConfigLine(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = AppSecondaryText, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(12.dp))
-        Text(label, color = AppSecondaryText, modifier = Modifier.width(88.dp))
-        Text(value, color = AppPrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -1102,7 +1084,7 @@ private fun MainTab.label(): String =
     when (this) {
         MainTab.Content -> "内容"
         MainTab.Queue -> "播放列表"
-        MainTab.Config -> "配置"
+        MainTab.Config -> "同步文字"
         MainTab.Settings -> "设置"
     }
 

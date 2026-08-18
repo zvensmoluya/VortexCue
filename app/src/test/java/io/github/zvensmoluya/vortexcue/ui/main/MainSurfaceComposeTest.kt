@@ -42,7 +42,7 @@ class MainSurfaceComposeTest {
             }
         }
 
-        listOf("内容", "播放列表", "配置", "设置").forEach {
+        listOf("内容", "播放列表", "同步文字", "设置").forEach {
             compose.onNodeWithText(it).assertExists()
         }
         compose.onNodeWithContentDescription("添加内容", useUnmergedTree = true).assertExists()

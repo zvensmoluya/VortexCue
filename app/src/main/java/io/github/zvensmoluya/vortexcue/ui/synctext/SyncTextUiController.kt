@@ -231,7 +231,7 @@ class SyncTextUiController(
                     asrSecret = action.draft.asrSecret,
                     translationSecret = action.draft.translationSecret,
                 )
-                "配置已保存"
+                null
             }
             is SyncTextAction.SetPresentationMode -> runAction {
                 repository.setPresentationMode(action.slotId, action.mode)
@@ -475,7 +475,7 @@ class SyncTextUiController(
             it.copy(
                 generationContent = null,
                 inspectingAudioTracks = false,
-                message = "请先在配置页填写 ASR、翻译和密钥",
+                message = "请先在同步文字设置中填写语音识别、翻译和密钥",
             )
         }
     }
