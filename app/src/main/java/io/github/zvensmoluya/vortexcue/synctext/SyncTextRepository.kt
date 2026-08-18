@@ -55,6 +55,8 @@ class SyncTextRepository(
     private val policies: TranslationPolicyRegistry,
     scope: CoroutineScope,
     private val scheduler: SyncTextScheduler = NoOpSyncTextScheduler,
+    private val modelCatalog: TranslationModelCatalog? = null,
+    private val connectionTester: SyncTextConnectionTester? = null,
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val newId: () -> String = { UUID.randomUUID().toString() },
 ) {
@@ -92,6 +94,76 @@ class SyncTextRepository(
 
     suspend fun loadConfig(): SyncTextConfig? =
         (dao.defaultScheme() ?: dao.schemes().firstOrNull())?.toDomain()?.toConfig()
+
+    suspend fun discoverTranslationModels(
+        protocol: TranslationProtocol,
+        endpoint: String,
+        credentialId: String?,
+        apiKey: String? = null,
+    ): List<String> {
+        val catalog = modelCatalog ?: return emptyList()
+        val resolvedKey = apiKey?.trim()?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId))
+        return catalog.fetch(protocol, endpoint, resolvedKey)
+    }
+
+    suspend fun testTranslationConnection(
+        protocol: TranslationProtocol,
+        endpoint: String,
+        model: String,
+        credentialId: String?,
+        apiKey: String? = null,
+    ) {
+        val tester = requireNotNull(connectionTester) { "Translation connection test is unavailable" }
+        val resolvedKey = apiKey?.trim()?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId))
+        tester.testTranslation(protocol, endpoint, model, resolvedKey)
+    }
+
+    suspend fun testAsrConnection(
+        profile: AsrProfile,
+        endpoint: String,
+        credentialId: String?,
+        apiKey: String? = null,
+    ) {
+        val tester = requireNotNull(connectionTester) { "ASR connection test is unavailable" }
+        val resolvedKey = apiKey?.trim()?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId))
+        tester.testAsr(profile, endpoint, resolvedKey)
+    }
+
+    suspend fun saveConfigWithSecrets(
+        config: SyncTextConfig,
+        asrSecret: String?,
+        translationSecret: String?,
+    ): SyncTextConfig {
+        val sharedCredential =
+            config.asrCredentialId.isNotBlank() &&
+                config.asrCredentialId == config.translationCredentialId
+        val normalizedAsrSecret = asrSecret?.trim()?.takeIf(String::isNotBlank)
+        val normalizedTranslationSecret = translationSecret?.trim()?.takeIf(String::isNotBlank)
+        val asrCredentialId =
+            saveInlineCredential(
+                existingId = config.asrCredentialId.takeUnless {
+                    sharedCredential && normalizedTranslationSecret != null
+                }.orEmpty(),
+                secret = normalizedAsrSecret,
+                name = "OpenRouter",
+                purpose = CredentialPurpose.Asr,
+            )
+        val translationCredentialId =
+            saveInlineCredential(
+                existingId = config.translationCredentialId.takeUnless {
+                    sharedCredential && normalizedAsrSecret != null
+                }.orEmpty(),
+                secret = normalizedTranslationSecret,
+                name = "翻译服务",
+                purpose = CredentialPurpose.Translation,
+            )
+        return saveConfig(
+            config.copy(
+                asrCredentialId = asrCredentialId,
+                translationCredentialId = translationCredentialId,
+            ),
+        )
+    }
 
     suspend fun saveConfig(config: SyncTextConfig): SyncTextConfig {
         val stableConfigId =
@@ -165,6 +237,20 @@ class SyncTextRepository(
         return entity.toDomain()
     }
 
+    private suspend fun saveInlineCredential(
+        existingId: String,
+        secret: String?,
+        name: String,
+        purpose: CredentialPurpose,
+    ): String {
+        val normalizedSecret = secret?.trim()?.takeIf(String::isNotBlank)
+        val id = existingId.takeIf(String::isNotBlank) ?: newId()
+        if (normalizedSecret != null) {
+            saveCredential(id, name, purpose, normalizedSecret)
+        }
+        return id
+    }
+
     suspend fun deleteCredential(credentialId: String) {
         if (dao.credentialReferenceCount(credentialId) > 0) throw CredentialStillReferencedException()
         if (dao.deleteCredential(credentialId) > 0) credentials.delete(credentialId)
@@ -191,7 +277,7 @@ class SyncTextRepository(
     suspend fun createScheme(
         name: String,
         asrProfile: AsrProfile,
-        asrEndpoint: String = OpenRouterAsrEngine.OpenRouterTranscriptionUrl,
+        asrEndpoint: String = OpenRouterAsrEngine.OpenRouterBaseUrl,
         asrCredentialId: String,
         translationProtocol: TranslationProtocol,
         translationEndpoint: String,

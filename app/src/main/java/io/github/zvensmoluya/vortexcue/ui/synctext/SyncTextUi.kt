@@ -3,6 +3,7 @@ package io.github.zvensmoluya.vortexcue.ui.synctext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,10 +16,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Tab
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -26,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +50,7 @@ import io.github.zvensmoluya.vortexcue.synctext.CredentialMetadata
 import io.github.zvensmoluya.vortexcue.synctext.CredentialPurpose
 import io.github.zvensmoluya.vortexcue.synctext.GenerationInput
 import io.github.zvensmoluya.vortexcue.synctext.LanguageTags
+import io.github.zvensmoluya.vortexcue.synctext.OpenRouterAsrEngine
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextConfig
 import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocol
@@ -91,14 +97,18 @@ fun SyncTextUiHost(
     }
 }
 
+private enum class ConfigSection {
+    Translation,
+    Asr,
+}
+
 @Composable
 private fun SingleConfigDialog(
     state: SyncTextUiState,
     onAction: (SyncTextAction) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var editingCredentialId by remember { mutableStateOf<String?>(null) }
-    var credentialFormVisible by remember { mutableStateOf(false) }
+    var section by rememberSaveable { mutableStateOf(ConfigSection.Translation) }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(
@@ -129,41 +139,27 @@ private fun SingleConfigDialog(
                     ConfigForm(
                         existing = state.config,
                         credentials = state.credentials,
+                        section = section,
+                        availableModels = state.availableTranslationModels,
+                        loadingModels = state.loadingTranslationModels,
+                        modelDiscoveryMessage = state.modelDiscoveryMessage,
+                        translationConnectionTest = state.translationConnectionTest,
+                        asrConnectionTest = state.asrConnectionTest,
                         busy = state.busy,
+                        onSectionChanged = { section = it },
+                        onDiscoverModels = { protocol, endpoint, credentialId, apiKey ->
+                            onAction(SyncTextAction.DiscoverTranslationModels(protocol, endpoint, credentialId, apiKey))
+                        },
+                        onTestTranslation = { protocol, endpoint, model, credentialId, apiKey ->
+                            onAction(SyncTextAction.TestTranslationConnection(protocol, endpoint, model, credentialId, apiKey))
+                        },
+                        onTestAsr = { profile, endpoint, credentialId, apiKey ->
+                            onAction(SyncTextAction.TestAsrConnection(profile, endpoint, credentialId, apiKey))
+                        },
                         onSave = { draft ->
                             onAction(SyncTextAction.SaveConfig(state.config?.configId, draft))
                         },
                     )
-                }
-                item {
-                    Text("密钥", color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
-                    state.credentials.forEach { credential ->
-                        CredentialRow(
-                            credential = credential,
-                            onEdit = {
-                                editingCredentialId = credential.credentialId
-                                credentialFormVisible = true
-                            },
-                            onDelete = { onAction(SyncTextAction.DeleteCredential(credential.credentialId)) },
-                        )
-                    }
-                    TextButton(
-                        onClick = {
-                            editingCredentialId = null
-                            credentialFormVisible = true
-                        },
-                    ) { Text("新增密钥", color = AppAccent) }
-                    if (credentialFormVisible) {
-                        CredentialForm(
-                            existing = state.credentials.firstOrNull { it.credentialId == editingCredentialId },
-                            busy = state.busy,
-                            onSave = { id, name, purpose, secret ->
-                                onAction(SyncTextAction.SaveCredential(id, name, purpose, secret))
-                                credentialFormVisible = false
-                            },
-                            onCancel = { credentialFormVisible = false },
-                        )
-                    }
                 }
             }
         }
@@ -174,7 +170,17 @@ private fun SingleConfigDialog(
 private fun ConfigForm(
     existing: SyncTextConfig?,
     credentials: List<CredentialMetadata>,
+    section: ConfigSection,
+    availableModels: List<String>,
+    loadingModels: Boolean,
+    modelDiscoveryMessage: String?,
+    translationConnectionTest: ConnectionTestUiState,
+    asrConnectionTest: ConnectionTestUiState,
     busy: Boolean,
+    onSectionChanged: (ConfigSection) -> Unit,
+    onDiscoverModels: (TranslationProtocol, String, String?, String?) -> Unit,
+    onTestTranslation: (TranslationProtocol, String, String, String?, String?) -> Unit,
+    onTestAsr: (AsrProfile, String, String?, String?) -> Unit,
     onSave: (SyncTextConfigDraft) -> Unit,
 ) {
     var asrProfile by remember(existing?.configId) {
@@ -186,29 +192,24 @@ private fun ConfigForm(
     var asrCredentialId by remember(existing?.configId) {
         mutableStateOf(existing?.asrCredentialId)
     }
+    var asrSecret by remember(existing?.configId) { mutableStateOf("") }
     var protocol by remember(existing?.configId) {
         mutableStateOf(existing?.translationProtocol ?: TranslationProtocol.Responses)
     }
     var endpoint by remember(existing?.configId) {
-        mutableStateOf(existing?.translationEndpoint ?: TranslationProtocol.Responses.defaultEndpoint())
+        mutableStateOf(existing?.translationEndpoint?.toBaseUrl() ?: TranslationProtocol.Responses.defaultBaseUrl())
     }
     var model by remember(existing?.configId) { mutableStateOf(existing?.translationModel.orEmpty()) }
     var translationCredentialId by remember(existing?.configId) {
         mutableStateOf(existing?.translationCredentialId)
     }
+    var translationSecret by remember(existing?.configId) { mutableStateOf("") }
     var targetLanguage by remember(existing?.configId) {
         mutableStateOf(existing?.targetLanguage ?: "zh-CN")
     }
     var presentationMode by remember(existing?.configId) {
         mutableStateOf(existing?.presentationMode ?: TextPresentationMode.TargetOnly)
     }
-    var customUserAgentEnabled by remember(existing?.configId) {
-        mutableStateOf(existing?.translationUserAgent != null)
-    }
-    var userAgent by remember(existing?.configId) {
-        mutableStateOf(existing?.translationUserAgent.orEmpty())
-    }
-
     val asrCredentials = credentials.filter { it.purpose == CredentialPurpose.Asr || it.purpose == CredentialPurpose.Shared }
     val translationCredentials = credentials.filter { it.purpose == CredentialPurpose.Translation || it.purpose == CredentialPurpose.Shared }
     LaunchedEffect(asrCredentials, asrCredentialId) {
@@ -225,104 +226,232 @@ private fun ConfigForm(
     val normalizedTarget = normalizedLanguageOrNull(targetLanguage)
     val asrEndpointValid = isHttpsEndpoint(asrEndpoint)
     val translationEndpointValid = isHttpsEndpoint(endpoint)
-    val userAgentValid = !customUserAgentEnabled || userAgent.length <= 256 && userAgent.all { it.code in 0x20..0x7e }
+    LaunchedEffect(protocol, endpoint, translationCredentialId, translationSecret) {
+        if (translationEndpointValid && (translationCredentialId != null || translationSecret.isNotBlank())) {
+            onDiscoverModels(protocol, endpoint, translationCredentialId, translationSecret.takeIf(String::isNotBlank))
+        }
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("语音识别", color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
-        ChoiceButtons(
-            options = AsrProfile.entries,
-            selected = asrProfile,
-            label = { if (it.experimental) "Grok（实验）" else "Whisper" },
-            onSelected = { asrProfile = it },
-        )
-        OutlinedTextField(
-            value = asrEndpoint,
-            onValueChange = { asrEndpoint = it },
-            label = { Text("OpenRouter Endpoint") },
-            supportingText = { if (!asrEndpointValid) Text("请输入有效的 HTTPS 地址") },
-            isError = !asrEndpointValid,
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        CredentialChoices("ASR Key", asrCredentials, asrCredentialId) { asrCredentialId = it }
-
-        Text("翻译", color = AppPrimaryText, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
-        TranslationProtocol.entries.forEach { candidate ->
-            SelectionRow(
-                selected = protocol == candidate,
-                title = candidate.label(),
-                detail = candidate.defaultEndpoint(),
-                onClick = {
-                    val wasDefault = endpoint == protocol.defaultEndpoint()
-                    protocol = candidate
-                    if (wasDefault) endpoint = candidate.defaultEndpoint()
-                },
+        PrimaryTabRow(selectedTabIndex = section.ordinal) {
+            Tab(
+                selected = section == ConfigSection.Translation,
+                onClick = { onSectionChanged(ConfigSection.Translation) },
+                text = { Text("翻译模型配置") },
+            )
+            Tab(
+                selected = section == ConfigSection.Asr,
+                onClick = { onSectionChanged(ConfigSection.Asr) },
+                text = { Text("OpenRouter · ASR") },
             )
         }
-        OutlinedTextField(
-            value = endpoint,
-            onValueChange = { endpoint = it },
-            label = { Text("Endpoint") },
-            supportingText = { if (!translationEndpointValid) Text("请输入有效的 HTTPS 地址") },
-            isError = !translationEndpointValid,
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = model,
-            onValueChange = { model = it },
-            label = { Text("Model") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        CredentialChoices("翻译 Key", translationCredentials, translationCredentialId) {
-            translationCredentialId = it
-        }
-        LanguageTagField(targetLanguage, { targetLanguage = it })
-        Text("展示模式", color = AppMutedText, fontSize = 11.sp)
-        ChoiceButtons(
-            options = TextPresentationMode.entries,
-            selected = presentationMode,
-            label = { if (it == TextPresentationMode.TargetOnly) "纯译文" else "译文 + 原文" },
-            onSelected = { presentationMode = it },
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = customUserAgentEnabled, onCheckedChange = { customUserAgentEnabled = it })
-            Text("自定义 User-Agent", color = AppPrimaryText)
-        }
-        if (customUserAgentEnabled) {
+        if (section == ConfigSection.Translation) {
+            Text("翻译模型配置", color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
+            TranslationProtocol.entries.forEach { candidate ->
+                SelectionRow(
+                    selected = protocol == candidate,
+                    title = candidate.label(),
+                    detail = candidate.defaultBaseUrl(),
+                    onClick = {
+                        val wasDefault = endpoint == protocol.defaultBaseUrl() || endpoint == protocol.defaultEndpoint()
+                        protocol = candidate
+                        if (wasDefault) endpoint = candidate.defaultBaseUrl()
+                    },
+                )
+            }
             OutlinedTextField(
-                value = userAgent,
-                onValueChange = { userAgent = it },
-                label = { Text("User-Agent") },
-                supportingText = { if (!userAgentValid) Text("最多 256 个可打印 ASCII 字符") },
-                isError = !userAgentValid,
+                value = endpoint,
+                onValueChange = { endpoint = it },
+                label = { Text("Base URL") },
+                placeholder = { Text(protocol.defaultBaseUrl()) },
+                supportingText = {
+                    when {
+                        !translationEndpointValid -> Text("请输入有效的 HTTPS 地址")
+                        loadingModels -> Text("正在查找可用模型…")
+                        modelDiscoveryMessage != null -> Text(modelDiscoveryMessage)
+                    }
+                },
+                isError = !translationEndpointValid,
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
+            )
+            ModelPicker(
+                value = model,
+                options = availableModels,
+                loading = loadingModels,
+                onValueChange = { model = it },
+            )
+            ApiKeyField(
+                value = translationSecret,
+                hasSavedKey = translationCredentialId != null,
+                onValueChange = { translationSecret = it },
+            )
+            ConnectionTestButton(
+                state = translationConnectionTest,
+                enabled = translationEndpointValid && model.isNotBlank() &&
+                    (translationCredentialId != null || translationSecret.isNotBlank()),
+                onClick = {
+                    onTestTranslation(
+                        protocol,
+                        endpoint,
+                        model,
+                        translationCredentialId,
+                        translationSecret.takeIf(String::isNotBlank),
+                    )
+                },
+            )
+            LanguageTagField(targetLanguage, { targetLanguage = it })
+            Text("展示模式", color = AppMutedText, fontSize = 11.sp)
+            ChoiceButtons(
+                options = TextPresentationMode.entries,
+                selected = presentationMode,
+                label = { if (it == TextPresentationMode.TargetOnly) "纯译文" else "译文 + 原文" },
+                onSelected = { presentationMode = it },
+            )
+        } else {
+            Text("OpenRouter · ASR", color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
+            ChoiceButtons(
+                options = AsrProfile.entries,
+                selected = asrProfile,
+                label = { if (it.experimental) "Grok" else "OpenAI Whisper" },
+                onSelected = { asrProfile = it },
+            )
+            OutlinedTextField(
+                value = asrEndpoint,
+                onValueChange = { asrEndpoint = it },
+                label = { Text("OpenRouter Base URL") },
+                placeholder = { Text("https://openrouter.ai/api/v1") },
+                supportingText = { if (!asrEndpointValid) Text("请输入有效的 HTTPS 地址") },
+                isError = !asrEndpointValid,
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            ApiKeyField(
+                value = asrSecret,
+                hasSavedKey = asrCredentialId != null,
+                onValueChange = { asrSecret = it },
+            )
+            ConnectionTestButton(
+                state = asrConnectionTest,
+                enabled = asrEndpointValid && (asrCredentialId != null || asrSecret.isNotBlank()),
+                onClick = {
+                    onTestAsr(
+                        asrProfile,
+                        asrEndpoint,
+                        asrCredentialId,
+                        asrSecret.takeIf(String::isNotBlank),
+                    )
+                },
             )
         }
         Button(
             enabled =
-                !busy && asrEndpointValid && translationEndpointValid && userAgentValid &&
-                    asrCredentialId != null && translationCredentialId != null &&
+                !busy && asrEndpointValid && translationEndpointValid &&
+                    (asrCredentialId != null || asrSecret.isNotBlank()) &&
+                    (translationCredentialId != null || translationSecret.isNotBlank()) &&
                     model.isNotBlank() && normalizedTarget != null,
             onClick = {
                 onSave(
                     SyncTextConfigDraft(
                         asrProfile = asrProfile,
                         asrEndpoint = asrEndpoint,
-                        asrCredentialId = requireNotNull(asrCredentialId),
+                        asrCredentialId = asrCredentialId,
+                        asrSecret = asrSecret.takeIf(String::isNotBlank),
                         translationProtocol = protocol,
                         translationEndpoint = endpoint,
-                        translationUserAgent = userAgent.takeIf { customUserAgentEnabled },
+                        translationUserAgent = existing?.translationUserAgent,
                         translationModel = model,
-                        translationCredentialId = requireNotNull(translationCredentialId),
+                        translationCredentialId = translationCredentialId,
+                        translationSecret = translationSecret.takeIf(String::isNotBlank),
                         targetLanguage = requireNotNull(normalizedTarget),
                         presentationMode = presentationMode,
                     ),
                 )
             },
         ) { Text(if (busy) "保存中" else "保存配置") }
+    }
+}
+
+@Composable
+private fun ApiKeyField(
+    value: String,
+    hasSavedKey: Boolean,
+    onValueChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text("API Key") },
+        placeholder = { Text(if (hasSavedKey) "已保存，留空保持不变" else "填写 API Key") },
+        supportingText = { if (hasSavedKey && value.isBlank()) Text("已有密钥，留空即可") },
+        visualTransformation = PasswordVisualTransformation(),
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
+private fun ConnectionTestButton(
+    state: ConnectionTestUiState,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Button(onClick = onClick, enabled = enabled && !state.running) {
+            Text(if (state.running) "测试中…" else "测试连接")
+        }
+        state.message?.let {
+            Text(
+                text = it,
+                color = if (state.success == true) AppSecondaryText else AppError,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(start = 10.dp),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ModelPicker(
+    value: String,
+    options: List<String>,
+    loading: Boolean,
+    onValueChange: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text("模型") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            supportingText = {
+                when {
+                    loading -> Text("正在自动查找模型…")
+                    options.isNotEmpty() -> Text("已找到 ${options.size} 个可用模型")
+                }
+            },
+        )
+        if (options.isNotEmpty()) {
+            TextButton(
+                onClick = { expanded = true },
+                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp),
+            ) { Text("选择", color = AppAccent) }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                options.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        onClick = {
+                            onValueChange(option)
+                            expanded = false
+                        },
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -395,88 +524,6 @@ private fun GenerationInputDialog(
         },
         containerColor = AppSurfaceRaised,
     )
-}
-
-@Composable
-private fun CredentialChoices(
-    title: String,
-    credentials: List<CredentialMetadata>,
-    selectedId: String?,
-    onSelect: (String) -> Unit,
-) {
-    Text(title, color = AppMutedText, fontSize = 11.sp)
-    if (credentials.isEmpty()) {
-        Text("请先在下方新增匹配用途的密钥", color = AppError, fontSize = 11.sp)
-    } else {
-        credentials.forEach { credential ->
-            SelectionRow(
-                selected = credential.credentialId == selectedId,
-                title = credential.name,
-                detail = credential.maskedValue,
-                onClick = { onSelect(credential.credentialId) },
-            )
-        }
-    }
-}
-
-@Composable
-private fun CredentialRow(
-    credential: CredentialMetadata,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(credential.name, color = AppPrimaryText)
-            Text("${credential.purpose.label()} · ${credential.maskedValue}", color = AppSecondaryText, fontSize = 11.sp)
-        }
-        TextButton(onClick = onEdit) { Text("更新", color = AppAccent) }
-        TextButton(onClick = onDelete) { Text("删除", color = AppError) }
-    }
-}
-
-@Composable
-private fun CredentialForm(
-    existing: CredentialMetadata?,
-    busy: Boolean,
-    onSave: (String?, String, CredentialPurpose, String) -> Unit,
-    onCancel: () -> Unit,
-) {
-    var name by remember(existing?.credentialId) { mutableStateOf(existing?.name.orEmpty()) }
-    var purpose by remember(existing?.credentialId) { mutableStateOf(existing?.purpose ?: CredentialPurpose.Shared) }
-    var secret by remember(existing?.credentialId) { mutableStateOf("") }
-
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(if (existing == null) "新增密钥" else "更新密钥", color = AppPrimaryText, fontWeight = FontWeight.Medium)
-        OutlinedTextField(
-            value = name,
-            onValueChange = { name = it },
-            label = { Text("名称") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        ChoiceButtons(
-            options = CredentialPurpose.entries,
-            selected = purpose,
-            label = CredentialPurpose::label,
-            onSelected = { purpose = it },
-        )
-        OutlinedTextField(
-            value = secret,
-            onValueChange = { secret = it },
-            label = { Text(if (existing == null) "API Key" else "新的 API Key") },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row {
-            Button(
-                enabled = !busy && name.isNotBlank() && secret.isNotBlank(),
-                onClick = { onSave(existing?.credentialId, name, purpose, secret) },
-            ) { Text("保存") }
-            TextButton(onClick = onCancel) { Text("取消", color = AppSecondaryText) }
-        }
-    }
 }
 
 @Composable
@@ -600,11 +647,24 @@ private fun TranslationProtocol.defaultEndpoint(): String =
             "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     }
 
-private fun CredentialPurpose.label(): String =
+private fun TranslationProtocol.defaultBaseUrl(): String =
     when (this) {
-        CredentialPurpose.Asr -> "ASR"
-        CredentialPurpose.Translation -> "翻译"
-        CredentialPurpose.Shared -> "共用"
+        TranslationProtocol.Responses,
+        TranslationProtocol.ChatCompletions,
+        -> "https://api.openai.com/v1"
+        TranslationProtocol.AnthropicMessages -> "https://api.anthropic.com/v1"
+        TranslationProtocol.GoogleGenerateContent -> "https://generativelanguage.googleapis.com/v1beta"
     }
 
-private const val DefaultAsrEndpoint = "https://openrouter.ai/api/v1/audio/transcriptions"
+private fun String.toBaseUrl(): String {
+    val value = trim().removeSuffix("/")
+    return when {
+        value.endsWith("/responses") -> value.removeSuffix("/responses")
+        value.endsWith("/messages") -> value.removeSuffix("/messages")
+        value.endsWith("/chat/completions") -> value.removeSuffix("/chat/completions")
+        "/models/" in value -> value.substringBefore("/models/")
+        else -> value
+    }
+}
+
+private const val DefaultAsrEndpoint = OpenRouterAsrEngine.OpenRouterBaseUrl

@@ -52,7 +52,7 @@ data class SyncTextScheme(
     val isDefault: Boolean = false,
     val createdAtMs: Long,
     val updatedAtMs: Long,
-    val asrEndpoint: String = "https://openrouter.ai/api/v1/audio/transcriptions",
+    val asrEndpoint: String = OpenRouterAsrEngine.OpenRouterBaseUrl,
 )
 
 /** The product-facing single connection profile. Credential values stay in Keystore. */

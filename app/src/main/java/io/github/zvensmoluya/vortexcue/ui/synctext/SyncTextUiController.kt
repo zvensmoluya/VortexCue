@@ -18,6 +18,8 @@ import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocol
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -29,14 +31,22 @@ import kotlinx.coroutines.launch
 data class SyncTextConfigDraft(
     val asrProfile: AsrProfile,
     val asrEndpoint: String,
-    val asrCredentialId: String,
+    val asrCredentialId: String?,
+    val asrSecret: String?,
     val translationProtocol: TranslationProtocol,
     val translationEndpoint: String,
     val translationUserAgent: String?,
     val translationModel: String,
-    val translationCredentialId: String,
+    val translationCredentialId: String?,
+    val translationSecret: String?,
     val targetLanguage: String,
     val presentationMode: TextPresentationMode,
+)
+
+data class ConnectionTestUiState(
+    val running: Boolean = false,
+    val success: Boolean? = null,
+    val message: String? = null,
 )
 
 data class SyncTextUiState(
@@ -48,6 +58,11 @@ data class SyncTextUiState(
     val inspectingAudioTracks: Boolean = false,
     val audioInspectionError: String? = null,
     val configEditorVisible: Boolean = false,
+    val availableTranslationModels: List<String> = emptyList(),
+    val loadingTranslationModels: Boolean = false,
+    val modelDiscoveryMessage: String? = null,
+    val translationConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
+    val asrConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val busy: Boolean = false,
     val message: String? = null,
 )
@@ -64,6 +79,28 @@ sealed interface SyncTextAction {
     data object CloseConfigEditor : SyncTextAction
 
     data object ClearMessage : SyncTextAction
+
+    data class DiscoverTranslationModels(
+        val protocol: TranslationProtocol,
+        val endpoint: String,
+        val credentialId: String?,
+        val apiKey: String?,
+    ) : SyncTextAction
+
+    data class TestTranslationConnection(
+        val protocol: TranslationProtocol,
+        val endpoint: String,
+        val model: String,
+        val credentialId: String?,
+        val apiKey: String?,
+    ) : SyncTextAction
+
+    data class TestAsrConnection(
+        val profile: AsrProfile,
+        val endpoint: String,
+        val credentialId: String?,
+        val apiKey: String?,
+    ) : SyncTextAction
 
     data class SaveCredential(
         val credentialId: String?,
@@ -95,6 +132,11 @@ private data class OverlayState(
     val inspectingAudioTracks: Boolean = false,
     val audioInspectionError: String? = null,
     val configEditorVisible: Boolean = false,
+    val availableTranslationModels: List<String> = emptyList(),
+    val loadingTranslationModels: Boolean = false,
+    val modelDiscoveryMessage: String? = null,
+    val translationConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
+    val asrConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val busy: Boolean = false,
     val message: String? = null,
 )
@@ -105,6 +147,8 @@ class SyncTextUiController(
     private val scope: CoroutineScope,
 ) {
     private val overlay = MutableStateFlow(OverlayState())
+    private var modelDiscoveryJob: Job? = null
+    private var modelDiscoveryToken = 0L
 
     val state: StateFlow<SyncTextUiState> =
         combine(
@@ -122,6 +166,11 @@ class SyncTextUiController(
                 inspectingAudioTracks = local.inspectingAudioTracks,
                 audioInspectionError = local.audioInspectionError,
                 configEditorVisible = local.configEditorVisible,
+                availableTranslationModels = local.availableTranslationModels,
+                loadingTranslationModels = local.loadingTranslationModels,
+                modelDiscoveryMessage = local.modelDiscoveryMessage,
+                translationConnectionTest = local.translationConnectionTest,
+                asrConnectionTest = local.asrConnectionTest,
                 busy = local.busy,
                 message = local.message,
             )
@@ -141,6 +190,28 @@ class SyncTextUiController(
             SyncTextAction.CloseConfigEditor ->
                 overlay.update { it.copy(configEditorVisible = false, message = null) }
             SyncTextAction.ClearMessage -> overlay.update { it.copy(message = null) }
+            is SyncTextAction.DiscoverTranslationModels ->
+                discoverTranslationModels(
+                    protocol = action.protocol,
+                    endpoint = action.endpoint,
+                    credentialId = action.credentialId,
+                    apiKey = action.apiKey,
+                )
+            is SyncTextAction.TestTranslationConnection ->
+                testTranslationConnection(
+                    protocol = action.protocol,
+                    endpoint = action.endpoint,
+                    model = action.model,
+                    credentialId = action.credentialId,
+                    apiKey = action.apiKey,
+                )
+            is SyncTextAction.TestAsrConnection ->
+                testAsrConnection(
+                    profile = action.profile,
+                    endpoint = action.endpoint,
+                    credentialId = action.credentialId,
+                    apiKey = action.apiKey,
+                )
             is SyncTextAction.SaveCredential -> runAction {
                 repository.saveCredential(
                     credentialId = action.credentialId,
@@ -155,7 +226,11 @@ class SyncTextUiController(
                 "密钥已删除"
             }
             is SyncTextAction.SaveConfig -> runAction {
-                repository.saveConfig(action.draft.toConfig(action.configId))
+                repository.saveConfigWithSecrets(
+                    action.draft.toConfig(action.configId),
+                    asrSecret = action.draft.asrSecret,
+                    translationSecret = action.draft.translationSecret,
+                )
                 "配置已保存"
             }
             is SyncTextAction.SetPresentationMode -> runAction {
@@ -169,6 +244,117 @@ class SyncTextUiController(
             is SyncTextAction.RetryForContent -> runAction {
                 repository.retryForContent(action.contentId)
                 "同步文字已重试"
+            }
+        }
+    }
+
+    private fun discoverTranslationModels(
+        protocol: TranslationProtocol,
+        endpoint: String,
+        credentialId: String?,
+        apiKey: String?,
+    ) {
+        modelDiscoveryJob?.cancel()
+        val token = ++modelDiscoveryToken
+        if (endpoint.isBlank() || credentialId.isNullOrBlank() && apiKey.isNullOrBlank()) {
+            overlay.update {
+                it.copy(
+                    availableTranslationModels = emptyList(),
+                    loadingTranslationModels = false,
+                    modelDiscoveryMessage = null,
+                )
+            }
+            return
+        }
+        overlay.update {
+            it.copy(
+                availableTranslationModels = emptyList(),
+                loadingTranslationModels = true,
+                modelDiscoveryMessage = null,
+            )
+        }
+        modelDiscoveryJob =
+            scope.launch {
+                delay(450L)
+                runCatching {
+                    repository.discoverTranslationModels(protocol, endpoint, credentialId, apiKey)
+                }.onSuccess { models ->
+                    if (token != modelDiscoveryToken) return@onSuccess
+                    overlay.update {
+                        it.copy(
+                            availableTranslationModels = models,
+                            loadingTranslationModels = false,
+                            modelDiscoveryMessage =
+                                if (models.isEmpty()) "暂时没有可用模型列表，可以直接填写模型" else null,
+                        )
+                    }
+                }.onFailure { error ->
+                    if (token != modelDiscoveryToken || error is CancellationException) return@onFailure
+                    overlay.update {
+                        it.copy(
+                            availableTranslationModels = emptyList(),
+                            loadingTranslationModels = false,
+                            modelDiscoveryMessage = "暂时无法获取模型列表，可以直接填写模型",
+                        )
+                    }
+                }
+            }
+    }
+
+    private fun testTranslationConnection(
+        protocol: TranslationProtocol,
+        endpoint: String,
+        model: String,
+        credentialId: String?,
+        apiKey: String?,
+    ) {
+        overlay.update {
+            it.copy(translationConnectionTest = ConnectionTestUiState(running = true))
+        }
+        scope.launch {
+            runCatching {
+                repository.testTranslationConnection(protocol, endpoint, model, credentialId, apiKey)
+            }.onSuccess {
+                overlay.update {
+                    it.copy(
+                        translationConnectionTest =
+                            ConnectionTestUiState(success = true, message = "连接成功"),
+                    )
+                }
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                overlay.update {
+                    it.copy(
+                        translationConnectionTest =
+                            ConnectionTestUiState(success = false, message = error.message ?: "连接失败"),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun testAsrConnection(
+        profile: AsrProfile,
+        endpoint: String,
+        credentialId: String?,
+        apiKey: String?,
+    ) {
+        overlay.update { it.copy(asrConnectionTest = ConnectionTestUiState(running = true)) }
+        scope.launch {
+            runCatching {
+                repository.testAsrConnection(profile, endpoint, credentialId, apiKey)
+            }.onSuccess {
+                overlay.update {
+                    it.copy(asrConnectionTest = ConnectionTestUiState(success = true, message = "连接成功"))
+                }
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                overlay.update {
+                    it.copy(
+                        asrConnectionTest =
+                            ConnectionTestUiState(success = false, message = error.message ?: "连接失败"),
+                    )
+                }
             }
         }
     }
@@ -352,11 +538,11 @@ private fun SyncTextConfigDraft.toConfig(configId: String?): SyncTextConfig =
         configId = configId.orEmpty(),
         asrEndpoint = asrEndpoint,
         asrProfile = asrProfile,
-        asrCredentialId = asrCredentialId,
+        asrCredentialId = asrCredentialId.orEmpty(),
         translationProtocol = translationProtocol,
         translationEndpoint = translationEndpoint,
         translationModel = translationModel,
-        translationCredentialId = translationCredentialId,
+        translationCredentialId = translationCredentialId.orEmpty(),
         targetLanguage = targetLanguage,
         presentationMode = presentationMode,
         translationUserAgent = translationUserAgent,

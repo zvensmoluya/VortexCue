@@ -72,9 +72,11 @@ Import Hub 提供：选择单文件、从文件夹查找、扫描设备媒体、
 
 ## 5. 配置
 
-配置页只有一套完整的 `SyncTextConfig`，不向用户展示 Scheme、Attempt、Task Queue、Token、Hash 或技术结果详情。内部仍使用稳定配置 ID 关联后台审计与 attempt snapshot。
+配置页只有一套完整的 `SyncTextConfig`，顶部切换“翻译模型配置”和“OpenRouter · ASR”。不向用户展示 Scheme、Attempt、Task Queue、Token、Hash 或技术结果详情。内部仍使用稳定配置 ID 关联后台审计与 attempt snapshot。
 
-ASR 字段：OpenRouter HTTPS Endpoint、Whisper/Grok profile、Key。翻译字段：协议、HTTPS Endpoint、Model、Key、目标语言、展示模式，以及高级 User-Agent。Key 由 Android Keystore 加密保存；Endpoint 必须经过 HTTPS 与主机校验。
+翻译配置提供协议选择、可编辑的 Base URL、自动发现的模型选择、API Key、目标语言和展示模式。官方示例只展示服务根地址或 `/v1` 地址；用户不需要填写 `/responses`、`/chat/completions` 或其他资源路径，应用根据协议在内部补全。Base URL 或协议变化后静默尝试拉取可用模型，不提供刷新按钮；服务不提供模型目录时仍允许直接填写模型。用户可以发送一个低额度测试请求，确认所选协议、地址、模型和 Key 真正可用。Key 由 Android Keystore 加密保存，Endpoint 必须经过 HTTPS 与主机校验。
+
+ASR 配置固定使用 OpenRouter，提供 OpenAI Whisper / Grok 两个模型、可编辑的 OpenRouter Base URL 和 API Key；ASR 不要求用户选择协议。用户可以发送一个极短的测试音频请求确认连接，测试不会创建同步文字结果。价格档位、余额等 OpenRouter 专属信息只有在不增加技术负担且有足够空间时才作为辅助信息出现。
 
 生成自动使用当前配置：已有文字优先翻译，没有文字才执行 ASR；只有多音轨等真实歧义才请求选择。状态只在当前内容页、Player 和同步文字页就地显示“准备中 / 完成 / 失败”。同步文字页提供取消与重试，不出现全局任务抽屉。
 

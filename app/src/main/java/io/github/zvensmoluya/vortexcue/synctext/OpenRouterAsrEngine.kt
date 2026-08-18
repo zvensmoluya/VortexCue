@@ -4,6 +4,8 @@ import java.io.File
 import java.io.FilterOutputStream
 import java.io.IOException
 import java.io.OutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
@@ -217,6 +219,7 @@ class OpenRouterAsrEngine(
             ?: LanguageTags.normalizeOrNull(requested)
 
     companion object {
+        const val OpenRouterBaseUrl = "https://openrouter.ai/api/v1"
         const val OpenRouterTranscriptionUrl = "https://openrouter.ai/api/v1/audio/transcriptions"
         const val MaxEncodedRequestBytes = 24L * 1024L * 1024L
     }
@@ -232,7 +235,92 @@ class OpenRouterAsrEngine(
         ) {
             "ASR endpoint must be HTTPS"
         }
-        return endpoint
+        val path = uri.path?.trimEnd('/') ?: ""
+        return when {
+            path.endsWith("/audio/transcriptions") -> endpoint
+            path.isEmpty() || path == "/" ->
+                if (uri.host.equals("openrouter.ai", ignoreCase = true)) {
+                    "$endpoint/api/v1/audio/transcriptions"
+                } else {
+                    "$endpoint/v1/audio/transcriptions"
+                }
+            path.endsWith("/v1") -> "$endpoint/audio/transcriptions"
+            else -> endpoint
+        }
+    }
+
+    /** Sends a tiny valid WAV payload to verify endpoint, key, and model access. */
+    suspend fun testConnection(profile: AsrProfile, endpoint: String, apiKey: String) {
+        val testFile = File.createTempFile("vortexcue-asr-test-", ".wav")
+        try {
+            testFile.writeBytes(testWavBytes())
+            val request =
+                AsrRequest(
+                    profile = profile,
+                    apiKey = apiKey,
+                    wavFile = testFile,
+                    window =
+                        AsrWindowPlan(
+                            windowId = "connection-test",
+                            ordinal = 0,
+                            ownedStartMs = 0L,
+                            ownedEndMs = 250L,
+                            uploadStartMs = 0L,
+                            uploadEndMs = 250L,
+                            pcmStartFrame = 0L,
+                            pcmEndFrame = 2_000L,
+                            cutReason = "connection-test",
+                            isLast = true,
+                        ),
+                    endpoint = endpoint,
+                )
+            val body = StreamingAsrJsonRequestBody(request)
+            val permit = budget.acquire(body.contentLength())
+            try {
+                val exchange =
+                    executor.execute(
+                        Request.Builder()
+                            .url(validatedEndpoint(endpoint))
+                            .header("Accept", "application/json")
+                            .header("Authorization", "Bearer $apiKey")
+                            .post(body)
+                            .build(),
+                    )
+                if (exchange.status !in 200..299) throw classifyFailure(exchange, apiKey)
+            } finally {
+                permit.release()
+            }
+        } finally {
+            testFile.delete()
+        }
+    }
+
+    private fun testWavBytes(): ByteArray {
+        val sampleRate = 8_000
+        val sampleCount = sampleRate / 4
+        val dataSize = sampleCount * 2
+        val bytes = ByteBuffer.allocate(44 + dataSize).order(ByteOrder.LITTLE_ENDIAN)
+        bytes.put("RIFF".toByteArray(Charsets.US_ASCII))
+        bytes.putInt(36 + dataSize)
+        bytes.put("WAVE".toByteArray(Charsets.US_ASCII))
+        bytes.put("fmt ".toByteArray(Charsets.US_ASCII))
+        bytes.putInt(16)
+        bytes.putShort(1)
+        bytes.putShort(1)
+        bytes.putInt(sampleRate)
+        bytes.putInt(sampleRate * 2)
+        bytes.putShort(2)
+        bytes.putShort(16)
+        bytes.put("data".toByteArray(Charsets.US_ASCII))
+        bytes.putInt(dataSize)
+        repeat(sampleCount) { index ->
+            val sample =
+                (kotlin.math.sin(index * 2.0 * Math.PI * 440.0 / sampleRate) * 2_000)
+                    .toInt()
+                    .toShort()
+            bytes.putShort(sample)
+        }
+        return bytes.array()
     }
 }
 

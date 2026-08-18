@@ -732,18 +732,18 @@ private fun ConfigTab(
             Text("同步文字", color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
         }
         item {
-            ConfigLine("ASR", config?.asrProfile?.modelId ?: "尚未配置", Icons.Outlined.AudioFile)
-            ConfigLine("ASR Endpoint", config?.asrEndpoint ?: "尚未配置", Icons.Outlined.Settings)
-            ConfigLine("翻译", config?.translationModel ?: "尚未配置", Icons.Outlined.Translate)
-            ConfigLine("翻译 Endpoint", config?.translationEndpoint ?: "尚未配置", Icons.Outlined.Settings)
-            ConfigLine("目标语言", config?.targetLanguage ?: "尚未配置", Icons.Outlined.Translate)
-            ConfigLine("展示", config?.presentationMode?.name ?: "尚未配置", Icons.Outlined.Tune)
+            ConfigLine("翻译模型", config?.translationModel ?: "尚未设置", Icons.Outlined.Translate)
+            ConfigLine(
+                "OpenRouter · ASR",
+                config?.asrProfile?.let { if (it.experimental) "Grok" else "OpenAI Whisper" } ?: "尚未设置",
+                Icons.Outlined.AudioFile,
+            )
         }
         item {
             Button(onClick = { onAction(SyncTextAction.OpenConfigEditor) }, colors = ButtonDefaults.buttonColors(containerColor = AppSurfaceRaised, contentColor = AppPrimaryText)) {
                 Icon(Icons.Outlined.Tune, null)
                 Spacer(Modifier.width(8.dp))
-                Text(if (config == null) "设置同步文字连接" else "编辑同步文字连接")
+                Text(if (config == null) "开始配置同步文字" else "打开配置")
             }
         }
     }
