@@ -1,0 +1,620 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>荧荧 Android Prototype v5</title>
+<style>
+:root{
+  --bg:#f7f7f7; --surface:#fff; --soft:#ededed; --text:#171717; --muted:#767676;
+  --line:#e5e5e5; --danger:#a22323; --shadow:0 16px 50px rgba(0,0,0,.12);
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  display:grid;place-items:center;background:#ececec;color:var(--text);
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif
+}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer}
+.phone{
+  width:min(412px,100vw);height:min(915px,100vh);background:var(--bg);position:relative;overflow:hidden;
+  box-shadow:var(--shadow)
+}
+@media(min-width:700px){.phone{border:1px solid #ddd;border-radius:30px}}
+.app{position:absolute;inset:0;display:flex;flex-direction:column}
+.topbar{
+  height:76px;flex:0 0 auto;padding:24px 18px 10px;display:flex;align-items:flex-end;justify-content:space-between
+}
+.title{font-size:28px;font-weight:760;line-height:1;letter-spacing:-.5px}
+.top-actions{display:flex;gap:5px}
+.icon-btn{
+  width:38px;height:38px;border:0;border-radius:19px;background:transparent;display:grid;place-items:center;
+  font-size:19px
+}
+.icon-btn:hover{background:#ececec}
+.content{flex:1;min-height:0;overflow:auto;padding:8px 14px 140px}
+.page{display:none}.page.active{display:block}
+.section{margin:14px 4px 8px;font-size:12px;font-weight:760;color:#898989;letter-spacing:.5px;text-transform:uppercase}
+.list{background:#fff;border:1px solid var(--line);border-radius:20px;overflow:hidden}
+.row{
+  min-height:72px;padding:10px 12px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--line)
+}
+.row:last-child{border-bottom:0}.row:active{background:#f4f4f4}
+.art{width:48px;height:48px;border-radius:13px;background:#ececec;display:grid;place-items:center;flex:0 0 auto}
+.meta{flex:1;min-width:0}.name{font-weight:680;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub{font-size:12px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trailing{font-size:12px;color:var(--muted)}
+.folder .art{font-size:20px}
+.badge{display:inline-flex;padding:4px 7px;border-radius:999px;background:#efefef;color:#555;font-size:10px}
+.note{font-size:11px;color:var(--muted);margin:8px 4px}
+.search-mode{display:none;align-items:center;gap:8px;width:100%}
+.search-mode.show{display:flex}
+.search-mode input{flex:1;border:0;outline:0;background:#ebebeb;border-radius:16px;padding:10px 12px}
+.notice{
+  background:#efefef;border-radius:17px;padding:12px 13px;display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:12px
+}
+.notice strong{font-size:13px}.notice .small{font-size:11px;color:var(--muted);margin-top:2px}
+
+.mini{
+  position:absolute;left:10px;right:10px;bottom:76px;height:58px;background:rgba(255,255,255,.96);
+  border:1px solid var(--line);border-radius:18px;display:flex;align-items:center;gap:10px;padding:8px 10px;
+  box-shadow:0 6px 18px rgba(0,0,0,.08);z-index:20
+}
+.mini-art{width:40px;height:40px;border-radius:10px;background:#e9e9e9;display:grid;place-items:center}
+.mini-meta{flex:1;min-width:0}.mini-title{font-size:13px;font-weight:680}.mini-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.mini-play{width:38px;height:38px;border:0;border-radius:50%;background:#111;color:#fff}
+.nav{
+  position:absolute;left:0;right:0;bottom:0;height:84px;background:rgba(250,250,250,.98);
+  border-top:1px solid var(--line);display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;align-items:start;
+  padding:8px 8px 10px;z-index:25
+}
+.nav-item{
+  border:0;background:transparent;padding:4px 2px 0;display:flex;flex-direction:column;align-items:center;gap:4px;
+  color:#777;font-size:10px;min-width:0
+}
+.nav-item .ni{width:40px;height:30px;border-radius:16px;display:grid;place-items:center;font-size:18px}
+.nav-item.active{color:#111;font-weight:700}.nav-item.active .ni{background:#e6e6e6}
+.logo-wrap{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:10px;color:#777}
+.logo-btn{width:44px;height:34px;border:0;border-radius:17px;background:transparent;display:grid;place-items:center}
+.logo-btn:hover{background:#ececec}
+.ghost{width:25px;height:25px;border-radius:50% 50% 44% 44%;background:#252525;position:relative}
+.ghost:before,.ghost:after{content:"";position:absolute;top:8px;width:3px;height:3px;border-radius:50%;background:#f7f7f7}
+.ghost:before{left:7px}.ghost:after{right:7px}
+.ghost i{position:absolute;left:3px;right:3px;bottom:-3px;height:8px;background:#252525;clip-path:polygon(0 0,100% 0,88% 100%,68% 48%,50% 100%,31% 48%,12% 100%)}
+
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.3);z-index:80;display:none}.scrim.show{display:block}
+.sheet{
+  position:absolute;left:0;right:0;bottom:0;background:#fff;border-radius:28px 28px 0 0;z-index:81;
+  padding:10px 16px 24px;transform:translateY(110%);transition:.22s ease
+}
+.sheet.show{transform:translateY(0)}
+.grab{width:40px;height:4px;border-radius:999px;background:#d4d4d4;margin:0 auto 14px}
+.sheet-title{font-size:19px;font-weight:760;margin:0 4px 10px}
+.action-row{display:flex;align-items:center;gap:14px;padding:14px 8px;border-radius:14px}
+.action-row:active{background:#f2f2f2}
+.action-icon{width:42px;height:42px;border-radius:13px;background:#efefef;display:grid;place-items:center}
+.action-title{font-weight:680}.action-sub{font-size:12px;color:var(--muted);margin-top:2px}
+.divider{height:1px;background:var(--line);margin:10px 6px}
+.source-row{
+  display:flex;align-items:center;gap:12px;padding:11px 8px;border-radius:13px
+}
+.source-row:active{background:#f3f3f3}
+.source-icon{width:38px;height:38px;border-radius:11px;background:#efefef;display:grid;place-items:center}
+.source-meta{flex:1;min-width:0}.source-name{font-size:13px;font-weight:680}.source-sub{font-size:11px;color:var(--muted);margin-top:2px}
+
+.flow{
+  position:absolute;inset:0;background:var(--bg);z-index:70;display:flex;flex-direction:column;
+  transform:translateX(105%);transition:.24s ease
+}
+.flow.show{transform:translateX(0)}
+.flow-top{height:76px;padding:24px 14px 10px;display:flex;align-items:flex-end;gap:8px}
+.flow-title{font-size:22px;font-weight:760;flex:1}
+.flow-body{flex:1;overflow:auto;padding:12px 14px 110px}
+.flow-bottom{
+  position:absolute;left:0;right:0;bottom:0;background:rgba(250,250,250,.98);border-top:1px solid var(--line);
+  padding:12px 14px calc(12px + env(safe-area-inset-bottom))
+}
+.primary{width:100%;border:0;border-radius:17px;background:#111;color:#fff;padding:14px;font-weight:720}
+.secondary{width:100%;border:0;border-radius:17px;background:#e9e9e9;padding:13px;font-weight:650}
+.import-row{
+  background:#fff;border:1px solid var(--line);border-radius:18px;padding:12px;margin-bottom:9px;
+  display:flex;align-items:center;gap:10px
+}
+.check{width:22px;height:22px;border:1px solid #bdbdbd;border-radius:7px;display:grid;place-items:center;flex:0 0 auto}
+.check.on{background:#111;color:#fff;border-color:#111}
+.import-meta{flex:1;min-width:0}.import-title{font-weight:680}.import-sub{font-size:12px;color:var(--muted);margin-top:2px}
+.folder-pick{background:#fff;border:1px solid var(--line);border-radius:18px;padding:13px;margin-top:12px;display:flex;justify-content:space-between;align-items:center}
+.folder-option{display:flex;align-items:center;gap:10px;padding:13px 8px;border-bottom:1px solid var(--line)}
+.folder-option:last-child{border-bottom:0}
+
+.card{background:#fff;border:1px solid var(--line);border-radius:20px;padding:16px;margin-bottom:12px}
+.card h3{margin:0 0 14px;font-size:16px}
+.field{margin-top:12px}.field label{display:block;font-size:12px;color:var(--muted);margin:0 0 6px 2px}
+.field input{width:100%;border:1px solid #ddd;background:#fafafa;border-radius:14px;padding:11px 12px;outline:0}
+.setting-row{min-height:60px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);gap:14px}
+.setting-row:last-child{border-bottom:0}.setting-title{font-weight:620}.setting-sub{font-size:12px;color:var(--muted);margin-top:2px}
+.toggle{width:46px;height:26px;border-radius:999px;background:#d7d7d7;position:relative}
+.toggle:after{content:"";position:absolute;width:22px;height:22px;left:2px;top:2px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:.18s}
+.toggle.on{background:#252525}.toggle.on:after{left:22px}
+
+.text-card{background:#fff;border:1px solid var(--line);border-radius:19px;padding:14px;margin-bottom:12px}
+.text-card h3{font-size:15px;margin:0 0 10px}.choice{display:flex;align-items:center;justify-content:space-between;padding:11px 2px;border-top:1px solid var(--line)}
+.choice:first-of-type{border-top:0}.choice .left{display:flex;gap:10px;align-items:center}
+.radio{width:18px;height:18px;border-radius:50%;border:1px solid #aaa;display:grid;place-items:center}
+.radio.on:after{content:"";width:10px;height:10px;border-radius:50%;background:#111}
+.choice-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.auto-note{font-size:11px;color:var(--muted);background:#efefef;border-radius:13px;padding:10px 11px;margin-bottom:12px}
+
+.player{
+  position:absolute;inset:0;background:#fafafa;z-index:60;transform:translateY(105%);transition:.28s cubic-bezier(.2,.8,.2,1);
+  display:flex;flex-direction:column
+}
+.player.show{transform:translateY(0)}
+.player-top{height:70px;padding:20px 16px 8px;display:flex;align-items:flex-end;justify-content:space-between}
+.player-body{flex:1;display:flex;flex-direction:column;justify-content:center;padding:0 28px 40px}
+.cover{width:100%;aspect-ratio:1.15;border-radius:28px;background:#ededed;display:grid;place-items:center;font-size:54px;margin-bottom:30px}
+.ptitle{font-size:23px;font-weight:760}.psub{font-size:13px;color:var(--muted);margin-top:4px}
+.track{height:4px;background:#ddd;border-radius:999px;margin-top:26px}.fill{width:34%;height:100%;background:#111;border-radius:999px}
+.times{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:7px}
+.controls{display:flex;justify-content:center;align-items:center;gap:24px;margin:22px 0}
+.round{width:50px;height:50px;border:0;background:#ededed;border-radius:50%;font-size:17px}
+.round.main{width:64px;height:64px;background:#111;color:#fff;font-size:22px}
+.subtitle-state{margin-top:10px;border:1px solid var(--line);border-radius:18px;padding:14px;background:#fff}
+.subtitle-row{display:flex;align-items:center;justify-content:space-between;gap:12px}.subtitle-label{font-size:13px;color:var(--muted)}.subtitle-main{font-size:14px;font-weight:680;margin-top:2px}
+.link-btn{border:0;background:#ededed;border-radius:999px;padding:8px 11px;font-size:12px}
+.player-actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:14px}
+.pa{border:0;background:#ededed;border-radius:16px;padding:12px 6px;font-size:13px}
+.glow-btn{margin-top:18px;border:0;border-radius:18px;background:#111;color:#fff;padding:15px;font-weight:720}
+.loading{display:inline-flex;gap:5px}.dot{width:5px;height:5px;border-radius:50%;background:#777;animation:pulse 1s infinite alternate}.dot:nth-child(2){animation-delay:.2s}.dot:nth-child(3){animation-delay:.4s}
+@keyframes pulse{to{opacity:.25;transform:translateY(-2px)}}
+
+.glow{position:absolute;inset:0;background:#000;z-index:100;display:none;color:#363636}.glow.show{display:block}
+.glow-text{position:absolute;left:24px;right:24px;top:56%;transform:translateY(-50%);text-align:center;font-size:24px;font-weight:560;line-height:1.6}
+.glow-sub{font-size:14px;margin-top:8px;color:#232323}
+.glow-controls{position:absolute;left:18px;right:18px;bottom:26px;background:#090909;border:1px solid #151515;border-radius:22px;padding:14px;display:none}
+.glow-controls.show{display:block}.glow-control-row{display:flex;justify-content:space-around}.gbtn{border:0;background:transparent;color:#5d5d5d;padding:10px}
+.hint{position:absolute;top:18px;left:0;right:0;text-align:center;color:#1d1d1d;font-size:11px}
+
+.context{
+  position:absolute;left:16px;right:16px;bottom:92px;background:#fff;border:1px solid var(--line);
+  border-radius:22px;box-shadow:0 18px 46px rgba(0,0,0,.2);z-index:85;padding:8px;display:none
+}
+.context.show{display:block}.context-title{padding:10px 12px 8px;font-weight:750}.context-row{padding:12px;border-radius:12px}.context-row:active{background:#f3f3f3}.context-row.danger{color:var(--danger)}
+.toast{position:absolute;left:50%;bottom:150px;transform:translate(-50%,10px);background:#222;color:#fff;padding:9px 12px;border-radius:999px;font-size:12px;opacity:0;pointer-events:none;transition:.2s;z-index:120;white-space:nowrap}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+</style>
+
+<style>
+/* Final content-space decisions: root directory + text-only rows. */
+[data-page="content"] .section{display:none}
+[data-page="content"] .list{margin-bottom:14px}
+[data-page="content"] .row{min-height:62px;padding:9px 14px;gap:8px}
+[data-page="content"] .folder .meta{padding-left:0}
+[data-page="content"] .folder .name{font-weight:700}
+[data-page="content"] .folder .sub{margin-top:2px}
+[data-page="content"] .media-row .name{font-size:15px}
+[data-page="content"] .media-row .sub{margin-top:3px}
+[data-page="content"] .art{display:none}
+.mini{gap:8px}
+.mini-art{display:none!important}
+.cover{font-size:18px!important;font-weight:720;letter-spacing:-.2px}
+</style>
+</head>
+<body>
+<div class="phone">
+  <div class="app">
+    <div class="topbar">
+      <div class="title" id="pageTitle">内容</div>
+      <div class="top-actions" id="topActions">
+        <button class="icon-btn" id="searchBtn">⌕</button>
+        <button class="icon-btn" id="contentMenuBtn">⋮</button>
+      </div>
+      <div class="search-mode" id="searchMode">
+        <button class="icon-btn" id="closeSearch">←</button>
+        <input id="searchInput" placeholder="搜索标题、作者、专辑">
+      </div>
+    </div>
+
+    <div class="content">
+      <section class="page active" data-page="content">
+        <div class="list" id="folderList" style="margin-top:2px">
+          <div class="row folder" data-folder="睡前 ASMR">
+            <div class="meta"><div class="name">睡前 ASMR</div><div class="sub">32 项</div></div>
+            <div class="trailing">›</div>
+          </div>
+          <div class="row folder" data-folder="雨声">
+            <div class="meta"><div class="name">雨声</div><div class="sub">8 项</div></div>
+            <div class="trailing">›</div>
+          </div>
+        </div>
+
+        <div class="list" id="contentList">
+          <div class="row media-row" data-title="夜雨耳语" data-text="日本語 · 中文">
+            <div class="meta"><div class="name">夜雨耳语</div><div class="sub">Circle Voice · 1:04:22</div></div>
+          </div>
+          <div class="row media-row" data-title="耳かき" data-text="日本語">
+            <div class="meta"><div class="name">耳かき</div><div class="sub">Mio · 48:13</div></div>
+          </div>
+          <div class="row media-row" data-title="Whisper Session" data-text="">
+            <div class="meta"><div class="name">Whisper Session</div><div class="sub">Local Media · 56:08</div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="page" data-page="playlist">
+        <div class="section">当前顺序</div>
+        <div class="list">
+          <div class="row"><div class="trailing">≡</div><div class="meta"><div class="name">夜雨耳语</div><div class="sub">当前播放 · 32:18</div></div><div class="trailing">1:04:22</div></div>
+          <div class="row"><div class="trailing">≡</div><div class="meta"><div class="name">耳かき</div><div class="sub">Mio</div></div><div class="trailing">48:13</div></div>
+          <div class="row"><div class="trailing">≡</div><div class="meta"><div class="name">Sleep Talk</div><div class="sub">Local Media</div></div><div class="trailing">32:51</div></div>
+        </div>
+      </section>
+
+      <section class="page" data-page="config">
+        <div class="card">
+          <h3>ASR</h3>
+          <div class="field"><label>OpenRouter Endpoint</label><input value="https://openrouter.ai/api/v1"></div>
+          <div class="field"><label>API Key</label><input type="password" value="sk-or-v1-placeholder"></div>
+        </div>
+        <div class="card">
+          <h3>LLM 翻译</h3>
+          <div class="field"><label>Endpoint</label><input value="https://api.example.com/v1"></div>
+          <div class="field"><label>API Key</label><input type="password" value="sk-placeholder"></div>
+        </div>
+      </section>
+
+      <section class="page" data-page="settings">
+        <div class="card">
+          <div class="setting-row"><div><div class="setting-title">Glow 字幕亮度</div><div class="setting-sub">10%</div></div><div>›</div></div>
+          <div class="setting-row"><div><div class="setting-title">字幕大小</div><div class="setting-sub">标准</div></div><div>›</div></div>
+          <div class="setting-row"><div><div class="setting-title">字幕垂直位置</div><div class="setting-sub">居中偏下</div></div><div>›</div></div>
+        </div>
+        <div class="card">
+          <div class="setting-row"><div><div class="setting-title">进入 Glow 隐藏系统栏</div></div><div class="toggle on"></div></div>
+          <div class="setting-row"><div><div class="setting-title">播放结束继续下一项</div></div><div class="toggle on"></div></div>
+          <div class="setting-row"><div><div class="setting-title">媒体权限</div></div><div>›</div></div>
+        </div>
+      </section>
+    </div>
+
+    <div class="mini" id="miniPlayer">
+      <div class="mini-meta"><div class="mini-title" id="miniTitle">夜雨耳语</div><div class="mini-sub">32:18 / 1:04:22</div></div>
+      <button class="mini-play" id="miniPlay">▶</button>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-item active" data-nav="content"><span class="ni">▦</span><span>内容</span></button>
+      <button class="nav-item" data-nav="playlist"><span class="ni">≡</span><span>播放列表</span></button>
+      <div class="logo-wrap">
+        <button class="logo-btn" id="logoBtn"><span class="ghost"><i></i></span></button>
+        <span>添加</span>
+      </div>
+      <button class="nav-item" data-nav="config"><span class="ni">⌁</span><span>配置</span></button>
+      <button class="nav-item" data-nav="settings"><span class="ni">⚙</span><span>设置</span></button>
+    </nav>
+  </div>
+
+  <!-- Import Hub -->
+  <div class="scrim" id="scrim"></div>
+  <div class="sheet" id="importHub">
+    <div class="grab"></div>
+    <div class="sheet-title">添加内容</div>
+    <div class="action-row" data-import>
+      <div class="action-icon">♪</div><div><div class="action-title">选择文件</div><div class="action-sub">音频或视频</div></div>
+    </div>
+    <div class="action-row" data-import>
+      <div class="action-icon">▣</div><div><div class="action-title">从文件夹查找</div><div class="action-sub">选择一个文件夹并扫描媒体</div></div>
+    </div>
+    <div class="action-row" data-import>
+      <div class="action-icon">⌕</div><div><div class="action-title">扫描设备媒体</div><div class="action-sub">查找设备上的音频与视频</div></div>
+    </div>
+    <div class="divider"></div>
+    <div class="section" style="margin-top:6px">已添加的来源</div>
+    <div class="source-row" data-source>
+      <div class="source-icon">▣</div>
+      <div class="source-meta"><div class="source-name">ASMR Downloads</div><div class="source-sub">32 项 · 上次扫描昨天</div></div>
+      <div class="trailing">›</div>
+    </div>
+    <div class="source-row" data-source>
+      <div class="source-icon">▣</div>
+      <div class="source-meta"><div class="source-name">DLsite</div><div class="source-sub">18 项 · 上次扫描 3 天前</div></div>
+      <div class="trailing">›</div>
+    </div>
+  </div>
+
+  <!-- Import Selection -->
+  <div class="flow" id="importFlow">
+    <div class="flow-top">
+      <button class="icon-btn" data-back="importFlow">←</button>
+      <div class="flow-title">添加内容</div>
+    </div>
+    <div class="flow-body">
+      <div class="notice">
+        <div><strong>找到 4 个媒体内容</strong><div class="small">同步文字会由荧荧自动准备</div></div>
+        <span class="badge">自动</span>
+      </div>
+
+      <div class="import-row">
+        <div class="check on">✓</div>
+        <div class="import-meta"><div class="import-title">夜雨耳语</div><div class="import-sub">01.mp4 · 1:04:22</div></div>
+      </div>
+      <div class="import-row">
+        <div class="check on">✓</div>
+        <div class="import-meta"><div class="import-title">耳かき</div><div class="import-sub">02.m4a · 48:13</div></div>
+      </div>
+      <div class="import-row">
+        <div class="check on">✓</div>
+        <div class="import-meta"><div class="import-title">Whisper 03</div><div class="import-sub">03.mp4 · 37:21</div></div>
+      </div>
+      <div class="import-row">
+        <div class="check">✓</div>
+        <div class="import-meta"><div class="import-title">cover.mp4</div><div class="import-sub">0:14</div></div>
+      </div>
+
+      <div class="folder-pick" id="chooseFolder">
+        <div><div style="font-weight:680">放入内容文件夹</div><div class="sub" id="selectedFolderLabel">睡前 ASMR</div></div><div>›</div>
+      </div>
+      <div class="note">导入时不要求用户确认字幕；只有后续发现不对时才需要纠正。</div>
+    </div>
+    <div class="flow-bottom"><button class="primary" id="finishImport">添加 3 项</button></div>
+  </div>
+
+  <!-- Source Detail -->
+  <div class="flow" id="sourceFlow">
+    <div class="flow-top">
+      <button class="icon-btn" data-back="sourceFlow">←</button>
+      <div class="flow-title">ASMR Downloads</div>
+    </div>
+    <div class="flow-body">
+      <div class="card">
+        <div class="setting-row"><div><div class="setting-title">已加入内容</div><div class="setting-sub">32 项</div></div><div></div></div>
+        <div class="setting-row"><div><div class="setting-title">文件夹授权</div><div class="setting-sub">正常</div></div><div>✓</div></div>
+      </div>
+      <button class="primary" id="rescanSource">重新扫描</button>
+      <div class="note">真实文件夹只负责发现外部媒体，不会复制成荧荧里的内容文件夹结构。</div>
+    </div>
+  </div>
+
+  <!-- Folder picker -->
+  <div class="flow" id="folderFlow">
+    <div class="flow-top">
+      <button class="icon-btn" data-back="folderFlow">←</button>
+      <div class="flow-title">放入哪里</div>
+    </div>
+    <div class="flow-body">
+      <div class="list">
+        <div class="folder-option" data-folder="睡前 ASMR"><span>▰</span><span>睡前 ASMR</span><span style="margin-left:auto">●</span></div>
+        <div class="folder-option" data-folder="雨声"><span>▰</span><span>雨声</span><span style="margin-left:auto">○</span></div>
+        <div class="folder-option" data-folder="未分类"><span>▰</span><span>未分类</span><span style="margin-left:auto">○</span></div>
+      </div>
+      <button class="secondary" style="margin-top:12px">＋ 新建内容文件夹</button>
+    </div>
+    <div class="flow-bottom"><button class="primary" id="saveFolder">完成</button></div>
+  </div>
+
+  <!-- Text correction -->
+  <div class="flow" id="textFlow">
+    <div class="flow-top">
+      <button class="icon-btn" data-back="textFlow">←</button>
+      <div class="flow-title" id="textFlowTitle">同步文字</div>
+    </div>
+    <div class="flow-body">
+      <div class="auto-note">通常由荧荧自动选择。这里只用于纠正自动结果或手动补充。</div>
+
+      <div class="text-card">
+        <h3>主文字</h3>
+        <div class="choice">
+          <div class="left"><div class="radio on"></div><div><div>日本語</div><div class="choice-sub">01_jp.ass · 自动选择</div></div></div>
+          <div>✓</div>
+        </div>
+        <div class="choice">
+          <div class="left"><div class="radio"></div><div><div>中文</div><div class="choice-sub">01_zh.srt</div></div></div>
+        </div>
+        <div class="choice">
+          <div class="left"><div class="radio"></div><div><div>不显示</div></div></div>
+        </div>
+      </div>
+
+      <div class="text-card">
+        <h3>第二文字</h3>
+        <div class="choice">
+          <div class="left"><div class="radio on"></div><div><div>中文</div><div class="choice-sub">01_zh.srt · 自动选择</div></div></div>
+          <div>✓</div>
+        </div>
+        <div class="choice">
+          <div class="left"><div class="radio"></div><div><div>不显示</div></div></div>
+        </div>
+      </div>
+
+      <button class="secondary" id="manualTextFile">选择其他字幕文件</button>
+      <button class="secondary" id="autoMatch" style="margin-top:10px">重新自动匹配</button>
+    </div>
+    <div class="flow-bottom"><button class="primary" data-back="textFlow">完成</button></div>
+  </div>
+
+  <!-- Context menu -->
+  <div class="context" id="contextMenu">
+    <div class="context-title" id="contextTitle">夜雨耳语</div>
+    <div class="context-row" id="ctxPlay">立即播放</div>
+    <div class="context-row" id="ctxPlaylist">加入播放列表</div>
+    <div class="context-row" id="ctxMove">移动到内容文件夹</div>
+    <div class="context-row" id="ctxText">同步文字</div>
+    <div class="context-row danger" id="ctxIgnore">忽略</div>
+  </div>
+
+  <!-- Player -->
+  <div class="player" id="player">
+    <div class="player-top">
+      <button class="icon-btn" id="closePlayer">⌄</button>
+      <div style="font-size:12px;color:var(--muted)">正在播放</div>
+      <button class="icon-btn">⋮</button>
+    </div>
+    <div class="player-body">
+      <div class="cover">只让字幕发光</div>
+      <div class="ptitle" id="playerTitle">夜雨耳语</div>
+      <div class="psub">Circle Voice</div>
+      <div class="track"><div class="fill"></div></div>
+      <div class="times"><span>32:18</span><span>1:04:22</span></div>
+      <div class="controls">
+        <button class="round">−10</button>
+        <button class="round main" id="playerPlay">▶</button>
+        <button class="round">+10</button>
+      </div>
+
+      <div class="subtitle-state">
+        <div class="subtitle-row">
+          <div><div class="subtitle-label">同步文字</div><div class="subtitle-main" id="playerTextState">日本語 · 中文</div></div>
+          <button class="link-btn" id="playerTextBtn">管理</button>
+        </div>
+      </div>
+
+      <div class="player-actions">
+        <button class="pa">1× 速度</button><button class="pa">字幕 +0.0s</button><button class="pa">播放列表</button>
+      </div>
+      <button class="glow-btn" id="enterGlow">进入 Glow</button>
+    </div>
+  </div>
+
+  <div class="glow" id="glow">
+    <div class="hint">长按显示控制</div>
+    <div class="glow-text">雨の音、聞こえますか。<div class="glow-sub">能听见雨声吗。</div></div>
+    <div class="glow-controls" id="glowControls">
+      <div class="glow-control-row"><button class="gbtn">−10</button><button class="gbtn">❚❚</button><button class="gbtn">+10</button><button class="gbtn" id="exitGlow">退出</button></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast">完成</div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const pages=$$('.page'), navs=$$('[data-nav]');
+const pageTitle=$('#pageTitle'), topActions=$('#topActions'), searchMode=$('#searchMode'), searchInput=$('#searchInput');
+const scrim=$('#scrim'), importHub=$('#importHub'), importFlow=$('#importFlow'), sourceFlow=$('#sourceFlow'), folderFlow=$('#folderFlow'), textFlow=$('#textFlow');
+const contextMenu=$('#contextMenu'), player=$('#player'), glow=$('#glow');
+let playing=false, currentContext=null, selectedFolder='睡前 ASMR';
+
+function toast(msg){
+  const t=$('#toast'); t.textContent=msg; t.classList.add('show');
+  clearTimeout(window.__toast); window.__toast=setTimeout(()=>t.classList.remove('show'),1500);
+}
+function switchPage(name){
+  const names={content:'内容',playlist:'播放列表',config:'配置',settings:'设置'};
+  pages.forEach(p=>p.classList.toggle('active',p.dataset.page===name));
+  navs.forEach(n=>n.classList.toggle('active',n.dataset.nav===name));
+  pageTitle.textContent=names[name]; pageTitle.style.display='';
+  searchMode.classList.remove('show'); topActions.style.display=name==='content'?'flex':'none';
+}
+navs.forEach(n=>n.onclick=()=>switchPage(n.dataset.nav));
+
+$('#searchBtn').onclick=()=>{
+  pageTitle.style.display='none'; topActions.style.display='none'; searchMode.classList.add('show'); searchInput.focus();
+};
+$('#closeSearch').onclick=()=>{
+  searchMode.classList.remove('show'); pageTitle.style.display=''; topActions.style.display='flex';
+  searchInput.value=''; $$('.media-row').forEach(r=>r.style.display='');
+};
+searchInput.oninput=e=>{
+  const q=e.target.value.trim().toLowerCase();
+  $$('.media-row').forEach(r=>r.style.display=r.dataset.title.toLowerCase().includes(q)?'':'none');
+};
+$('#contentMenuBtn').onclick=()=>toast('内容整理菜单 · 原型占位');
+$$('[data-folder]').forEach(row=>row.onclick=()=>toast(`打开内容文件夹：${row.dataset.folder}`));
+
+
+function openHub(){scrim.classList.add('show');importHub.classList.add('show')}
+function closeHub(){scrim.classList.remove('show');importHub.classList.remove('show')}
+$('#logoBtn').onclick=openHub;
+scrim.onclick=()=>{closeHub();closeContext()};
+
+$$('[data-import]').forEach(r=>r.onclick=()=>{closeHub();importFlow.classList.add('show')});
+$$('[data-source]').forEach(r=>r.onclick=()=>{closeHub();sourceFlow.classList.add('show')});
+$$('[data-back]').forEach(b=>b.onclick=()=>$('#'+b.dataset.back).classList.remove('show'));
+
+$$('.check').forEach(c=>c.onclick=()=>{
+  c.classList.toggle('on'); c.textContent=c.classList.contains('on')?'✓':'';
+  const count=$$('.import-row .check.on').length; $('#finishImport').textContent=`添加 ${count} 项`;
+});
+$('#chooseFolder').onclick=()=>folderFlow.classList.add('show');
+$$('.folder-option').forEach(o=>o.onclick=()=>{
+  selectedFolder=o.dataset.folder;
+  $$('.folder-option').forEach(x=>x.lastElementChild.textContent=x===o?'●':'○');
+});
+$('#saveFolder').onclick=()=>{
+  $('#selectedFolderLabel').textContent=selectedFolder; folderFlow.classList.remove('show');
+};
+$('#finishImport').onclick=()=>{
+  importFlow.classList.remove('show'); toast(`已添加到 ${selectedFolder}`);
+};
+
+$('#rescanSource').onclick=()=>{
+  sourceFlow.classList.remove('show');
+  importFlow.classList.add('show');
+  toast('发现 4 个媒体内容');
+};
+
+function openContext(row){
+  currentContext=row; $('#contextTitle').textContent=row.dataset.title;
+  contextMenu.classList.add('show'); scrim.classList.add('show');
+}
+function closeContext(){contextMenu.classList.remove('show'); if(!importHub.classList.contains('show')) scrim.classList.remove('show')}
+$$('.media-row').forEach(row=>{
+  let timer;
+  row.onpointerdown=()=>timer=setTimeout(()=>openContext(row),520);
+  row.onpointerup=()=>clearTimeout(timer); row.onpointercancel=()=>clearTimeout(timer);
+  row.oncontextmenu=e=>{e.preventDefault();openContext(row)};
+  row.onclick=()=>openPlayer(row.dataset.title,row.dataset.text);
+});
+$('#ctxPlay').onclick=()=>{const r=currentContext;closeContext();openPlayer(r.dataset.title,r.dataset.text)};
+$('#ctxPlaylist').onclick=()=>{closeContext();toast('已加入播放列表')};
+$('#ctxMove').onclick=()=>{closeContext();folderFlow.classList.add('show')};
+$('#ctxText').onclick=()=>{const r=currentContext;closeContext();openTextFlow(r.dataset.title)};
+$('#ctxIgnore').onclick=()=>{const t=currentContext.dataset.title;currentContext.remove();closeContext();toast(`已忽略 ${t}`)};
+
+function openTextFlow(title){
+  $('#textFlowTitle').textContent=`${title} · 同步文字`; textFlow.classList.add('show');
+}
+$$('.choice').forEach(c=>c.onclick=()=>{
+  const card=c.closest('.text-card'); card.querySelectorAll('.radio').forEach(r=>r.classList.remove('on'));
+  c.querySelector('.radio').classList.add('on');
+});
+$('#manualTextFile').onclick=()=>toast('打开系统字幕文件选择器');
+$('#autoMatch').onclick=()=>toast('已重新自动匹配');
+
+function openPlayer(title,text){
+  $('#miniTitle').textContent=title; $('#playerTitle').textContent=title;
+  $('#playerTextState').textContent=text || '暂无同步文字';
+  $('#playerTextBtn').textContent=text ? '管理' : '生成';
+  player.classList.add('show');
+}
+$('#miniPlayer').onclick=e=>{if(e.target.id!=='miniPlay')openPlayer($('#miniTitle').textContent,'日本語 · 中文')};
+$('#closePlayer').onclick=()=>player.classList.remove('show');
+
+function togglePlay(){
+  playing=!playing; $('#miniPlay').textContent=playing?'❚❚':'▶'; $('#playerPlay').textContent=playing?'❚❚':'▶';
+}
+$('#miniPlay').onclick=e=>{e.stopPropagation();togglePlay()}; $('#playerPlay').onclick=togglePlay;
+
+$('#playerTextBtn').onclick=()=>{
+  if($('#playerTextState').textContent==='暂无同步文字'){
+    const b=$('#playerTextBtn'), s=$('#playerTextState');
+    b.disabled=true; b.innerHTML='<span class="loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>';
+    s.textContent='正在准备文字…';
+    setTimeout(()=>{s.textContent='日本語 · 中文'; b.disabled=false; b.textContent='管理'; toast('文字已自动准备完成')},1500);
+  }else{
+    openTextFlow($('#playerTitle').textContent);
+  }
+};
+
+$('#enterGlow').onclick=()=>{player.classList.remove('show');glow.classList.add('show');$('#glowControls').classList.remove('show')};
+$('#exitGlow').onclick=()=>{glow.classList.remove('show');player.classList.add('show')};
+let pressTimer;
+glow.onpointerdown=e=>{if(e.target.closest('.glow-controls'))return;pressTimer=setTimeout(()=>$('#glowControls').classList.toggle('show'),500)};
+glow.onpointerup=()=>clearTimeout(pressTimer); glow.onpointercancel=()=>clearTimeout(pressTimer);
+
+$$('.toggle').forEach(t=>t.onclick=()=>t.classList.toggle('on'));
+</script>
+</body>
+</html>
