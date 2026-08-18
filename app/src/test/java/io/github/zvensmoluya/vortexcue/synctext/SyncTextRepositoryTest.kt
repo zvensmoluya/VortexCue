@@ -96,6 +96,80 @@ class SyncTextRepositoryTest {
     }
 
     @Test
+    fun `saving a draft with blank secrets preserves the existing credential`() = runBlocking {
+        repository.saveCredential("shared", "Shared", CredentialPurpose.Shared, "old-secret")
+        val config =
+            SyncTextConfig(
+                configId = "",
+                asrEndpoint = "https://openrouter.example/api/v1",
+                asrProfile = AsrProfile.OpenRouterWhisperV1,
+                asrCredentialId = "shared",
+                translationProtocol = TranslationProtocol.Responses,
+                translationEndpoint = "https://translation.example/v1/responses",
+                translationModel = "model-v1",
+                translationCredentialId = "shared",
+                targetLanguage = "zh-CN",
+                presentationMode = TextPresentationMode.TargetOnly,
+            )
+
+        val saved = repository.saveConfigWithSecrets(config, asrSecret = null, translationSecret = null)
+
+        assertEquals("shared", saved.asrCredentialId)
+        assertEquals("shared", saved.translationCredentialId)
+        assertEquals("old-secret", credentials.get("shared"))
+    }
+
+    @Test
+    fun `updating one side of a shared credential updates the shared secret without losing the reference`() = runBlocking {
+        repository.saveCredential("shared", "Shared", CredentialPurpose.Shared, "old-secret")
+        val config =
+            SyncTextConfig(
+                configId = "",
+                asrEndpoint = "https://openrouter.example/api/v1",
+                asrProfile = AsrProfile.OpenRouterWhisperV1,
+                asrCredentialId = "shared",
+                translationProtocol = TranslationProtocol.Responses,
+                translationEndpoint = "https://translation.example/v1/responses",
+                translationModel = "model-v1",
+                translationCredentialId = "shared",
+                targetLanguage = "zh-CN",
+                presentationMode = TextPresentationMode.TargetOnly,
+            )
+
+        val saved = repository.saveConfigWithSecrets(config, asrSecret = "new-secret", translationSecret = null)
+
+        assertEquals("shared", saved.asrCredentialId)
+        assertEquals("shared", saved.translationCredentialId)
+        assertEquals("new-secret", credentials.get("shared"))
+        assertEquals(CredentialPurpose.Shared.name, database.syncTextDao().credential("shared")?.purpose)
+    }
+
+    @Test
+    fun `two different secrets split a shared credential into valid references`() = runBlocking {
+        repository.saveCredential("shared", "Shared", CredentialPurpose.Shared, "old-secret")
+        val config =
+            SyncTextConfig(
+                configId = "",
+                asrEndpoint = "https://openrouter.example/api/v1",
+                asrProfile = AsrProfile.OpenRouterWhisperV1,
+                asrCredentialId = "shared",
+                translationProtocol = TranslationProtocol.Responses,
+                translationEndpoint = "https://translation.example/v1/responses",
+                translationModel = "model-v1",
+                translationCredentialId = "shared",
+                targetLanguage = "zh-CN",
+                presentationMode = TextPresentationMode.TargetOnly,
+            )
+
+        val saved = repository.saveConfigWithSecrets(config, asrSecret = "asr-secret", translationSecret = "translation-secret")
+
+        assertFalse(saved.asrCredentialId == saved.translationCredentialId)
+        assertEquals("asr-secret", credentials.get(saved.asrCredentialId))
+        assertEquals("translation-secret", credentials.get(saved.translationCredentialId))
+        assertEquals(AsrProfile.OpenRouterWhisperV1, repository.loadConfig()?.asrProfile)
+    }
+
+    @Test
     fun `task snapshots dedupe attempts and generated slot replacement stay atomic`() = runBlocking {
         insertContentWithTextTrack()
         repository.saveCredential("asr-key", "ASR", CredentialPurpose.Asr, "asr-secret")

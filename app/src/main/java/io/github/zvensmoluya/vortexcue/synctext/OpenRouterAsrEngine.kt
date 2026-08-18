@@ -224,7 +224,7 @@ class OpenRouterAsrEngine(
         const val MaxEncodedRequestBytes = 24L * 1024L * 1024L
     }
 
-    private fun validatedEndpoint(value: String): String {
+    internal fun validatedEndpoint(value: String): String {
         val endpoint = value.trim().removeSuffix("/")
         val uri = runCatching { java.net.URI(endpoint) }.getOrNull()
         require(
@@ -287,11 +287,30 @@ class OpenRouterAsrEngine(
                             .build(),
                     )
                 if (exchange.status !in 200..299) throw classifyFailure(exchange, apiKey)
+                validateConnectionResponse(exchange)
             } finally {
                 permit.release()
             }
         } finally {
             testFile.delete()
+        }
+    }
+
+    internal fun validateConnectionResponse(exchange: HttpExchange) {
+        val root = parseRoot(exchange)
+        val hasTranscript =
+            root["text"] is JsonPrimitive ||
+                root["segments"] is JsonArray ||
+                root["words"] is JsonArray
+        if (!hasTranscript) {
+            throw AsrException(
+                category = GenerationErrorCategory.InvalidResponse,
+                retryable = false,
+                shouldSplit = false,
+                httpStatus = exchange.status,
+                rawResponse = exchange.body,
+                message = "ASR response omitted transcript data",
+            )
         }
     }
 

@@ -31,6 +31,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class SyncTextConfigDraft(
     val asrProfile: AsrProfile,
@@ -69,6 +71,7 @@ data class SyncTextUiState(
     val modelDiscoveryMessage: String? = null,
     val translationConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val asrConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
+    val configSaving: Boolean = false,
     val busy: Boolean = false,
     val message: String? = null,
 )
@@ -140,6 +143,7 @@ private data class OverlayState(
     val modelDiscoveryMessage: String? = null,
     val translationConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val asrConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
+    val configSaving: Boolean = false,
     val busy: Boolean = false,
     val message: String? = null,
 )
@@ -150,6 +154,9 @@ class SyncTextUiController(
     private val scope: CoroutineScope,
 ) {
     private val overlay = MutableStateFlow(OverlayState())
+    private val configSaveMutex = Mutex()
+    private val configSaveCounterLock = Any()
+    private var configSaveCounter = 0
     private var modelDiscoveryJob: Job? = null
     private var modelDiscoveryToken = 0L
 
@@ -173,6 +180,7 @@ class SyncTextUiController(
                 modelDiscoveryMessage = local.modelDiscoveryMessage,
                 translationConnectionTest = local.translationConnectionTest,
                 asrConnectionTest = local.asrConnectionTest,
+                configSaving = local.configSaving,
                 busy = local.busy,
                 message = local.message,
             )
@@ -225,14 +233,7 @@ class SyncTextUiController(
                 repository.deleteCredential(action.credentialId)
                 "密钥已删除"
             }
-            is SyncTextAction.SaveConfig -> runAction {
-                repository.saveConfigWithSecrets(
-                    action.draft.toConfig(action.configId),
-                    asrSecret = action.draft.asrSecret,
-                    translationSecret = action.draft.translationSecret,
-                )
-                null
-            }
+            is SyncTextAction.SaveConfig -> saveConfig(action)
             is SyncTextAction.SetPresentationMode -> runAction {
                 repository.setPresentationMode(action.slotId, action.mode)
                 null
@@ -501,6 +502,35 @@ class SyncTextUiController(
             runCatching { block() }
                 .onSuccess { message -> overlay.update { it.copy(busy = false, message = message) } }
                 .onFailure(::handleFailure)
+        }
+    }
+
+    private fun saveConfig(action: SyncTextAction.SaveConfig) {
+        synchronized(configSaveCounterLock) { configSaveCounter++ }
+        overlay.update { it.copy(configSaving = true, message = null) }
+        scope.launch {
+            try {
+                configSaveMutex.withLock {
+                    repository.saveConfigWithSecrets(
+                        action.draft.toConfig(action.configId),
+                        asrSecret = action.draft.asrSecret,
+                        translationSecret = action.draft.translationSecret,
+                    )
+                }
+                overlay.update { it.copy(message = null) }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                overlay.update {
+                    it.copy(message = error.message?.takeIf(String::isNotBlank) ?: "配置保存失败")
+                }
+            } finally {
+                val remaining =
+                    synchronized(configSaveCounterLock) {
+                        configSaveCounter = (configSaveCounter - 1).coerceAtLeast(0)
+                        configSaveCounter
+                    }
+                overlay.update { it.copy(configSaving = remaining > 0) }
+            }
         }
     }
 

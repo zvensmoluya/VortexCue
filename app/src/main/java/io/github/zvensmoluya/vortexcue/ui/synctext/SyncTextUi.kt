@@ -28,6 +28,7 @@ import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -41,7 +42,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ContentPaste
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -68,6 +72,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -177,16 +182,36 @@ internal fun SyncTextConfigPage(
     }
     val asrCredentials = credentialsFor(state.credentials, CredentialPurpose.Asr)
     val translationCredentials = credentialsFor(state.credentials, CredentialPurpose.Translation)
-    LaunchedEffect(asrCredentials, asrDraft.credentialId) {
-        if (asrDraft.credentialId !in asrCredentials.map { it.credentialId }) {
-            asrDraft = asrDraft.copy(credentialId = asrCredentials.firstOrNull()?.credentialId)
+    var asrCredentialInitialized by remember(existing?.configId) { mutableStateOf(false) }
+    var translationCredentialInitialized by remember(existing?.configId) { mutableStateOf(false) }
+    LaunchedEffect(asrCredentials) {
+        if (asrCredentials.isEmpty()) return@LaunchedEffect
+        if (!asrCredentialInitialized) {
+            asrCredentialInitialized = true
+            if (asrDraft.credentialId == null) {
+                asrDraft = asrDraft.copy(credentialId = asrCredentials.first().credentialId)
+            }
+        } else if (asrDraft.credentialId != null &&
+            asrDraft.credentialId !in asrCredentials.map { it.credentialId }
+        ) {
+            asrDraft = asrDraft.copy(credentialId = null)
         }
     }
-    LaunchedEffect(translationCredentials, translationDraft.credentialId) {
-        if (translationDraft.credentialId !in translationCredentials.map { it.credentialId }) {
-            translationDraft = translationDraft.copy(credentialId = translationCredentials.firstOrNull()?.credentialId)
+    LaunchedEffect(translationCredentials) {
+        if (translationCredentials.isEmpty()) return@LaunchedEffect
+        if (!translationCredentialInitialized) {
+            translationCredentialInitialized = true
+            if (translationDraft.credentialId == null) {
+                translationDraft = translationDraft.copy(credentialId = translationCredentials.first().credentialId)
+            }
+        } else if (translationDraft.credentialId != null &&
+            translationDraft.credentialId !in translationCredentials.map { it.credentialId }
+        ) {
+            translationDraft = translationDraft.copy(credentialId = null)
         }
     }
+    val asrSavedCredential = state.credentials.firstOrNull { it.credentialId == asrDraft.credentialId }
+    val translationSavedCredential = state.credentials.firstOrNull { it.credentialId == translationDraft.credentialId }
     val focusManager = LocalFocusManager.current
     fun fullDraft(
         translation: TranslationPageDraft = translationDraft,
@@ -211,7 +236,7 @@ internal fun SyncTextConfigPage(
         asr: AsrPageDraft = asrDraft,
     ) {
         val draft = fullDraft(translation, asr)
-        if (!state.busy && draft.isComplete()) onAction(SyncTextAction.SaveConfig(existing?.configId, draft))
+        if (draft.isComplete()) onAction(SyncTextAction.SaveConfig(existing?.configId, draft))
     }
     fun discoverModels(translation: TranslationPageDraft = translationDraft) {
         if (isHttpsEndpoint(translation.endpoint) &&
@@ -231,6 +256,9 @@ internal fun SyncTextConfigPage(
         focusManager.clearFocus(force = true)
         commitDraft()
     }
+    DisposableEffect(Unit) {
+        onDispose { commitDraft() }
+    }
     Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
         PagerTabs(
             pagerState = pagerState,
@@ -243,6 +271,16 @@ internal fun SyncTextConfigPage(
                 }
             },
         )
+        if (state.configSaving) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                LinearProgressIndicator(modifier = Modifier.weight(1f), color = AppAccent)
+                Text("正在保存配置…", color = AppMutedText, fontSize = 12.sp)
+            }
+        }
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -261,6 +299,7 @@ internal fun SyncTextConfigPage(
                         modelDiscoveryMessage = state.modelDiscoveryMessage,
                         connectionTest = state.translationConnectionTest,
                         busy = state.busy,
+                        savedKeyMask = translationSavedCredential?.maskedValue,
                         listState = translationListState,
                         onDraftChanged = { translationDraft = it },
                         onCommit = { next -> commitDraft(translation = next) },
@@ -283,6 +322,7 @@ internal fun SyncTextConfigPage(
                         draft = asrDraft,
                         connectionTest = state.asrConnectionTest,
                         busy = state.busy,
+                        savedKeyMask = asrSavedCredential?.maskedValue,
                         listState = asrListState,
                         onDraftChanged = { asrDraft = it },
                         onCommit = { next -> commitDraft(asr = next) },
@@ -310,7 +350,7 @@ private fun PagerTabs(
 ) {
     val progress by remember(pagerState) {
         derivedStateOf {
-            (pagerState.currentPage + pagerState.currentPageOffsetFraction).coerceIn(0f, 1f)
+            (pagerState.currentPage - pagerState.currentPageOffsetFraction).coerceIn(0f, 1f)
         }
     }
     BoxWithConstraints(
@@ -354,6 +394,7 @@ private fun TranslationPage(
     modelDiscoveryMessage: String?,
     connectionTest: ConnectionTestUiState,
     busy: Boolean,
+    savedKeyMask: String?,
     listState: LazyListState,
     onDraftChanged: (TranslationPageDraft) -> Unit,
     onCommit: (TranslationPageDraft) -> Unit,
@@ -421,6 +462,7 @@ private fun TranslationPage(
             ApiKeyField(
                 value = draft.secret,
                 hasSavedKey = draft.credentialId != null,
+                savedKeyMask = savedKeyMask,
                 authenticationFailed = authFailure,
                 onValueChange = { onDraftChanged(draft.copy(secret = it)) },
                 onCommit = { value ->
@@ -458,6 +500,7 @@ private fun AsrPage(
     draft: AsrPageDraft,
     connectionTest: ConnectionTestUiState,
     busy: Boolean,
+    savedKeyMask: String?,
     listState: LazyListState,
     onDraftChanged: (AsrPageDraft) -> Unit,
     onCommit: (AsrPageDraft) -> Unit,
@@ -497,6 +540,7 @@ private fun AsrPage(
             ApiKeyField(
                 value = draft.secret,
                 hasSavedKey = draft.credentialId != null,
+                savedKeyMask = savedKeyMask,
                 authenticationFailed = authFailure,
                 onValueChange = { onDraftChanged(draft.copy(secret = it)) },
                 onCommit = { value -> onCommit(draft.copy(secret = value)) },
@@ -590,6 +634,7 @@ private fun BaseUrlField(
 private fun ApiKeyField(
     value: String,
     hasSavedKey: Boolean,
+    savedKeyMask: String?,
     authenticationFailed: Boolean,
     onValueChange: (String) -> Unit,
     onCommit: (String) -> Unit,
@@ -598,33 +643,57 @@ private fun ApiKeyField(
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     var wasFocused by remember { mutableStateOf(false) }
+    var revealed by rememberSaveable { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ConfigFieldLabel("API Key")
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
-            placeholder = { Text(if (hasSavedKey) "已配置，留空保持不变" else "输入 API Key", color = AppMutedText) },
-            visualTransformation = PasswordVisualTransformation(),
+            placeholder = {
+                Text(
+                    when {
+                        hasSavedKey && savedKeyMask != null -> "已保存 $savedKeyMask，输入新值替换"
+                        hasSavedKey -> "已配置，留空保持不变"
+                        else -> "输入 API Key"
+                    },
+                    color = AppMutedText,
+                )
+            },
+            visualTransformation = if (revealed) VisualTransformation.None else PasswordVisualTransformation(),
             singleLine = true,
             isError = authenticationFailed,
             trailingIcon = {
-                IconButton(
-                    onClick = {
-                        scope.launch {
-                            clipboard.getClipEntry()
-                                ?.clipData
-                                ?.getItemAt(0)
-                                ?.text
-                                ?.toString()
-                                ?.takeIf(String::isNotBlank)
-                                ?.let {
-                                    onValueChange(it)
-                                    onCommit(it)
-                                }
-                        }
-                    },
-                    modifier = Modifier.semantics { contentDescription = "粘贴 API Key" },
-                ) { Icon(Icons.Outlined.ContentPaste, contentDescription = null, tint = AppSecondaryText) }
+                Row {
+                    IconButton(
+                        onClick = { revealed = !revealed },
+                        modifier = Modifier.semantics {
+                            contentDescription = if (revealed) "隐藏 API Key" else "显示 API Key"
+                        },
+                    ) {
+                        Icon(
+                            if (revealed) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                            contentDescription = null,
+                            tint = AppSecondaryText,
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            scope.launch {
+                                clipboard.getClipEntry()
+                                    ?.clipData
+                                    ?.getItemAt(0)
+                                    ?.text
+                                    ?.toString()
+                                    ?.takeIf(String::isNotBlank)
+                                    ?.let {
+                                        onValueChange(it)
+                                        onCommit(it)
+                                    }
+                            }
+                        },
+                        modifier = Modifier.semantics { contentDescription = "粘贴 API Key" },
+                    ) { Icon(Icons.Outlined.ContentPaste, contentDescription = null, tint = AppSecondaryText) }
+                }
             },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = {
@@ -639,7 +708,7 @@ private fun ApiKeyField(
                 errorContainerColor = AppSurfaceRaised,
             ),
             shape = ConfigControlShape,
-            modifier = Modifier.fillMaxWidth().heightIn(min = ConfigControlHeight).onFocusChanged { focusState ->
+            modifier = Modifier.fillMaxWidth().heightIn(min = ConfigControlHeight).testTag("sync-text-api-key-field").onFocusChanged { focusState ->
                 if (focusState.isFocused) wasFocused = true
                 else if (wasFocused) {
                     wasFocused = false
@@ -649,7 +718,11 @@ private fun ApiKeyField(
         )
         when {
             authenticationFailed -> Text("认证失败，请检查密钥", color = AppError, fontSize = 12.sp)
-            hasSavedKey && value.isBlank() -> Text("已配置，留空保持不变", color = AppMutedText, fontSize = 12.sp)
+            hasSavedKey && value.isBlank() -> Text(
+                if (savedKeyMask != null) "已保存 $savedKeyMask，留空保持不变" else "已配置，留空保持不变",
+                color = AppMutedText,
+                fontSize = 12.sp,
+            )
         }
     }
 }
@@ -866,7 +939,7 @@ private fun ConnectionStatusRow(
         Text(
             when {
                 state.running -> "正在连接…"
-                stale -> "配置已修改"
+                stale -> "需要重新测试"
                 state.success == true -> "✓ 服务可用"
                 failure -> "× 连接失败"
                 else -> "测试连接"
@@ -875,10 +948,17 @@ private fun ConnectionStatusRow(
             modifier = Modifier.weight(1f),
         )
         when {
-            state.running -> Text("◌", color = AppSecondaryText)
+            state.running -> CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = AppAccent,
+            )
             stale -> TextButton(enabled = enabled, onClick = onClick) { Text("重新测试", color = AppAccent) }
             state.success == true -> TextButton(enabled = enabled, onClick = onClick) { Text("重新测试", color = AppAccent) }
-            failure -> TextButton(onClick = onDetails) { Text("查看详情", color = AppAccent) }
+            failure -> Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                TextButton(onClick = onDetails) { Text("详情", color = AppAccent) }
+                TextButton(enabled = enabled, onClick = onClick) { Text("重试", color = AppAccent) }
+            }
             else -> TextButton(enabled = enabled, onClick = onClick) { Text("未测试", color = AppSecondaryText) }
         }
     }
