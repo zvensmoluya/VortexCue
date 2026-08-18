@@ -9,9 +9,13 @@ import io.github.zvensmoluya.vortexcue.synctext.AudioWindowExtractor
 import io.github.zvensmoluya.vortexcue.synctext.CredentialMetadata
 import io.github.zvensmoluya.vortexcue.synctext.CredentialPurpose
 import io.github.zvensmoluya.vortexcue.synctext.GenerationInput
+import io.github.zvensmoluya.vortexcue.synctext.GenerationErrorCategory
 import io.github.zvensmoluya.vortexcue.synctext.GenerationOutput
 import io.github.zvensmoluya.vortexcue.synctext.GenerationRequest
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskSummary
+import io.github.zvensmoluya.vortexcue.synctext.AsrException
+import io.github.zvensmoluya.vortexcue.synctext.CredentialUnavailableException
+import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocolException
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextConfig
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextRepository
 import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
@@ -47,6 +51,9 @@ data class ConnectionTestUiState(
     val running: Boolean = false,
     val success: Boolean? = null,
     val message: String? = null,
+    val testedFingerprint: String? = null,
+    val failureCategory: GenerationErrorCategory? = null,
+    val failureStatus: Int? = null,
 )
 
 data class SyncTextUiState(
@@ -88,6 +95,7 @@ sealed interface SyncTextAction {
         val model: String,
         val credentialId: String?,
         val apiKey: String?,
+        val configurationFingerprint: String,
     ) : SyncTextAction
 
     data class TestAsrConnection(
@@ -95,6 +103,7 @@ sealed interface SyncTextAction {
         val endpoint: String,
         val credentialId: String?,
         val apiKey: String?,
+        val configurationFingerprint: String,
     ) : SyncTextAction
 
     data class SaveCredential(
@@ -193,6 +202,7 @@ class SyncTextUiController(
                     model = action.model,
                     credentialId = action.credentialId,
                     apiKey = action.apiKey,
+                    configurationFingerprint = action.configurationFingerprint,
                 )
             is SyncTextAction.TestAsrConnection ->
                 testAsrConnection(
@@ -200,6 +210,7 @@ class SyncTextUiController(
                     endpoint = action.endpoint,
                     credentialId = action.credentialId,
                     apiKey = action.apiKey,
+                    configurationFingerprint = action.configurationFingerprint,
                 )
             is SyncTextAction.SaveCredential -> runAction {
                 repository.saveCredential(
@@ -298,6 +309,7 @@ class SyncTextUiController(
         model: String,
         credentialId: String?,
         apiKey: String?,
+        configurationFingerprint: String,
     ) {
         overlay.update {
             it.copy(translationConnectionTest = ConnectionTestUiState(running = true))
@@ -309,7 +321,11 @@ class SyncTextUiController(
                 overlay.update {
                     it.copy(
                         translationConnectionTest =
-                            ConnectionTestUiState(success = true, message = "连接成功"),
+                            ConnectionTestUiState(
+                                success = true,
+                                message = "连接成功",
+                                testedFingerprint = configurationFingerprint,
+                            ),
                     )
                 }
             }.onFailure { error ->
@@ -317,7 +333,7 @@ class SyncTextUiController(
                 overlay.update {
                     it.copy(
                         translationConnectionTest =
-                            ConnectionTestUiState(success = false, message = error.message ?: "连接失败"),
+                            error.toConnectionTestUiState(configurationFingerprint),
                     )
                 }
             }
@@ -329,6 +345,7 @@ class SyncTextUiController(
         endpoint: String,
         credentialId: String?,
         apiKey: String?,
+        configurationFingerprint: String,
     ) {
         overlay.update { it.copy(asrConnectionTest = ConnectionTestUiState(running = true)) }
         scope.launch {
@@ -336,14 +353,21 @@ class SyncTextUiController(
                 repository.testAsrConnection(profile, endpoint, credentialId, apiKey)
             }.onSuccess {
                 overlay.update {
-                    it.copy(asrConnectionTest = ConnectionTestUiState(success = true, message = "连接成功"))
+                    it.copy(
+                        asrConnectionTest =
+                            ConnectionTestUiState(
+                                success = true,
+                                message = "连接成功",
+                                testedFingerprint = configurationFingerprint,
+                            ),
+                    )
                 }
             }.onFailure { error ->
                 if (error is CancellationException) throw error
                 overlay.update {
                     it.copy(
                         asrConnectionTest =
-                            ConnectionTestUiState(success = false, message = error.message ?: "连接失败"),
+                            error.toConnectionTestUiState(configurationFingerprint),
                     )
                 }
             }
@@ -490,6 +514,29 @@ class SyncTextUiController(
             )
         }
     }
+}
+
+private fun Throwable.toConnectionTestUiState(fingerprint: String): ConnectionTestUiState {
+    val category =
+        when (this) {
+            is TranslationProtocolException -> category
+            is AsrException -> category
+            is CredentialUnavailableException -> GenerationErrorCategory.Authentication
+            else -> null
+        }
+    val status =
+        when (this) {
+            is TranslationProtocolException -> httpStatus
+            is AsrException -> httpStatus
+            else -> null
+        }
+    return ConnectionTestUiState(
+        success = false,
+        message = message?.takeIf(String::isNotBlank) ?: "连接失败",
+        testedFingerprint = fingerprint,
+        failureCategory = category,
+        failureStatus = status,
+    )
 }
 
 internal sealed interface GenerationLaunchPlan {

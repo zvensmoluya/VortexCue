@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -169,7 +170,6 @@ internal fun MainTabScreen(
     var notice by remember { mutableStateOf<String?>(null) }
     val contentListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val queueListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
-    val configListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val settingsListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
 
     LaunchedEffect(selectedFolderId, folders) {
@@ -327,7 +327,6 @@ internal fun MainTabScreen(
                     ConfigTab(
                         state = syncTextUiState,
                         onAction = onSyncTextAction,
-                        listState = configListState,
                     )
                 MainTab.Settings ->
                     SettingsTab(
@@ -728,9 +727,8 @@ private fun QueueTab(
 private fun ConfigTab(
     state: SyncTextUiState,
     onAction: (SyncTextAction) -> Unit,
-    listState: LazyListState,
 ) {
-    SyncTextConfigPage(state = state, onAction = onAction, listState = listState)
+    SyncTextConfigPage(state = state, onAction = onAction)
 }
 
 @Composable
@@ -1120,23 +1118,40 @@ internal fun MainNavigationBar(
             colors = navigationColors(),
         )
         MainTab.entries.drop(2).forEach { tab ->
+            val selected = selectedTab == tab
             NavigationBarItem(
-                selected = selectedTab == tab,
+                selected = selected,
                 onClick = { onTabChanged(tab) },
-                icon = { Icon(tab.icon(), contentDescription = tab.label()) },
+                icon = {
+                    if (tab == MainTab.Config) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .background(
+                                    if (selected) AppSurfaceSelected else Color.Transparent,
+                                    RoundedCornerShape(10.dp),
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(tab.icon(), contentDescription = tab.label())
+                        }
+                    } else {
+                        Icon(tab.icon(), contentDescription = tab.label())
+                    }
+                },
                 label = { Text(tab.label()) },
-                colors = navigationColors(),
+                colors = if (tab == MainTab.Config) navigationColors(indicatorColor = Color.Transparent) else navigationColors(),
             )
         }
     }
 }
 
 @Composable
-private fun navigationColors() =
+private fun navigationColors(indicatorColor: Color = AppSurfaceSelected) =
     NavigationBarItemDefaults.colors(
         selectedIconColor = AppPrimaryText,
         selectedTextColor = AppPrimaryText,
-        indicatorColor = AppSurfaceSelected,
+        indicatorColor = indicatorColor,
         unselectedIconColor = AppMutedText,
         unselectedTextColor = AppMutedText,
     )
