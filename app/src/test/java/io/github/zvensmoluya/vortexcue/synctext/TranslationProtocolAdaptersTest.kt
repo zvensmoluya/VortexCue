@@ -19,7 +19,7 @@ class TranslationProtocolAdaptersTest {
         val cases =
             listOf(
                 ProtocolCase(
-                    expectedPath = "/v1/responses",
+                    expectedPath = "/responses",
                     adapter = { ResponsesTranslationAdapter(it) },
                     authName = "Authorization",
                     authValue = "Bearer test-key",
@@ -37,7 +37,7 @@ class TranslationProtocolAdaptersTest {
                     expectedOutput = 6L,
                 ),
                 ProtocolCase(
-                    expectedPath = "/v1/chat/completions",
+                    expectedPath = "/chat/completions",
                     adapter = { ChatCompletionsTranslationAdapter(it) },
                     authName = "Authorization",
                     authValue = "Bearer test-key",
@@ -107,7 +107,7 @@ class TranslationProtocolAdaptersTest {
             val response = adapter.translateStreaming(request(server.url("/").toString()))
             val recorded = server.takeRequest()
 
-            assertEquals("/v1/chat/completions", recorded.target)
+            assertEquals("/chat/completions", recorded.target)
             assertEquals("[cue-1] one", response.text)
             assertEquals(7L, response.usage.inputTokens)
             assertEquals(8L, response.usage.outputTokens)
@@ -123,7 +123,7 @@ class TranslationProtocolAdaptersTest {
             listOf(
                 StreamingProtocolCase(
                     adapter = { ResponsesTranslationAdapter(it) },
-                    expectedPath = "/v1/responses",
+                    expectedPath = "/responses",
                     response =
                         """
                         data: {"type":"response.output_text.delta","delta":"[cue-1] "}
@@ -188,6 +188,29 @@ class TranslationProtocolAdaptersTest {
                 assertEquals(case.input, response.usage.inputTokens)
                 assertEquals(case.output, response.usage.outputTokens)
             }
+        }
+    }
+
+    @Test
+    fun `google template switches to the streaming operation`() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(
+                MockResponse(
+                    headers = headersOf("Content-Type", "text/event-stream"),
+                    body = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"OK\"}]}}]}\n\n",
+                ),
+            )
+            val adapter = GoogleGenerateContentTranslationAdapter(BoundedHttpExecutor(testClient()))
+
+            adapter.translateStreaming(
+                request(server.url("/v1beta/models/{model}:generateContent").toString()),
+            )
+
+            assertEquals(
+                "/v1beta/models/model-test:streamGenerateContent?alt=sse",
+                server.takeRequest().target,
+            )
         }
     }
 

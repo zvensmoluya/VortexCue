@@ -8,7 +8,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import okhttp3.HttpUrl
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 
 /**
@@ -19,49 +18,45 @@ import okhttp3.Request
  */
 class TranslationModelCatalog(
     private val executor: BoundedHttpExecutor,
+    private val endpointResolver: TranslationEndpointResolver = TranslationEndpointResolver(),
 ) {
     suspend fun fetch(protocol: TranslationProtocol, endpoint: String, apiKey: String): List<String> {
-        val requestUrl = resolveModelsEndpoint(protocol, endpoint)
-        val request =
-            Request.Builder()
-                .url(requestUrl)
-                .get()
-                .apply {
-                    when (protocol) {
-                        TranslationProtocol.AnthropicMessages -> header("x-api-key", apiKey)
-                        TranslationProtocol.GoogleGenerateContent -> header("x-goog-api-key", apiKey)
-                        TranslationProtocol.Responses,
-                        TranslationProtocol.ChatCompletions,
-                        -> header("Authorization", "Bearer $apiKey")
+        var lastRouteStatus: Int? = null
+        endpointResolver.modelCandidates(protocol, endpoint).forEach { route ->
+            val request =
+                Request.Builder()
+                    .url(route.modelsUrl)
+                    .get()
+                    .apply {
+                        when (protocol) {
+                            TranslationProtocol.AnthropicMessages -> header("x-api-key", apiKey)
+                            TranslationProtocol.GoogleGenerateContent -> header("x-goog-api-key", apiKey)
+                            TranslationProtocol.Responses,
+                            TranslationProtocol.ChatCompletions,
+                            -> header("Authorization", "Bearer $apiKey")
+                        }
                     }
-                }
-                .build()
-        val exchange = executor.execute(request)
-        if (exchange.status !in 200..299) {
-            throw IOException("模型列表暂时不可用（HTTP ${exchange.status}）")
+                    .build()
+            val exchange = executor.execute(request)
+            if (exchange.status in 200..299) {
+                endpointResolver.remember(protocol, endpoint, route.requestBase)
+                return parseModelIds(exchange.body)
+            }
+            lastRouteStatus = exchange.status
+            if (exchange.status !in RouteFallbackStatuses) {
+                throw IOException("模型列表请求失败（HTTP ${exchange.status}）")
+            }
         }
-        return parseModelIds(exchange.body)
+        throw IOException("服务未提供模型列表，可以直接填写模型（HTTP ${lastRouteStatus ?: 404}）")
+    }
+
+    companion object {
+        private val RouteFallbackStatuses = setOf(404, 405)
     }
 }
 
-internal fun resolveModelsEndpoint(protocol: TranslationProtocol, endpoint: String): HttpUrl {
-    val base = endpoint.trim().removeSuffix("/").toHttpUrl()
-    val path = base.encodedPath.trimEnd('/')
-    val resourceSuffixes = listOf("/responses", "/messages", "/chat/completions")
-    val withoutResource =
-        resourceSuffixes.firstOrNull { path.endsWith(it) }?.let { path.removeSuffix(it) } ?: path
-    val builder = base.newBuilder().encodedPath(withoutResource.ifBlank { "/" })
-    val currentPath = withoutResource.trimEnd('/')
-    if (protocol == TranslationProtocol.GoogleGenerateContent) {
-        if (currentPath.isEmpty() || currentPath == "/") builder.addPathSegment("v1beta")
-        else if (!currentPath.endsWith("/v1beta")) builder.addPathSegment("v1beta")
-    } else if (currentPath.isEmpty() || currentPath == "/") {
-        builder.addPathSegment("v1")
-    } else if (!currentPath.endsWith("/v1") && !currentPath.endsWith("/v1beta")) {
-        builder.addPathSegment("v1")
-    }
-    return builder.addPathSegment("models").build()
-}
+internal fun resolveModelsEndpoint(protocol: TranslationProtocol, endpoint: String): HttpUrl =
+    TranslationEndpointResolver().modelCandidates(protocol, endpoint).first().modelsUrl
 
 internal fun parseModelIds(bytes: ByteArray): List<String> {
     val root = runCatching { Json.parseToJsonElement(bytes.toString(Charsets.UTF_8)).jsonObject }.getOrNull()

@@ -386,6 +386,7 @@ data class StreamingTextEvent(
 
 abstract class JsonTranslationProtocolAdapter(
     private val executor: BoundedHttpExecutor,
+    protected val endpointResolver: TranslationEndpointResolver = TranslationEndpointResolver(),
 ) : TranslationProtocolAdapter {
     protected val json = Json { ignoreUnknownKeys = true; isLenient = false }
 
@@ -609,11 +610,14 @@ abstract class JsonTranslationProtocolAdapter(
     }
 }
 
-class ResponsesTranslationAdapter(executor: BoundedHttpExecutor) : JsonTranslationProtocolAdapter(executor) {
+class ResponsesTranslationAdapter(
+    executor: BoundedHttpExecutor,
+    endpointResolver: TranslationEndpointResolver = TranslationEndpointResolver(),
+) : JsonTranslationProtocolAdapter(executor, endpointResolver) {
     override val protocol = TranslationProtocol.Responses
 
     override fun endpoint(request: TranslationProviderRequest): HttpUrl =
-        resolveOpenAiStyleEndpoint(request.endpoint, "responses")
+        endpointResolver.requestEndpoint(protocol, request.endpoint, "responses")
 
     override fun authenticationHeaders(apiKey: String) = mapOf("Authorization" to "Bearer $apiKey")
 
@@ -666,11 +670,14 @@ class ResponsesTranslationAdapter(executor: BoundedHttpExecutor) : JsonTranslati
     }
 }
 
-class AnthropicMessagesTranslationAdapter(executor: BoundedHttpExecutor) : JsonTranslationProtocolAdapter(executor) {
+class AnthropicMessagesTranslationAdapter(
+    executor: BoundedHttpExecutor,
+    endpointResolver: TranslationEndpointResolver = TranslationEndpointResolver(),
+) : JsonTranslationProtocolAdapter(executor, endpointResolver) {
     override val protocol = TranslationProtocol.AnthropicMessages
 
     override fun endpoint(request: TranslationProviderRequest): HttpUrl =
-        resolveAnthropicEndpoint(request.endpoint)
+        endpointResolver.requestEndpoint(protocol, request.endpoint, "messages")
 
     override fun authenticationHeaders(apiKey: String) =
         mapOf("x-api-key" to apiKey, "anthropic-version" to "2023-06-01")
@@ -718,11 +725,14 @@ class AnthropicMessagesTranslationAdapter(executor: BoundedHttpExecutor) : JsonT
     }
 }
 
-class ChatCompletionsTranslationAdapter(executor: BoundedHttpExecutor) : JsonTranslationProtocolAdapter(executor) {
+class ChatCompletionsTranslationAdapter(
+    executor: BoundedHttpExecutor,
+    endpointResolver: TranslationEndpointResolver = TranslationEndpointResolver(),
+) : JsonTranslationProtocolAdapter(executor, endpointResolver) {
     override val protocol = TranslationProtocol.ChatCompletions
 
     override fun endpoint(request: TranslationProviderRequest): HttpUrl =
-        resolveOpenAiStyleEndpoint(request.endpoint, "chat/completions")
+        endpointResolver.requestEndpoint(protocol, request.endpoint, "chat/completions")
 
     override fun authenticationHeaders(apiKey: String) = mapOf("Authorization" to "Bearer $apiKey")
 
@@ -777,14 +787,21 @@ class ChatCompletionsTranslationAdapter(executor: BoundedHttpExecutor) : JsonTra
     }
 }
 
-class GoogleGenerateContentTranslationAdapter(executor: BoundedHttpExecutor) : JsonTranslationProtocolAdapter(executor) {
+class GoogleGenerateContentTranslationAdapter(
+    executor: BoundedHttpExecutor,
+    endpointResolver: TranslationEndpointResolver = TranslationEndpointResolver(),
+) : JsonTranslationProtocolAdapter(executor, endpointResolver) {
     override val protocol = TranslationProtocol.GoogleGenerateContent
 
     override fun endpoint(request: TranslationProviderRequest): HttpUrl =
-        resolveGoogleEndpoint(request.endpoint, request.model)
+        endpointResolver.requestEndpoint(protocol, request.endpoint, "models/${request.model}:generateContent", request.model)
 
     override fun streamingEndpoint(request: TranslationProviderRequest): HttpUrl =
-        resolveGoogleStreamingEndpoint(request.endpoint, request.model)
+        endpointResolver
+            .requestEndpoint(protocol, request.endpoint, "models/${request.model}:streamGenerateContent", request.model)
+            .newBuilder()
+            .setQueryParameter("alt", "sse")
+            .build()
 
     override fun authenticationHeaders(apiKey: String) = mapOf("x-goog-api-key" to apiKey)
 
@@ -841,60 +858,17 @@ class GoogleGenerateContentTranslationAdapter(executor: BoundedHttpExecutor) : J
     }
 }
 
-fun defaultTranslationAdapters(httpClient: SyncTextHttpClient): List<TranslationProtocolAdapter> {
+fun defaultTranslationAdapters(
+    httpClient: SyncTextHttpClient,
+    endpointResolver: TranslationEndpointResolver = TranslationEndpointResolver(),
+): List<TranslationProtocolAdapter> {
     val executor = BoundedHttpExecutor(httpClient.client)
     return listOf(
-        ResponsesTranslationAdapter(executor),
-        AnthropicMessagesTranslationAdapter(executor),
-        ChatCompletionsTranslationAdapter(executor),
-        GoogleGenerateContentTranslationAdapter(executor),
+        ResponsesTranslationAdapter(executor, endpointResolver),
+        AnthropicMessagesTranslationAdapter(executor, endpointResolver),
+        ChatCompletionsTranslationAdapter(executor, endpointResolver),
+        GoogleGenerateContentTranslationAdapter(executor, endpointResolver),
     )
-}
-
-private fun resolveOpenAiStyleEndpoint(endpoint: String, resource: String): HttpUrl {
-    val base = endpoint.toHttpUrl()
-    val path = base.encodedPath.trimEnd('/')
-    if (path.endsWith("/$resource")) return base
-    if (path == "" || path == "/") return base.newBuilder().addPathSegment("v1").addPathSegments(resource).build()
-    if (path.endsWith("/v1")) return base.newBuilder().addPathSegments(resource).build()
-    return base
-}
-
-private fun resolveAnthropicEndpoint(endpoint: String): HttpUrl {
-    val base = endpoint.toHttpUrl()
-    val path = base.encodedPath.trimEnd('/')
-    if (path.endsWith("/messages")) return base
-    if (path == "" || path == "/") return base.newBuilder().addPathSegment("v1").addPathSegment("messages").build()
-    if (path.endsWith("/v1")) return base.newBuilder().addPathSegment("messages").build()
-    return base
-}
-
-private fun resolveGoogleEndpoint(endpoint: String, model: String): HttpUrl {
-    if ("{model}" in endpoint) return endpoint.replace("{model}", model).toHttpUrl()
-    val base = endpoint.toHttpUrl()
-    val path = base.encodedPath.trimEnd('/')
-    if (path.endsWith(":generateContent")) return base
-    val builder = base.newBuilder()
-    if (path == "" || path == "/") builder.addPathSegment("v1beta")
-    if (path == "" || path == "/" || path.endsWith("/v1") || path.endsWith("/v1beta")) {
-        return builder.addPathSegment("models").addPathSegment("$model:generateContent").build()
-    }
-    return base
-}
-
-private fun resolveGoogleStreamingEndpoint(endpoint: String, model: String): HttpUrl {
-    val regular = resolveGoogleEndpoint(endpoint, model)
-    val path = regular.encodedPath
-    val streamPath =
-        when {
-            path.endsWith(":streamGenerateContent") -> path
-            path.endsWith(":generateContent") -> path.removeSuffix(":generateContent") + ":streamGenerateContent"
-            else -> path
-        }
-    return regular.newBuilder()
-        .encodedPath(streamPath)
-        .setQueryParameter("alt", "sse")
-        .build()
 }
 
 private fun JsonObject.string(name: String): String? =

@@ -283,7 +283,9 @@ class SyncTextUiController(
                         it.copy(
                             availableTranslationModels = emptyList(),
                             loadingTranslationModels = false,
-                            modelDiscoveryMessage = "暂时无法获取模型列表，可以直接填写模型",
+                            modelDiscoveryMessage =
+                                error.message?.takeIf(String::isNotBlank)
+                                    ?: "暂时无法获取模型列表，可以直接填写模型",
                         )
                     }
                 }

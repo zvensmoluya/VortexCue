@@ -24,6 +24,7 @@ import io.github.zvensmoluya.vortexcue.synctext.SyncTextRepository
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextTaskRunner
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextConnectionTester
 import io.github.zvensmoluya.vortexcue.synctext.TranslationAdapterRegistry
+import io.github.zvensmoluya.vortexcue.synctext.TranslationEndpointResolver
 import io.github.zvensmoluya.vortexcue.synctext.TranslationModelCatalog
 import io.github.zvensmoluya.vortexcue.synctext.TranslationNetworkGateway
 import io.github.zvensmoluya.vortexcue.synctext.TranslationPolicyRegistry
@@ -68,16 +69,18 @@ class AppContainer(context: Context) {
     val syncTextScheduler = AndroidSyncTextScheduler(appContext)
     val syncTextNetworkState = AndroidSyncTextNetworkState(appContext)
     private val syncTextHttpClient = SyncTextHttpClient(appContext.appVersionName())
+    private val translationEndpointResolver = TranslationEndpointResolver()
     private val translationNetworkGateway =
         TranslationNetworkGateway(
-            TranslationAdapterRegistry(defaultTranslationAdapters(syncTextHttpClient)),
+            TranslationAdapterRegistry(defaultTranslationAdapters(syncTextHttpClient, translationEndpointResolver)),
             streamResponses = true,
         )
     private val openRouterAsrEngine = OpenRouterAsrEngine(BoundedHttpExecutor(syncTextHttpClient.client), EncodedAudioBudget())
     private val connectionTester = SyncTextConnectionTester(translationNetworkGateway, openRouterAsrEngine)
     private val pcmSpool = BoundedPcmSpool(appContext)
     private val audioWindowExtractor = PlatformAudioWindowExtractor(appContext)
-    private val translationModelCatalog = TranslationModelCatalog(BoundedHttpExecutor(syncTextHttpClient.client))
+    private val translationModelCatalog =
+        TranslationModelCatalog(BoundedHttpExecutor(syncTextHttpClient.client), translationEndpointResolver)
     val syncTextRepository =
         SyncTextRepository(
             database = database,
