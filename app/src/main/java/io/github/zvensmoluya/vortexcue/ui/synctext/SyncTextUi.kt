@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -24,8 +25,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Tab
-import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -37,14 +36,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextOrigin
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextReadiness
 import io.github.zvensmoluya.vortexcue.data.ContentDetails
@@ -59,12 +60,12 @@ import io.github.zvensmoluya.vortexcue.synctext.SyncTextConfig
 import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocol
 import io.github.zvensmoluya.vortexcue.ui.theme.AppAccent
-import io.github.zvensmoluya.vortexcue.ui.theme.AppBackground
 import io.github.zvensmoluya.vortexcue.ui.theme.AppError
 import io.github.zvensmoluya.vortexcue.ui.theme.AppMutedText
 import io.github.zvensmoluya.vortexcue.ui.theme.AppPrimaryText
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSecondaryText
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceRaised
+import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceSelected
 import java.net.URI
 
 @Composable
@@ -73,12 +74,6 @@ fun SyncTextUiHost(
     onAction: (SyncTextAction) -> Unit,
 ) {
     when {
-        state.configEditorVisible ->
-            SingleConfigDialog(
-                state = state,
-                onAction = onAction,
-                onDismiss = { onAction(SyncTextAction.CloseConfigEditor) },
-            )
         state.generationContent != null ->
             GenerationInputDialog(
                 content = state.generationContent,
@@ -104,70 +99,6 @@ fun SyncTextUiHost(
 private enum class ConfigSection {
     Translation,
     Asr,
-}
-
-@Composable
-private fun SingleConfigDialog(
-    state: SyncTextUiState,
-    onAction: (SyncTextAction) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var section by rememberSaveable { mutableStateOf(ConfigSection.Translation) }
-
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Column(
-            modifier =
-                Modifier
-                    .fillMaxSize()
-                    .background(AppBackground)
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 20.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "同步文字设置",
-                    color = AppPrimaryText,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = onDismiss) { Text("返回", color = AppAccent) }
-            }
-            state.message?.let {
-                Text(it, color = if (it.contains("保存")) AppSecondaryText else AppError, fontSize = 12.sp)
-            }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                item {
-                    ConfigForm(
-                        existing = state.config,
-                        credentials = state.credentials,
-                        section = section,
-                        availableModels = state.availableTranslationModels,
-                        loadingModels = state.loadingTranslationModels,
-                        modelDiscoveryMessage = state.modelDiscoveryMessage,
-                        translationConnectionTest = state.translationConnectionTest,
-                        asrConnectionTest = state.asrConnectionTest,
-                        busy = state.busy,
-                        onSectionChanged = { section = it },
-                        onDiscoverModels = { protocol, endpoint, credentialId, apiKey ->
-                            onAction(SyncTextAction.DiscoverTranslationModels(protocol, endpoint, credentialId, apiKey))
-                        },
-                        onTestTranslation = { protocol, endpoint, model, credentialId, apiKey ->
-                            onAction(SyncTextAction.TestTranslationConnection(protocol, endpoint, model, credentialId, apiKey))
-                        },
-                        onTestAsr = { profile, endpoint, credentialId, apiKey ->
-                            onAction(SyncTextAction.TestAsrConnection(profile, endpoint, credentialId, apiKey))
-                        },
-                        onSave = { draft ->
-                            onAction(SyncTextAction.SaveConfig(state.config?.configId, draft))
-                        },
-                    )
-                }
-            }
-        }
-    }
 }
 
 @Composable
@@ -238,141 +169,219 @@ private fun ConfigForm(
         }
     }
 
+    val draft = SyncTextConfigDraft(
+        asrProfile = asrProfile,
+        asrEndpoint = asrEndpoint,
+        asrCredentialId = asrCredentialId,
+        asrSecret = asrSecret.takeIf(String::isNotBlank),
+        translationProtocol = protocol,
+        translationEndpoint = endpoint,
+        translationUserAgent = existing?.translationUserAgent,
+        translationModel = model,
+        translationCredentialId = translationCredentialId,
+        translationSecret = translationSecret.takeIf(String::isNotBlank),
+        targetLanguage = requireNotNull(normalizedTarget ?: "zh-CN"),
+        presentationMode = presentationMode,
+    )
+    val canSave = !busy && asrEndpointValid && translationEndpointValid &&
+        (asrCredentialId != null || asrSecret.isNotBlank()) &&
+        (translationCredentialId != null || translationSecret.isNotBlank()) &&
+        model.isNotBlank()
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        PrimaryTabRow(selectedTabIndex = section.ordinal) {
-            Tab(
-                selected = section == ConfigSection.Translation,
-                onClick = { onSectionChanged(ConfigSection.Translation) },
-                text = { Text("翻译") },
-            )
-            Tab(
-                selected = section == ConfigSection.Asr,
-                onClick = { onSectionChanged(ConfigSection.Asr) },
-                text = { Text("语音识别") },
-            )
-        }
-        if (section == ConfigSection.Translation) {
-            Text("翻译服务", color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
-            ProtocolPicker(
-                value = protocol,
-                onValueChange = { candidate ->
-                    val wasDefault = endpoint == protocol.defaultBaseUrl() || endpoint == protocol.defaultEndpoint()
-                    protocol = candidate
-                    if (wasDefault) endpoint = candidate.defaultBaseUrl()
-                    dirty = true
-                },
-            )
-            OutlinedTextField(
-                value = endpoint,
-                onValueChange = { endpoint = it; dirty = true },
-                label = { Text("服务地址") },
-                placeholder = { Text(protocol.defaultBaseUrl()) },
-                supportingText = {
-                    when {
-                        !translationEndpointValid -> Text("请输入有效的 HTTPS 地址")
-                        loadingModels -> Text("正在查找可用模型…")
-                        modelDiscoveryMessage != null -> Text(modelDiscoveryMessage)
-                    }
-                },
-                isError = !translationEndpointValid,
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            ModelPicker(
-                value = model,
-                options = availableModels,
-                loading = loadingModels,
-                onValueChange = { model = it; dirty = true },
-            )
-            ApiKeyField(
-                value = translationSecret,
-                hasSavedKey = translationCredentialId != null,
-                onValueChange = { translationSecret = it; dirty = true },
-            )
-            ConnectionTestButton(
-                state = translationConnectionTest,
-                enabled = translationEndpointValid && model.isNotBlank() &&
-                    (translationCredentialId != null || translationSecret.isNotBlank()),
-                onClick = {
-                    onTestTranslation(
-                        protocol,
-                        endpoint,
-                        model,
-                        translationCredentialId,
-                        translationSecret.takeIf(String::isNotBlank),
-                    )
-                },
-            )
-        } else {
-            Text("语音识别", color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
-            ChoiceButtons(
-                options = AsrProfile.entries,
-                selected = asrProfile,
-                label = { it.displayLabel() },
-                onSelected = { asrProfile = it; dirty = true },
-            )
-            Text(
-                "当前模型：${asrProfile.displayModelLabel()}",
-                color = AppMutedText,
-                fontSize = 11.sp,
-            )
-            OutlinedTextField(
-                value = asrEndpoint,
-                onValueChange = { asrEndpoint = it; dirty = true },
-                label = { Text("服务地址") },
-                placeholder = { Text("https://openrouter.ai/api/v1") },
-                supportingText = { if (!asrEndpointValid) Text("请输入有效的 HTTPS 地址") },
-                isError = !asrEndpointValid,
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            ApiKeyField(
-                value = asrSecret,
-                hasSavedKey = asrCredentialId != null,
-                onValueChange = { asrSecret = it; dirty = true },
-            )
-            ConnectionTestButton(
-                state = asrConnectionTest,
-                enabled = asrEndpointValid && (asrCredentialId != null || asrSecret.isNotBlank()),
-                onClick = {
-                    onTestAsr(
-                        asrProfile,
-                        asrEndpoint,
-                        asrCredentialId,
-                        asrSecret.takeIf(String::isNotBlank),
-                    )
-                },
-            )
+        Row(
+            modifier = Modifier.fillMaxWidth().background(AppSurfaceRaised, RoundedCornerShape(14.dp)).padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            listOf(ConfigSection.Translation to "翻译", ConfigSection.Asr to "语音识别").forEach { (candidate, label) ->
+                TextButton(
+                    onClick = { onSectionChanged(candidate) },
+                    modifier = Modifier.weight(1f).background(
+                        if (section == candidate) AppSurfaceSelected else Color.Transparent,
+                        RoundedCornerShape(10.dp),
+                    ),
+                ) {
+                    Text(label, color = if (section == candidate) AppPrimaryText else AppSecondaryText)
+                }
+            }
         }
         if (dirty) {
-            TextButton(
-                enabled =
-                    !busy && asrEndpointValid && translationEndpointValid &&
-                        (asrCredentialId != null || asrSecret.isNotBlank()) &&
-                        (translationCredentialId != null || translationSecret.isNotBlank()) &&
-                        model.isNotBlank() && normalizedTarget != null,
-                onClick = {
-                    onSave(
-                        SyncTextConfigDraft(
-                            asrProfile = asrProfile,
-                            asrEndpoint = asrEndpoint,
-                            asrCredentialId = asrCredentialId,
-                            asrSecret = asrSecret.takeIf(String::isNotBlank),
-                            translationProtocol = protocol,
-                            translationEndpoint = endpoint,
-                            translationUserAgent = existing?.translationUserAgent,
-                            translationModel = model,
-                            translationCredentialId = translationCredentialId,
-                            translationSecret = translationSecret.takeIf(String::isNotBlank),
-                            targetLanguage = requireNotNull(normalizedTarget),
-                            presentationMode = presentationMode,
-                        ),
-                    )
-                },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text(if (busy) "保存中…" else "保存更改", color = AppAccent) }
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("有未保存修改", color = AppMutedText, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                TextButton(enabled = canSave, onClick = { onSave(draft) }) {
+                    Text(if (busy) "保存中…" else "保存", color = AppAccent)
+                }
+            }
+        }
+        if (section == ConfigSection.Translation) {
+            Column(
+                modifier = Modifier.fillMaxWidth().background(AppSurfaceRaised, RoundedCornerShape(16.dp)).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("翻译服务", color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
+                ProtocolPicker(
+                    value = protocol,
+                    onValueChange = { candidate ->
+                        val wasDefault = endpoint == protocol.defaultBaseUrl() || endpoint == protocol.defaultEndpoint()
+                        protocol = candidate
+                        if (wasDefault) endpoint = candidate.defaultBaseUrl()
+                        dirty = true
+                    },
+                )
+                BaseUrlField(
+                    value = endpoint,
+                    placeholder = protocol.defaultBaseUrl(),
+                    supportingText = when {
+                        !translationEndpointValid -> "请输入有效的 HTTPS 地址"
+                        loadingModels -> "正在查找可用模型…"
+                        else -> modelDiscoveryMessage
+                    },
+                    isError = !translationEndpointValid,
+                    onValueChange = { endpoint = it; dirty = true },
+                )
+                ModelPicker(
+                    value = model,
+                    options = availableModels,
+                    loading = loadingModels,
+                    onValueChange = { model = it; dirty = true },
+                )
+                ApiKeyField(
+                    value = translationSecret,
+                    hasSavedKey = translationCredentialId != null,
+                    onValueChange = { translationSecret = it; dirty = true },
+                )
+                ConnectionTestButton(
+                    state = translationConnectionTest,
+                    enabled = translationEndpointValid && model.isNotBlank() &&
+                        (translationCredentialId != null || translationSecret.isNotBlank()),
+                    onClick = {
+                        onTestTranslation(
+                            protocol,
+                            endpoint,
+                            model,
+                            translationCredentialId,
+                            translationSecret.takeIf(String::isNotBlank),
+                        )
+                    },
+                )
+            }
+        } else {
+            Column(
+                modifier = Modifier.fillMaxWidth().background(AppSurfaceRaised, RoundedCornerShape(16.dp)).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("语音识别", color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
+                ChoiceButtons(
+                    options = AsrProfile.entries,
+                    selected = asrProfile,
+                    label = { it.displayLabel() },
+                    onSelected = { asrProfile = it; dirty = true },
+                )
+                Text("当前模型：${asrProfile.displayModelLabel()}", color = AppMutedText, fontSize = 11.sp)
+                BaseUrlField(
+                    value = asrEndpoint,
+                    placeholder = "https://openrouter.ai/api/v1",
+                    supportingText = if (!asrEndpointValid) "请输入有效的 HTTPS 地址" else null,
+                    isError = !asrEndpointValid,
+                    onValueChange = { asrEndpoint = it; dirty = true },
+                )
+                ApiKeyField(
+                    value = asrSecret,
+                    hasSavedKey = asrCredentialId != null,
+                    onValueChange = { asrSecret = it; dirty = true },
+                )
+                ConnectionTestButton(
+                    state = asrConnectionTest,
+                    enabled = asrEndpointValid && (asrCredentialId != null || asrSecret.isNotBlank()),
+                    onClick = {
+                        onTestAsr(
+                            asrProfile,
+                            asrEndpoint,
+                            asrCredentialId,
+                            asrSecret.takeIf(String::isNotBlank),
+                        )
+                    },
+                )
+            }
         }
     }
+}
+
+@Composable
+internal fun SyncTextConfigPage(
+    state: SyncTextUiState,
+    onAction: (SyncTextAction) -> Unit,
+    listState: LazyListState,
+) {
+    var section by rememberSaveable { mutableStateOf(ConfigSection.Translation) }
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        item {
+            ConfigForm(
+                existing = state.config,
+                credentials = state.credentials,
+                section = section,
+                availableModels = state.availableTranslationModels,
+                loadingModels = state.loadingTranslationModels,
+                modelDiscoveryMessage = state.modelDiscoveryMessage,
+                translationConnectionTest = state.translationConnectionTest,
+                asrConnectionTest = state.asrConnectionTest,
+                busy = state.busy,
+                onSectionChanged = { section = it },
+                onDiscoverModels = { protocol, endpoint, credentialId, apiKey ->
+                    onAction(SyncTextAction.DiscoverTranslationModels(protocol, endpoint, credentialId, apiKey))
+                },
+                onTestTranslation = { protocol, endpoint, model, credentialId, apiKey ->
+                    onAction(SyncTextAction.TestTranslationConnection(protocol, endpoint, model, credentialId, apiKey))
+                },
+                onTestAsr = { profile, endpoint, credentialId, apiKey ->
+                    onAction(SyncTextAction.TestAsrConnection(profile, endpoint, credentialId, apiKey))
+                },
+                onSave = { draft ->
+                    onAction(SyncTextAction.SaveConfig(state.config?.configId, draft))
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun BaseUrlField(
+    value: String,
+    placeholder: String,
+    supportingText: String?,
+    isError: Boolean,
+    onValueChange: (String) -> Unit,
+) {
+    var input by remember { mutableStateOf(TextFieldValue(value)) }
+    var selectAllOnFocus by remember { mutableStateOf(true) }
+    LaunchedEffect(value) {
+        if (input.text != value) input = TextFieldValue(value)
+    }
+    OutlinedTextField(
+        value = input,
+        onValueChange = {
+            input = it
+            onValueChange(it.text)
+        },
+        label = { Text("服务地址") },
+        placeholder = { Text(placeholder) },
+        supportingText = supportingText?.let { { Text(it) } },
+        isError = isError,
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth().onFocusChanged { focusState ->
+            if (focusState.isFocused && selectAllOnFocus) {
+                input = input.copy(selection = TextRange(0, input.text.length))
+                selectAllOnFocus = false
+            } else if (!focusState.isFocused) {
+                selectAllOnFocus = true
+            }
+        },
+    )
 }
 
 @Composable
@@ -400,7 +409,11 @@ private fun ProtocolPicker(
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+        ) {
             Text("服务协议：${value.label()}", modifier = Modifier.fillMaxWidth())
         }
         DropdownMenu(
@@ -428,7 +441,11 @@ private fun ConnectionTestButton(
     onClick: () -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Button(onClick = onClick, enabled = enabled && !state.running) {
+        OutlinedButton(
+            onClick = onClick,
+            enabled = enabled && !state.running,
+            shape = RoundedCornerShape(12.dp),
+        ) {
             Text(if (state.running) "测试中…" else "测试连接")
         }
         state.message?.let {
@@ -655,9 +672,9 @@ internal fun isHttpsEndpoint(value: String): Boolean {
 
 private fun TranslationProtocol.label(): String =
     when (this) {
-        TranslationProtocol.Responses -> "OpenAI"
-        TranslationProtocol.AnthropicMessages -> "Anthropic"
-        TranslationProtocol.ChatCompletions -> "OpenAI（兼容模式）"
+        TranslationProtocol.Responses -> "OpenAI Responses"
+        TranslationProtocol.AnthropicMessages -> "Anthropic Messages"
+        TranslationProtocol.ChatCompletions -> "OpenAI Chat Completions"
         TranslationProtocol.GoogleGenerateContent -> "Google Gemini"
     }
 

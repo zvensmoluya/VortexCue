@@ -57,7 +57,6 @@ data class SyncTextUiState(
     val audioTracks: List<AudioTrackInfo> = emptyList(),
     val inspectingAudioTracks: Boolean = false,
     val audioInspectionError: String? = null,
-    val configEditorVisible: Boolean = false,
     val availableTranslationModels: List<String> = emptyList(),
     val loadingTranslationModels: Boolean = false,
     val modelDiscoveryMessage: String? = null,
@@ -73,10 +72,6 @@ sealed interface SyncTextAction {
     data object CloseGeneration : SyncTextAction
 
     data class SubmitSelectedInput(val input: GenerationInput) : SyncTextAction
-
-    data object OpenConfigEditor : SyncTextAction
-
-    data object CloseConfigEditor : SyncTextAction
 
     data object ClearMessage : SyncTextAction
 
@@ -131,7 +126,6 @@ private data class OverlayState(
     val audioTracks: List<AudioTrackInfo> = emptyList(),
     val inspectingAudioTracks: Boolean = false,
     val audioInspectionError: String? = null,
-    val configEditorVisible: Boolean = false,
     val availableTranslationModels: List<String> = emptyList(),
     val loadingTranslationModels: Boolean = false,
     val modelDiscoveryMessage: String? = null,
@@ -165,7 +159,6 @@ class SyncTextUiController(
                 audioTracks = local.audioTracks,
                 inspectingAudioTracks = local.inspectingAudioTracks,
                 audioInspectionError = local.audioInspectionError,
-                configEditorVisible = local.configEditorVisible,
                 availableTranslationModels = local.availableTranslationModels,
                 loadingTranslationModels = local.loadingTranslationModels,
                 modelDiscoveryMessage = local.modelDiscoveryMessage,
@@ -185,10 +178,6 @@ class SyncTextUiController(
                 val config = repository.config.value ?: return showConfigurationRequired()
                 submitGeneration(content, action.input, config)
             }
-            SyncTextAction.OpenConfigEditor ->
-                overlay.update { it.copy(configEditorVisible = true, message = null) }
-            SyncTextAction.CloseConfigEditor ->
-                overlay.update { it.copy(configEditorVisible = false, message = null) }
             SyncTextAction.ClearMessage -> overlay.update { it.copy(message = null) }
             is SyncTextAction.DiscoverTranslationModels ->
                 discoverTranslationModels(

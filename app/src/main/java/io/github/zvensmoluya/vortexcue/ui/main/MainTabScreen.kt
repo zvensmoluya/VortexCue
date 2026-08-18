@@ -100,6 +100,7 @@ import io.github.zvensmoluya.vortexcue.playback.PlaybackGateway
 import io.github.zvensmoluya.vortexcue.ui.player.PlaybackSnapshot
 import io.github.zvensmoluya.vortexcue.ui.queue.QueueItemRow
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextAction
+import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextConfigPage
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextUiState
 import io.github.zvensmoluya.vortexcue.ui.synctext.generationProductStatus
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskSummary
@@ -182,12 +183,6 @@ internal fun MainTabScreen(
             onImportHubRequestConsumed()
         }
     }
-    // “同步文字”是一个直接可用的工作区；切换到底部入口时直接打开编辑器。
-    LaunchedEffect(selectedTab) {
-        if (selectedTab == MainTab.Config) {
-            onSyncTextAction(SyncTextAction.OpenConfigEditor)
-        }
-    }
     val content by remember(repository, selectedFolderId, query, contentSort) {
         repository.observeContent(selectedFolderId, query, contentSort)
     }.collectAsState(initial = emptyList())
@@ -199,62 +194,65 @@ internal fun MainTabScreen(
         modifier = modifier.fillMaxSize(),
         containerColor = AppBackground,
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
+            if (selectedTab != MainTab.Config) {
+                TopAppBar(
+                    title = {
+                        Text(
+                            when (selectedTab) {
+                                MainTab.Content -> "内容"
+                                MainTab.Queue -> "播放列表"
+                                MainTab.Config -> "配置"
+                                MainTab.Settings -> "设置"
+                            },
+                            color = AppPrimaryText,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    },
+                    actions = {
                         when (selectedTab) {
-                            MainTab.Content -> "内容"
-                            MainTab.Queue -> "播放列表"
-                            MainTab.Config -> "同步文字"
-                            MainTab.Settings -> "设置"
-                        },
-                        color = AppPrimaryText,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                },
-                actions = {
-                    when (selectedTab) {
-                        MainTab.Content -> {
-                            IconButton(
-                                onClick = { sortMenuVisible = true },
-                                modifier = Modifier.semantics { contentDescription = "内容排序" },
-                            ) { Icon(Icons.Outlined.SwapVert, null, tint = AppSecondaryText) }
-                            DropdownMenu(
-                                expanded = sortMenuVisible,
-                                onDismissRequest = { sortMenuVisible = false },
-                            ) {
-                                ContentSort.entries.forEach { sort ->
-                                    DropdownMenuItem(
-                                        text = { Text(sort.label()) },
-                                        leadingIcon = {
-                                            if (sort == contentSort) Icon(Icons.Outlined.Check, null)
-                                        },
-                                        onClick = {
-                                            sortMenuVisible = false
-                                            onContentSortChanged(sort)
-                                        },
-                                    )
+                            MainTab.Content -> {
+                                IconButton(
+                                    onClick = { sortMenuVisible = true },
+                                    modifier = Modifier.semantics { contentDescription = "内容排序" },
+                                ) { Icon(Icons.Outlined.SwapVert, null, tint = AppSecondaryText) }
+                                DropdownMenu(
+                                    expanded = sortMenuVisible,
+                                    onDismissRequest = { sortMenuVisible = false },
+                                ) {
+                                    ContentSort.entries.forEach { sort ->
+                                        DropdownMenuItem(
+                                            text = { Text(sort.label()) },
+                                            leadingIcon = {
+                                                if (sort == contentSort) Icon(Icons.Outlined.Check, null)
+                                            },
+                                            onClick = {
+                                                sortMenuVisible = false
+                                                onContentSortChanged(sort)
+                                            },
+                                        )
+                                    }
+                                }
+                                IconButton(
+                                    onClick = { importVisible = true },
+                                    modifier = Modifier.semantics { contentDescription = "添加内容" },
+                                ) { Icon(Icons.Outlined.Add, null, tint = AppBoneLogo) }
+                            }
+                            MainTab.Queue -> {
+                                if (recovery.queue.isNotEmpty()) {
+                                    IconButton(
+                                        onClick = { scope.launch { gateway.clear() } },
+                                        modifier = Modifier.semantics { contentDescription = "清空播放列表" },
+                                    ) { Icon(Icons.Outlined.DeleteOutline, null, tint = AppSecondaryText) }
                                 }
                             }
-                            IconButton(
-                                onClick = { importVisible = true },
-                                modifier = Modifier.semantics { contentDescription = "添加内容" },
-                            ) { Icon(Icons.Outlined.Add, null, tint = AppBoneLogo) }
+                            MainTab.Config,
+                            MainTab.Settings,
+                            -> Unit
                         }
-                        MainTab.Queue -> {
-                            if (recovery.queue.isNotEmpty()) {
-                                IconButton(
-                                    onClick = { scope.launch { gateway.clear() } },
-                                    modifier = Modifier.semantics { contentDescription = "清空播放列表" },
-                                ) { Icon(Icons.Outlined.DeleteOutline, null, tint = AppSecondaryText) }
-                            }
-                        }
-                        MainTab.Config -> Unit
-                        MainTab.Settings -> Unit
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = AppBackground),
-            )
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = AppBackground),
+                )
+            }
         },
         bottomBar = {
             Column(modifier = Modifier.background(AppBackground)) {
@@ -269,13 +267,7 @@ internal fun MainTabScreen(
                 }
                 MainNavigationBar(
                     selectedTab = selectedTab,
-                    onTabChanged = { tab ->
-                        if (tab == MainTab.Config && selectedTab == MainTab.Config) {
-                            onSyncTextAction(SyncTextAction.OpenConfigEditor)
-                        } else {
-                            onTabChanged(tab)
-                        }
-                    },
+                    onTabChanged = onTabChanged,
                     onOpenImport = { importVisible = true },
                     modifier = Modifier.navigationBarsPadding(),
                 )
@@ -333,6 +325,8 @@ internal fun MainTabScreen(
                     )
                 MainTab.Config ->
                     ConfigTab(
+                        state = syncTextUiState,
+                        onAction = onSyncTextAction,
                         listState = configListState,
                     )
                 MainTab.Settings ->
@@ -732,13 +726,11 @@ private fun QueueTab(
 
 @Composable
 private fun ConfigTab(
+    state: SyncTextUiState,
+    onAction: (SyncTextAction) -> Unit,
     listState: LazyListState,
 ) {
-    LazyColumn(state = listState, modifier = Modifier.fillMaxSize().safeDrawingPadding(), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
-            Text("正在打开同步文字设置…", color = AppSecondaryText)
-        }
-    }
+    SyncTextConfigPage(state = state, onAction = onAction, listState = listState)
 }
 
 @Composable
@@ -1084,7 +1076,7 @@ private fun MainTab.label(): String =
     when (this) {
         MainTab.Content -> "内容"
         MainTab.Queue -> "播放列表"
-        MainTab.Config -> "同步文字"
+        MainTab.Config -> "配置"
         MainTab.Settings -> "设置"
     }
 
