@@ -27,6 +27,8 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
@@ -236,7 +238,10 @@ internal fun SyncTextConfigPage(
         asr: AsrPageDraft = asrDraft,
     ) {
         val draft = fullDraft(translation, asr)
-        if (draft.isComplete()) onAction(SyncTextAction.SaveConfig(existing?.configId, draft))
+        if (!draft.isComplete()) return
+        onAction(SyncTextAction.SaveConfig(existing?.configId, draft))
+        if (translation.secret.isNotBlank()) translationDraft = translation.copy(secret = "")
+        if (asr.secret.isNotBlank()) asrDraft = asr.copy(secret = "")
     }
     fun discoverModels(translation: TranslationPageDraft = translationDraft) {
         if (isHttpsEndpoint(translation.endpoint) &&
@@ -348,11 +353,12 @@ private fun PagerTabs(
     pagerState: PagerState,
     onSelect: (Int) -> Unit,
 ) {
-    val progress by remember(pagerState) {
+    val targetPage by remember(pagerState) {
         derivedStateOf {
-            (pagerState.currentPage - pagerState.currentPageOffsetFraction).coerceIn(0f, 1f)
+            pagerState.targetPage
         }
     }
+    val progress by animateFloatAsState(targetPage.toFloat(), animationSpec = tween(220), label = "config-tab-indicator")
     BoxWithConstraints(
         modifier = Modifier.fillMaxWidth().background(Color.Black),
     ) {
@@ -366,7 +372,7 @@ private fun PagerTabs(
                     ) {
                         Text(
                             label,
-                            color = if (pagerState.currentPage == index) AppPrimaryText else AppSecondaryText,
+                            color = if (targetPage == index) AppPrimaryText else AppSecondaryText,
                             fontSize = 14.sp,
                         )
                     }
@@ -652,29 +658,32 @@ private fun ApiKeyField(
             placeholder = {
                 Text(
                     when {
-                        hasSavedKey && savedKeyMask != null -> "已保存 $savedKeyMask，输入新值替换"
+                        hasSavedKey && savedKeyMask != null -> "已保存 $savedKeyMask，粘贴新 Key 以替换"
                         hasSavedKey -> "已配置，留空保持不变"
                         else -> "输入 API Key"
                     },
                     color = AppMutedText,
                 )
             },
-            visualTransformation = if (revealed) VisualTransformation.None else PasswordVisualTransformation(),
+            visualTransformation =
+                if (value.isBlank() || revealed) VisualTransformation.None else PasswordVisualTransformation(),
             singleLine = true,
             isError = authenticationFailed,
             trailingIcon = {
                 Row {
-                    IconButton(
-                        onClick = { revealed = !revealed },
-                        modifier = Modifier.semantics {
-                            contentDescription = if (revealed) "隐藏 API Key" else "显示 API Key"
-                        },
-                    ) {
-                        Icon(
-                            if (revealed) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
-                            contentDescription = null,
-                            tint = AppSecondaryText,
-                        )
+                    if (value.isNotBlank()) {
+                        IconButton(
+                            onClick = { revealed = !revealed },
+                            modifier = Modifier.semantics {
+                                contentDescription = if (revealed) "隐藏 API Key" else "显示 API Key"
+                            },
+                        ) {
+                            Icon(
+                                if (revealed) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                                contentDescription = null,
+                                tint = AppSecondaryText,
+                            )
+                        }
                     }
                     IconButton(
                         onClick = {
@@ -719,7 +728,7 @@ private fun ApiKeyField(
         when {
             authenticationFailed -> Text("认证失败，请检查密钥", color = AppError, fontSize = 12.sp)
             hasSavedKey && value.isBlank() -> Text(
-                if (savedKeyMask != null) "已保存 $savedKeyMask，留空保持不变" else "已配置，留空保持不变",
+                if (savedKeyMask != null) "已保存 $savedKeyMask，留空保留；粘贴新 Key 后自动保存" else "已配置，留空保持不变",
                 color = AppMutedText,
                 fontSize = 12.sp,
             )

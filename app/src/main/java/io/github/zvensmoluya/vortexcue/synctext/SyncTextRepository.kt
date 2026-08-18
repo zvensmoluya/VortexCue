@@ -102,7 +102,7 @@ class SyncTextRepository(
         apiKey: String? = null,
     ): List<String> {
         val catalog = modelCatalog ?: return emptyList()
-        val resolvedKey = apiKey?.trim()?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId))
+        val resolvedKey = validatedApiKey(apiKey?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId)))
         return catalog.fetch(protocol, endpoint, resolvedKey)
     }
 
@@ -114,7 +114,7 @@ class SyncTextRepository(
         apiKey: String? = null,
     ) {
         val tester = requireNotNull(connectionTester) { "Translation connection test is unavailable" }
-        val resolvedKey = apiKey?.trim()?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId))
+        val resolvedKey = validatedApiKey(apiKey?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId)))
         tester.testTranslation(protocol, endpoint, model, resolvedKey)
     }
 
@@ -125,7 +125,7 @@ class SyncTextRepository(
         apiKey: String? = null,
     ) {
         val tester = requireNotNull(connectionTester) { "ASR connection test is unavailable" }
-        val resolvedKey = apiKey?.trim()?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId))
+        val resolvedKey = validatedApiKey(apiKey?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId)))
         tester.testAsr(profile, endpoint, resolvedKey)
     }
 
@@ -134,8 +134,8 @@ class SyncTextRepository(
         asrSecret: String?,
         translationSecret: String?,
     ): SyncTextConfig {
-        val normalizedAsrSecret = asrSecret?.trim()?.takeIf(String::isNotBlank)
-        val normalizedTranslationSecret = translationSecret?.trim()?.takeIf(String::isNotBlank)
+        val normalizedAsrSecret = asrSecret?.trim()?.takeIf(String::isNotBlank)?.let(::validatedApiKey)
+        val normalizedTranslationSecret = translationSecret?.trim()?.takeIf(String::isNotBlank)?.let(::validatedApiKey)
         val sharedCredentialId =
             config.asrCredentialId
                 .takeIf { it.isNotBlank() && it == config.translationCredentialId }
@@ -241,17 +241,18 @@ class SyncTextRepository(
         purpose: CredentialPurpose,
         secret: String,
     ): CredentialMetadata {
+        val normalizedSecret = validatedApiKey(secret)
         val id = credentialId ?: newId()
         val existing = dao.credential(id)
         val timestamp = nowMs()
         val previousSecret = existing?.let { runCatching { credentials.get(id) }.getOrNull() }
-        credentials.put(id, secret)
+        credentials.put(id, normalizedSecret)
         val entity =
             CredentialMetadataEntity(
                 credentialId = id,
                 name = name.trim().also { require(it.isNotBlank()) },
                 purpose = purpose.name,
-                maskedValue = maskCredential(secret),
+                maskedValue = maskCredential(normalizedSecret),
                 createdAtMs = existing?.createdAtMs ?: timestamp,
                 updatedAtMs = timestamp,
             )
@@ -305,6 +306,15 @@ class SyncTextRepository(
         var suffix = 2
         while ("$baseName $suffix" in names) suffix++
         return "$baseName $suffix"
+    }
+
+    private fun validatedApiKey(value: String): String {
+        val key = value.trim()
+        require(key.isNotBlank()) { "API Key 不能为空" }
+        require(key.all { it.code in 0x21..0x7E }) {
+            "API Key 不能包含遮罩或不可发送字符，请输入真实密钥"
+        }
+        return key
     }
 
     suspend fun deleteCredential(credentialId: String) {

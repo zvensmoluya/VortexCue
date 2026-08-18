@@ -170,6 +170,15 @@ class SyncTextRepositoryTest {
     }
 
     @Test
+    fun `masked display text cannot be stored as an api key`() = runBlocking {
+        assertTrue(
+            runCatching {
+                repository.saveCredential("masked", "Masked", CredentialPurpose.Shared, "【已保存】")
+            }.isFailure,
+        )
+    }
+
+    @Test
     fun `task snapshots dedupe attempts and generated slot replacement stay atomic`() = runBlocking {
         insertContentWithTextTrack()
         repository.saveCredential("asr-key", "ASR", CredentialPurpose.Asr, "asr-secret")
