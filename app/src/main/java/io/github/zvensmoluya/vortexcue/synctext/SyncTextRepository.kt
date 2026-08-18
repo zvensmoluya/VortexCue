@@ -246,12 +246,14 @@ class SyncTextRepository(
         val existing = dao.credential(id)
         val timestamp = nowMs()
         val previousSecret = existing?.let { runCatching { credentials.get(id) }.getOrNull() }
+        val effectivePurpose =
+            if (existing?.purpose == CredentialPurpose.Shared.name) CredentialPurpose.Shared else purpose
         credentials.put(id, normalizedSecret)
         val entity =
             CredentialMetadataEntity(
                 credentialId = id,
                 name = name.trim().also { require(it.isNotBlank()) },
-                purpose = purpose.name,
+                purpose = effectivePurpose.name,
                 maskedValue = maskCredential(normalizedSecret),
                 createdAtMs = existing?.createdAtMs ?: timestamp,
                 updatedAtMs = timestamp,

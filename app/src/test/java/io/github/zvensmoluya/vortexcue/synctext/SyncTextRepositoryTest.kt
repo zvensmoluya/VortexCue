@@ -145,6 +145,17 @@ class SyncTextRepositoryTest {
     }
 
     @Test
+    fun `direct credential replacement keeps a shared credential shared`() = runBlocking {
+        repository.saveCredential("shared", "Shared", CredentialPurpose.Shared, "old-secret")
+
+        val saved = repository.saveCredential("shared", "ASR", CredentialPurpose.Asr, "new-secret")
+
+        assertEquals(CredentialPurpose.Shared, saved.purpose)
+        assertEquals(CredentialPurpose.Shared.name, database.syncTextDao().credential("shared")?.purpose)
+        assertEquals("new-secret", credentials.get("shared"))
+    }
+
+    @Test
     fun `two different secrets split a shared credential into valid references`() = runBlocking {
         repository.saveCredential("shared", "Shared", CredentialPurpose.Shared, "old-secret")
         val config =
