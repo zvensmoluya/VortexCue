@@ -13,6 +13,7 @@ import io.github.zvensmoluya.vortexcue.synctext.GenerationErrorCategory
 import io.github.zvensmoluya.vortexcue.synctext.GenerationOutput
 import io.github.zvensmoluya.vortexcue.synctext.GenerationRequest
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskSummary
+import io.github.zvensmoluya.vortexcue.synctext.LanguageTags
 import io.github.zvensmoluya.vortexcue.synctext.AsrException
 import io.github.zvensmoluya.vortexcue.synctext.CredentialUnavailableException
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocolException
@@ -128,6 +129,8 @@ sealed interface SyncTextAction {
     data class CancelForContent(val contentId: String) : SyncTextAction
 
     data class RetryForContent(val contentId: String) : SyncTextAction
+
+    data class TranslateForContent(val contentId: String) : SyncTextAction
 }
 
 private data class OverlayState(
@@ -185,7 +188,7 @@ class SyncTextUiController(
             is SyncTextAction.SubmitSelectedInput -> {
                 val content = overlay.value.generationContent ?: return
                 val config = repository.config.value ?: return showConfigurationRequired()
-                submitGeneration(content, action.input, config)
+                submitGeneration(content, action.input, config, allowAsrFallback = false)
             }
             SyncTextAction.ClearMessage -> overlay.update { it.copy(message = null) }
             is SyncTextAction.DiscoverTranslationModels ->
@@ -239,11 +242,21 @@ class SyncTextUiController(
             }
             is SyncTextAction.CancelForContent -> runAction {
                 repository.cancelForContent(action.contentId)
-                "同步文字已取消"
+                "同步文字已暂停"
             }
             is SyncTextAction.RetryForContent -> runAction {
                 repository.retryForContent(action.contentId)
                 "同步文字已重试"
+            }
+            is SyncTextAction.TranslateForContent -> runAction {
+                val source = requireNotNull(repository.currentSourceResult(action.contentId)) { "没有可翻译的源文字" }
+                val target = repository.config.value?.targetLanguage?.let(LanguageTags::normalizeOrNull)
+                if (target == null || LanguageTags.normalizeOrNull(source.sourceLanguage) == target) {
+                    "源语言与目标语言相同，无需翻译"
+                } else {
+                    repository.submitTranslation(source.resultId, targetLanguage = target)
+                    "同步翻译已开始"
+                }
             }
         }
     }
@@ -377,7 +390,8 @@ class SyncTextUiController(
     private fun openGeneration(content: ContentDetails) {
         val config = repository.config.value ?: return showConfigurationRequired()
         when (val plan = planAutomaticGeneration(content)) {
-            is GenerationLaunchPlan.Submit -> submitGeneration(content, plan.input, config)
+            is GenerationLaunchPlan.Submit ->
+                submitGeneration(content, plan.input, config, allowAsrFallback = plan.allowAsrFallback)
             is GenerationLaunchPlan.Choose ->
                 overlay.update {
                     it.copy(
@@ -388,6 +402,8 @@ class SyncTextUiController(
                         message = null,
                     )
                 }
+            is GenerationLaunchPlan.NeedsConfirmation ->
+                overlay.update { it.copy(message = plan.message) }
             GenerationLaunchPlan.InspectAudio -> inspectAudio(content, config)
         }
     }
@@ -414,7 +430,13 @@ class SyncTextUiController(
                                     audioInspectionError = "媒体中没有可用于识别的音轨",
                                 )
                             }
-                        1 -> submitGeneration(content, GenerationInput.AudioTrack(tracks.single().selectionId), config)
+                        1 ->
+                            submitGeneration(
+                                content,
+                                GenerationInput.AudioTrack(tracks.single().selectionId),
+                                config,
+                                allowAsrFallback = false,
+                            )
                         else ->
                             overlay.update {
                                 it.copy(audioTracks = tracks, inspectingAudioTracks = false)
@@ -441,6 +463,7 @@ class SyncTextUiController(
         content: ContentDetails,
         input: GenerationInput,
         config: SyncTextConfig,
+        allowAsrFallback: Boolean,
     ) {
         overlay.update { it.copy(busy = true, message = null) }
         scope.launch {
@@ -449,12 +472,9 @@ class SyncTextUiController(
                     GenerationRequest(
                         contentId = content.contentId,
                         input = input,
-                        output =
-                            GenerationOutput.Translated(
-                                targetLanguage = config.targetLanguage,
-                                presentationMode = config.presentationMode,
-                            ),
+                        output = GenerationOutput.SourceOnly,
                         schemeId = config.configId,
+                        allowAsrFallback = allowAsrFallback,
                     ),
                 )
             }.onSuccess {
@@ -490,7 +510,7 @@ class SyncTextUiController(
             it.copy(
                 generationContent = null,
                 inspectingAudioTracks = false,
-                message = "请先在同步文字设置中填写语音识别、翻译和密钥",
+                message = "请先在同步文字设置中填写语音识别配置和密钥",
             )
         }
     }
@@ -539,49 +559,23 @@ private fun Throwable.toConnectionTestUiState(fingerprint: String): ConnectionTe
     )
 }
 
-internal sealed interface GenerationLaunchPlan {
-    data class Submit(val input: GenerationInput) : GenerationLaunchPlan
-
-    data class Choose(val inputs: List<GenerationInput>) : GenerationLaunchPlan
-
-    data object InspectAudio : GenerationLaunchPlan
-}
-
-internal fun planAutomaticGeneration(content: ContentDetails): GenerationLaunchPlan {
-    val inputs = content.availableTextInputs()
-    val selected = inputs.firstOrNull { it.trackId == content.activeText.primaryTrackId }
-    return when {
-        selected != null -> GenerationLaunchPlan.Submit(selected)
-        inputs.size == 1 -> GenerationLaunchPlan.Submit(inputs.single())
-        inputs.size > 1 -> GenerationLaunchPlan.Choose(inputs)
-        else -> GenerationLaunchPlan.InspectAudio
-    }
-}
-
-private fun ContentDetails.availableTextInputs(): List<GenerationInput> =
-    timedTextTracks
-        .filter { it.readiness !in setOf(TimedTextReadiness.Unreadable, TimedTextReadiness.ParseFailed) }
-        .mapNotNull { track ->
-            when (track.origin) {
-                TimedTextOrigin.Embedded ->
-                    track.locator.embeddedTrackId?.let {
-                        GenerationInput.EmbeddedTrack(track.stableId, it)
-                    }
-                else -> GenerationInput.ExistingTrack(track.stableId)
-            }
-        }
-
 private fun SyncTextConfigDraft.toConfig(configId: String?): SyncTextConfig =
-    SyncTextConfig(
+    let { draft ->
+        val translationConfigured =
+            draft.translationEndpoint.isNotBlank() &&
+                draft.translationModel.isNotBlank() &&
+                (draft.translationCredentialId != null || draft.translationSecret?.isNotBlank() == true)
+        SyncTextConfig(
         configId = configId.orEmpty(),
         asrEndpoint = asrEndpoint,
         asrProfile = asrProfile,
         asrCredentialId = asrCredentialId.orEmpty(),
         translationProtocol = translationProtocol,
-        translationEndpoint = translationEndpoint,
-        translationModel = translationModel,
-        translationCredentialId = translationCredentialId.orEmpty(),
+        translationEndpoint = translationEndpoint.takeIf { translationConfigured },
+        translationModel = translationModel.takeIf { translationConfigured },
+        translationCredentialId = translationCredentialId.takeIf { translationConfigured },
         targetLanguage = targetLanguage,
         presentationMode = presentationMode,
         translationUserAgent = translationUserAgent,
-    )
+        )
+    }

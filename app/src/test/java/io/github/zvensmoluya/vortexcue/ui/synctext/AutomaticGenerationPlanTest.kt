@@ -19,10 +19,11 @@ class AutomaticGenerationPlanTest {
     }
 
     @Test
-    fun `single existing text translates immediately`() {
+    fun `single trusted text is adopted before audio`() {
         val plan = planAutomaticGeneration(content(tracks = listOf(track("one"))))
 
         assertEquals(GenerationInput.ExistingTrack("one"), (plan as GenerationLaunchPlan.Submit).input)
+        assertTrue(plan.allowAsrFallback)
     }
 
     @Test
@@ -38,12 +39,42 @@ class AutomaticGenerationPlanTest {
     }
 
     @Test
+    fun `materializable embedded text wins over strong external match`() {
+        val embedded =
+            track("embedded").copy(
+                origin = TimedTextOrigin.Embedded,
+                locator =
+                    TimedTextLocator.Embedded(
+                        embeddedTrackId = "embedded:0",
+                        displayName = "embedded",
+                    ),
+                matchBasis = TimedTextMatchBasis.EmbeddedMetadata,
+            )
+        val plan =
+            planAutomaticGeneration(
+                content(tracks = listOf(track("external"), embedded)),
+            ) as GenerationLaunchPlan.Submit
+
+        assertEquals(GenerationInput.EmbeddedTrack("embedded", "embedded:0"), plan.input)
+    }
+
+    @Test
     fun `unreadable text falls back to audio`() {
         val unreadable = track("bad").copy(readiness = TimedTextReadiness.ParseFailed)
 
         assertEquals(
             GenerationLaunchPlan.InspectAudio,
             planAutomaticGeneration(content(tracks = listOf(unreadable))),
+        )
+    }
+
+    @Test
+    fun `ambiguous filename candidate does not silently replace asr`() {
+        val candidate = track("candidate").copy(matchBasis = TimedTextMatchBasis.FilenameCandidate)
+
+        assertEquals(
+            GenerationLaunchPlan.InspectAudio,
+            planAutomaticGeneration(content(tracks = listOf(candidate))),
         )
     }
 

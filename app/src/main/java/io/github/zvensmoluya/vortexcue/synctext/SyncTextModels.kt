@@ -43,10 +43,10 @@ data class SyncTextScheme(
     val asrProfile: AsrProfile,
     val asrCredentialId: String,
     val translationProtocol: TranslationProtocol,
-    val translationEndpoint: String,
+    val translationEndpoint: String?,
     val translationUserAgent: String? = null,
-    val translationModel: String,
-    val translationCredentialId: String,
+    val translationModel: String?,
+    val translationCredentialId: String?,
     val defaultTargetLanguage: String,
     val defaultPresentationMode: TextPresentationMode = TextPresentationMode.TargetOnly,
     val isDefault: Boolean = false,
@@ -62,9 +62,9 @@ data class SyncTextConfig(
     val asrProfile: AsrProfile,
     val asrCredentialId: String,
     val translationProtocol: TranslationProtocol,
-    val translationEndpoint: String,
-    val translationModel: String,
-    val translationCredentialId: String,
+    val translationEndpoint: String?,
+    val translationModel: String?,
+    val translationCredentialId: String?,
     val targetLanguage: String,
     val presentationMode: TextPresentationMode,
     val translationUserAgent: String? = null,
@@ -105,6 +105,7 @@ data class GenerationRequest(
     val schemeId: String,
     val sourceLanguage: String? = null,
     val allowMeteredNetwork: Boolean = false,
+    val allowAsrFallback: Boolean = false,
 )
 
 enum class GenerationTaskState {
@@ -114,6 +115,16 @@ enum class GenerationTaskState {
     NeedsAttention,
     Completed,
     Deleted,
+}
+
+enum class GenerationTaskKind {
+    SourceGeneration,
+    TranslationDerivation,
+}
+
+enum class GeneratedResultCompleteness {
+    Partial,
+    Final,
 }
 
 enum class GenerationStage {
@@ -144,6 +155,7 @@ data class GenerationTaskSummary(
     val taskId: String,
     val contentId: String,
     val schemeId: String,
+    val kind: GenerationTaskKind,
     val queuePosition: Int,
     val state: GenerationTaskState,
     val stage: GenerationStage,
@@ -175,6 +187,10 @@ data class GeneratedTextResult(
     val sourceSha256: String,
     val targetSha256: String?,
     val cueCount: Int,
+    val completeness: GeneratedResultCompleteness,
+    val coveredEndMs: Long?,
+    val completedWindowCount: Int?,
+    val totalWindowCount: Int?,
     val sourceCues: List<SubtitleCue> = emptyList(),
     val targetCues: List<SubtitleCue>? = null,
     val presentationMode: TextPresentationMode,

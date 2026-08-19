@@ -60,13 +60,13 @@ data class SyncTextSchemeEntity(
     @ColumnInfo(name = "translation_protocol")
     val translationProtocol: String,
     @ColumnInfo(name = "translation_endpoint")
-    val translationEndpoint: String,
+    val translationEndpoint: String?,
     @ColumnInfo(name = "translation_user_agent")
     val translationUserAgent: String? = null,
     @ColumnInfo(name = "translation_model")
-    val translationModel: String,
+    val translationModel: String?,
     @ColumnInfo(name = "translation_credential_id")
-    val translationCredentialId: String,
+    val translationCredentialId: String?,
     @ColumnInfo(name = "default_target_language")
     val defaultTargetLanguage: String,
     @ColumnInfo(name = "default_presentation_mode")
@@ -114,6 +114,8 @@ data class GenerationTaskEntity(
     val contentId: String,
     @ColumnInfo(name = "scheme_id")
     val schemeId: String,
+    @ColumnInfo(defaultValue = "'SourceGeneration'")
+    val kind: String,
     @ColumnInfo(name = "active_dedupe_key")
     val activeDedupeKey: String?,
     val state: String,
@@ -168,6 +170,8 @@ data class GenerationTaskSnapshotEntity(
     val embeddedTrackId: String?,
     @ColumnInfo(name = "audio_track_id")
     val audioTrackId: String?,
+    @ColumnInfo(name = "input_source_result_id")
+    val inputSourceResultId: String?,
     @ColumnInfo(name = "source_language")
     val sourceLanguage: String?,
     @ColumnInfo(name = "target_language")
@@ -176,6 +180,8 @@ data class GenerationTaskSnapshotEntity(
     val presentationMode: String,
     @ColumnInfo(name = "allow_metered_network")
     val allowMeteredNetwork: Boolean,
+    @ColumnInfo(name = "allow_asr_fallback", defaultValue = "0")
+    val allowAsrFallback: Boolean,
     @ColumnInfo(name = "submitted_at_ms")
     val submittedAtMs: Long,
 )
@@ -236,13 +242,13 @@ data class GenerationAttemptEntity(
     @ColumnInfo(name = "translation_protocol")
     val translationProtocol: String,
     @ColumnInfo(name = "translation_endpoint")
-    val translationEndpoint: String,
+    val translationEndpoint: String?,
     @ColumnInfo(name = "translation_user_agent")
     val translationUserAgent: String? = null,
     @ColumnInfo(name = "translation_model")
-    val translationModel: String,
+    val translationModel: String?,
     @ColumnInfo(name = "translation_credential_id")
-    val translationCredentialId: String,
+    val translationCredentialId: String?,
     @ColumnInfo(name = "policy_id")
     val policyId: String,
     @ColumnInfo(name = "policy_version")
@@ -319,6 +325,10 @@ data class AsrWindowEntity(
     val encodedBytes: Long?,
     @ColumnInfo(name = "transcript_asset_file_name")
     val transcriptAssetFileName: String?,
+    @ColumnInfo(name = "transcript_sha256")
+    val transcriptSha256: String? = null,
+    @ColumnInfo(name = "cue_count")
+    val cueCount: Int? = null,
     @ColumnInfo(name = "error_message")
     val errorMessage: String?,
     @ColumnInfo(name = "detected_language")
@@ -370,6 +380,10 @@ data class TranslationBatchEntity(
     val repairCount: Int,
     @ColumnInfo(name = "result_asset_file_name")
     val resultAssetFileName: String?,
+    @ColumnInfo(name = "result_sha256")
+    val resultSha256: String? = null,
+    @ColumnInfo(name = "cue_count")
+    val cueCount: Int? = null,
     @ColumnInfo(name = "input_tokens")
     val inputTokens: Long?,
     @ColumnInfo(name = "output_tokens")
@@ -518,6 +532,14 @@ data class GeneratedTextResultEntity(
     val targetSha256: String?,
     @ColumnInfo(name = "cue_count")
     val cueCount: Int,
+    @ColumnInfo(defaultValue = "'Final'")
+    val completeness: String,
+    @ColumnInfo(name = "covered_end_ms")
+    val coveredEndMs: Long?,
+    @ColumnInfo(name = "completed_window_count")
+    val completedWindowCount: Int?,
+    @ColumnInfo(name = "total_window_count")
+    val totalWindowCount: Int?,
     @ColumnInfo(name = "scheme_id")
     val schemeId: String,
     val model: String?,

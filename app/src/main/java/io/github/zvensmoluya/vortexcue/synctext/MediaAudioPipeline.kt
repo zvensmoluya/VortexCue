@@ -62,12 +62,18 @@ interface AudioWindowExtractor {
     ): ExtractedAudioWindow
 }
 
-class BoundedPcmSpool(context: Context) {
+interface PcmSpool {
+    suspend fun reserve(taskId: String, windowId: String): File
+
+    suspend fun release(file: File, delete: Boolean = true)
+}
+
+class BoundedPcmSpool(context: Context) : PcmSpool {
     private val root = File(context.noBackupFilesDir, "sync_text/pcm").apply(File::mkdirs)
     private val mutex = Mutex()
     private val reserved = mutableSetOf<String>()
 
-    suspend fun reserve(taskId: String, windowId: String): File =
+    override suspend fun reserve(taskId: String, windowId: String): File =
         mutex.withLock {
             val task = safeId(taskId)
             val window = safeId(windowId)
@@ -79,7 +85,7 @@ class BoundedPcmSpool(context: Context) {
             File(directory, "$window.wav")
         }
 
-    suspend fun release(file: File, delete: Boolean = true) {
+    override suspend fun release(file: File, delete: Boolean) {
         mutex.withLock {
             val relative = file.relativeToOrNull(root)?.invariantSeparatorsPath ?: return@withLock
             reserved -= relative
