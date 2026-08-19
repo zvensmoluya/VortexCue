@@ -3,6 +3,7 @@ package io.github.zvensmoluya.vortexcue.app
 import android.app.Application
 import android.content.Context
 import androidx.work.Configuration
+import io.github.zvensmoluya.vortexcue.R
 import io.github.zvensmoluya.vortexcue.data.ContentRepository
 import io.github.zvensmoluya.vortexcue.data.PlaybackStateRepository
 import io.github.zvensmoluya.vortexcue.data.SettingsStore
@@ -30,6 +31,7 @@ import io.github.zvensmoluya.vortexcue.synctext.TranslationNetworkGateway
 import io.github.zvensmoluya.vortexcue.synctext.TranslationPolicyRegistry
 import io.github.zvensmoluya.vortexcue.synctext.defaultTranslationAdapters
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextUiController
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -76,7 +78,13 @@ class AppContainer(context: Context) {
             streamResponses = true,
         )
     private val openRouterAsrEngine = OpenRouterAsrEngine(BoundedHttpExecutor(syncTextHttpClient.client), EncodedAudioBudget())
-    private val connectionTester = SyncTextConnectionTester(translationNetworkGateway, openRouterAsrEngine)
+    private val connectionTester =
+        SyncTextConnectionTester(
+            translation = translationNetworkGateway,
+            asr = openRouterAsrEngine,
+            policies = translationPolicyRegistry,
+            createAsrProbeFile = ::createAsrProbeFile,
+        )
     private val pcmSpool = BoundedPcmSpool(appContext)
     private val audioWindowExtractor = PlatformAudioWindowExtractor(appContext)
     private val translationModelCatalog =
@@ -125,6 +133,19 @@ class AppContainer(context: Context) {
             syncTextScheduler,
             scope,
         )
+
+    private fun createAsrProbeFile(): File {
+        val output = File.createTempFile("vortexcue-asr-probe-", ".wav", appContext.cacheDir)
+        try {
+            appContext.resources.openRawResource(R.raw.asr_probe_en_us).use { input ->
+                output.outputStream().use(input::copyTo)
+            }
+            return output
+        } catch (error: Throwable) {
+            output.delete()
+            throw error
+        }
+    }
 
     fun initialize() {
         syncTextNetworkMonitor.start()

@@ -115,7 +115,15 @@ class SyncTextRepository(
     ) {
         val tester = requireNotNull(connectionTester) { "Translation connection test is unavailable" }
         val resolvedKey = apiKey?.trim()?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId))
-        tester.testTranslation(protocol, endpoint, model, resolvedKey)
+        val current = loadConfig()
+        tester.testTranslation(
+            protocol = protocol,
+            endpoint = endpoint,
+            model = model,
+            apiKey = resolvedKey,
+            targetLanguage = current?.targetLanguage ?: DefaultProbeTargetLanguage,
+            userAgent = current?.translationUserAgent,
+        )
     }
 
     suspend fun testAsrConnection(
@@ -899,6 +907,7 @@ class SyncTextRepository(
     }
 
     companion object {
+        private const val DefaultProbeTargetLanguage = "zh-CN"
         private const val SourceSlotKey = "@source"
         private const val NoTranslationPolicyId = "none.v1"
         private const val AsrWindowMs = 300_000L

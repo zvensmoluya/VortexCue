@@ -96,9 +96,6 @@ class TranslationNetworkGateway(
     private val streamResponses: Boolean = true,
     private val waitBeforeRetry: suspend (Long) -> Unit = { delay(it) },
 ) {
-    suspend fun test(request: TranslationProviderRequest, protocol: TranslationProtocol): TranslationProviderResponse =
-        registry.adapter(protocol).translate(request)
-
     suspend fun translate(
         protocol: TranslationProtocol,
         request: TranslationProviderRequest,

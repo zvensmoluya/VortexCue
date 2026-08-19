@@ -281,7 +281,9 @@ class TranslationBatchExecutor(
         policy: TranslationPolicy,
         sourceLanguage: String?,
         targetLanguage: String,
+        maxFollowUpCalls: Int = DefaultMaxFollowUpCalls,
     ): TranslationBatchOutput {
+        require(maxFollowUpCalls >= 0) { "Translation follow-up call limit must not be negative" }
         val rawResponses = mutableListOf<ByteArray>()
         val usages = mutableListOf<UsageRecord>()
         suspend fun call(mode: TranslationPromptMode, repairIds: Set<String> = emptySet()): TranslationProviderResponse {
@@ -294,22 +296,28 @@ class TranslationBatchExecutor(
         }
 
         var formatRecoveryCount = 0
+        var followUpCalls = 0
         var response = call(TranslationPromptMode.Translate)
         var validation = TranslationResponseValidator.validate(plan, response.text)
-        if (validation.hasFormatFailure()) {
+        if (validation.hasFormatFailure() && followUpCalls < maxFollowUpCalls) {
             formatRecoveryCount = 1
+            followUpCalls += 1
             response = call(TranslationPromptMode.FormatRecovery)
             validation = TranslationResponseValidator.validate(plan, response.text)
         }
 
         var repairCount = 0
-        if (!validation.isValid && validation.canRepair(plan.translateOnly.size)) {
+        if (!validation.isValid &&
+            validation.canRepair(plan.translateOnly.size) &&
+            followUpCalls < maxFollowUpCalls
+        ) {
             val failedIds = validation.issues.mapNotNull { it.cueId.takeIf { _ -> it.repairable } }.toSet()
             val repairResponse = call(TranslationPromptMode.Repair, failedIds)
             val repairPlan = plan.copy(translateOnly = plan.translateOnly.filter { it.stableId in failedIds })
             val repairValidation = TranslationResponseValidator.validate(repairPlan, repairResponse.text)
             if (!repairValidation.isValid) throw TranslationOutputException(repairValidation.issues)
             repairCount = 1
+            followUpCalls += 1
             val merged = validation.rows.toMutableMap().apply { putAll(repairValidation.rows) }
             val synthetic = plan.translateOnly.joinToString("\n") { cue ->
                 "[${cue.stableId}] ${merged[cue.stableId].orEmpty()}"
@@ -341,5 +349,9 @@ class TranslationBatchExecutor(
         if (issues.isEmpty() || issues.any { !it.repairable }) return false
         val failed = issues.mapNotNull(TranslationValidationIssue::cueId).distinct().size
         return failed in 1..minOf(3, maxOf(1, (batchSize + 9) / 10))
+    }
+
+    companion object {
+        private const val DefaultMaxFollowUpCalls = 2
     }
 }
