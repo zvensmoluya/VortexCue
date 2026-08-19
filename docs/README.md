@@ -18,6 +18,7 @@
 
 - [`records/DECISION_2026-08-13_TONIGHT_IS_CURRENT_QUEUE.md`](records/DECISION_2026-08-13_TONIGHT_IS_CURRENT_QUEUE.md)：Tonight 收敛为当前可恢复播放 Session / Queue，不维护平行未来计划。
 - [`records/DECISION_2026-08-14_USE_ROOM_FOR_DURABLE_DOMAIN_DATA.md`](records/DECISION_2026-08-14_USE_ROOM_FOR_DURABLE_DOMAIN_DATA.md)：关系型持久领域数据升级为 Room，DataStore 收缩为轻量设置，Queue 恢复改用稳定内容 ID。
+- [`records/EXPLORATION_2026-08-19_GENERATED_TEXT_ROOM_ORCHESTRATION.md`](records/EXPLORATION_2026-08-19_GENERATED_TEXT_ROOM_ORCHESTRATION.md)：探索将应用自生成的 cue / timeline 从私有 VTT 工件迁移为 Room 编排与持久化事实。
 
 决策记录保留变化原因和取舍，当前实施要求仍须同步进入 `GUIDE.md`；两者冲突时以 `GUIDE.md` 为准。
 
