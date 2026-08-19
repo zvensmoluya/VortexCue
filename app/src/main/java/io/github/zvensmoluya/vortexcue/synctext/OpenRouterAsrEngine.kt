@@ -222,7 +222,7 @@ class OpenRouterAsrEngine(
         const val MaxEncodedRequestBytes = 24L * 1024L * 1024L
     }
 
-    private fun validatedEndpoint(value: String): String {
+    internal fun validatedEndpoint(value: String): String {
         val endpoint = value.trim().removeSuffix("/")
         val uri = runCatching { java.net.URI(endpoint) }.getOrNull()
         require(

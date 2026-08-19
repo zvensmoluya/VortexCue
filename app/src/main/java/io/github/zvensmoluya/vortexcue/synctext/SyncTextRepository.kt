@@ -102,7 +102,7 @@ class SyncTextRepository(
         apiKey: String? = null,
     ): List<String> {
         val catalog = modelCatalog ?: return emptyList()
-        val resolvedKey = apiKey?.trim()?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId))
+        val resolvedKey = validatedApiKey(apiKey?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId)))
         return catalog.fetch(protocol, endpoint, resolvedKey)
     }
 
@@ -114,7 +114,10 @@ class SyncTextRepository(
         apiKey: String? = null,
     ) {
         val tester = requireNotNull(connectionTester) { "Translation connection test is unavailable" }
-        val resolvedKey = apiKey?.trim()?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId))
+        val resolvedKey =
+            validatedApiKey(
+                apiKey?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId)),
+            )
         val current = loadConfig()
         tester.testTranslation(
             protocol = protocol,
@@ -133,7 +136,7 @@ class SyncTextRepository(
         apiKey: String? = null,
     ) {
         val tester = requireNotNull(connectionTester) { "ASR connection test is unavailable" }
-        val resolvedKey = apiKey?.trim()?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId))
+        val resolvedKey = validatedApiKey(apiKey?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId)))
         tester.testAsr(profile, endpoint, resolvedKey)
     }
 
@@ -142,28 +145,58 @@ class SyncTextRepository(
         asrSecret: String?,
         translationSecret: String?,
     ): SyncTextConfig {
-        val sharedCredential =
-            config.asrCredentialId.isNotBlank() && config.asrCredentialId == config.translationCredentialId
-        val normalizedAsrSecret = asrSecret?.trim()?.takeIf(String::isNotBlank)
-        val normalizedTranslationSecret = translationSecret?.trim()?.takeIf(String::isNotBlank)
-        val asrCredentialId =
-            saveInlineCredential(
-                existingId = config.asrCredentialId.takeUnless {
-                    sharedCredential && normalizedTranslationSecret != null
-                }.orEmpty(),
-                secret = normalizedAsrSecret,
-                name = "OpenRouter",
-                purpose = CredentialPurpose.Asr,
-            )
-        val translationCredentialId =
-            saveOptionalInlineCredential(
-                existingId = config.translationCredentialId?.takeUnless {
-                    sharedCredential && normalizedAsrSecret != null
-                },
-                secret = normalizedTranslationSecret,
-                name = "翻译服务",
-                purpose = CredentialPurpose.Translation,
-            )
+        val normalizedAsrSecret = asrSecret?.trim()?.takeIf(String::isNotBlank)?.let(::validatedApiKey)
+        val normalizedTranslationSecret = translationSecret?.trim()?.takeIf(String::isNotBlank)?.let(::validatedApiKey)
+        val sharedCredentialId =
+            config.asrCredentialId
+                .takeIf { it.isNotBlank() && it == config.translationCredentialId }
+        val (asrCredentialId, translationCredentialId) =
+            if (sharedCredentialId != null) {
+                when {
+                    normalizedAsrSecret == null && normalizedTranslationSecret == null ->
+                        sharedCredentialId to sharedCredentialId
+                    normalizedAsrSecret == null || normalizedTranslationSecret == null ||
+                        normalizedAsrSecret == normalizedTranslationSecret -> {
+                        val secret = normalizedAsrSecret ?: normalizedTranslationSecret!!
+                        updateInlineCredential(
+                            existingId = sharedCredentialId,
+                            secret = secret,
+                            fallbackName = "OpenRouter",
+                            purpose = CredentialPurpose.Shared,
+                        )
+                        sharedCredentialId to sharedCredentialId
+                    }
+                    else -> {
+                        val asr =
+                            saveInlineCredential(
+                                existingId = "",
+                                secret = normalizedAsrSecret,
+                                name = "OpenRouter",
+                                purpose = CredentialPurpose.Asr,
+                            )
+                        val translation =
+                            saveInlineCredential(
+                                existingId = "",
+                                secret = normalizedTranslationSecret,
+                                name = "翻译服务",
+                                purpose = CredentialPurpose.Translation,
+                            )
+                        asr to translation
+                    }
+                }
+            } else {
+                saveInlineCredential(
+                    existingId = config.asrCredentialId,
+                    secret = normalizedAsrSecret,
+                    name = "OpenRouter",
+                    purpose = CredentialPurpose.Asr,
+                ) to saveOptionalInlineCredential(
+                    existingId = config.translationCredentialId,
+                    secret = normalizedTranslationSecret,
+                    name = "翻译服务",
+                    purpose = CredentialPurpose.Translation,
+                )
+            }
         return saveConfig(
             config.copy(
                 asrCredentialId = asrCredentialId,
@@ -219,17 +252,20 @@ class SyncTextRepository(
         purpose: CredentialPurpose,
         secret: String,
     ): CredentialMetadata {
+        val normalizedSecret = validatedApiKey(secret)
         val id = credentialId ?: newId()
         val existing = dao.credential(id)
         val timestamp = nowMs()
         val previousSecret = existing?.let { runCatching { credentials.get(id) }.getOrNull() }
-        credentials.put(id, secret)
+        val effectivePurpose =
+            if (existing?.purpose == CredentialPurpose.Shared.name) CredentialPurpose.Shared else purpose
+        credentials.put(id, normalizedSecret)
         val entity =
             CredentialMetadataEntity(
                 credentialId = id,
                 name = name.trim().also { require(it.isNotBlank()) },
-                purpose = purpose.name,
-                maskedValue = maskCredential(secret),
+                purpose = effectivePurpose.name,
+                maskedValue = maskCredential(normalizedSecret),
                 createdAtMs = existing?.createdAtMs ?: timestamp,
                 updatedAtMs = timestamp,
             )
@@ -251,11 +287,15 @@ class SyncTextRepository(
         purpose: CredentialPurpose,
     ): String {
         val normalizedSecret = secret?.trim()?.takeIf(String::isNotBlank)
-        val id = existingId.takeIf(String::isNotBlank) ?: newId()
-        if (normalizedSecret != null) {
-            saveCredential(id, name, purpose, normalizedSecret)
-        }
-        return id
+        val id = existingId.trim()
+        if (normalizedSecret == null) return id
+        val existing = if (id.isBlank()) null else dao.credential(id)
+        return saveCredential(
+            credentialId = id.takeIf(String::isNotBlank),
+            name = existing?.name ?: uniqueCredentialName(name),
+            purpose = purpose,
+            secret = normalizedSecret,
+        ).credentialId
     }
 
     private suspend fun saveOptionalInlineCredential(
@@ -265,9 +305,47 @@ class SyncTextRepository(
         purpose: CredentialPurpose,
     ): String? {
         val normalizedSecret = secret?.trim()?.takeIf(String::isNotBlank)
-        val id = existingId?.takeIf(String::isNotBlank) ?: normalizedSecret?.let { newId() } ?: return null
-        if (normalizedSecret != null) saveCredential(id, name, purpose, normalizedSecret)
-        return id
+        val id = existingId?.trim().orEmpty()
+        if (normalizedSecret == null) return id.takeIf(String::isNotBlank)
+        val existing = if (id.isBlank()) null else dao.credential(id)
+        return saveCredential(
+            credentialId = id.takeIf(String::isNotBlank),
+            name = existing?.name ?: uniqueCredentialName(name),
+            purpose = purpose,
+            secret = normalizedSecret,
+        ).credentialId
+    }
+
+    private suspend fun updateInlineCredential(
+        existingId: String,
+        secret: String,
+        fallbackName: String,
+        purpose: CredentialPurpose,
+    ): String {
+        val existing = dao.credential(existingId)
+        return saveCredential(
+            credentialId = existingId,
+            name = existing?.name ?: uniqueCredentialName(fallbackName),
+            purpose = purpose,
+            secret = secret,
+        ).credentialId
+    }
+
+    private suspend fun uniqueCredentialName(baseName: String): String {
+        val names = dao.credentials().map { it.name }.toSet()
+        if (baseName !in names) return baseName
+        var suffix = 2
+        while ("$baseName $suffix" in names) suffix++
+        return "$baseName $suffix"
+    }
+
+    private fun validatedApiKey(value: String): String {
+        val key = value.trim()
+        require(key.isNotBlank()) { "API Key 不能为空" }
+        require(key.all { it.code in 0x21..0x7E }) {
+            "API Key 不能包含遮罩或不可发送字符，请输入真实密钥"
+        }
+        return key
     }
 
     suspend fun deleteCredential(credentialId: String) {

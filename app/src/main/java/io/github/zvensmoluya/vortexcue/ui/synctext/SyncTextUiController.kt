@@ -32,6 +32,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class SyncTextConfigDraft(
     val asrProfile: AsrProfile,
@@ -57,6 +59,14 @@ data class ConnectionTestUiState(
     val failureStatus: Int? = null,
 )
 
+data class CredentialSaveUiState(
+    val requestId: Long,
+    val purpose: CredentialPurpose,
+    val credentialId: String?,
+    val success: Boolean,
+    val message: String? = null,
+)
+
 data class SyncTextUiState(
     val config: SyncTextConfig? = null,
     val credentials: List<CredentialMetadata> = emptyList(),
@@ -67,9 +77,11 @@ data class SyncTextUiState(
     val audioInspectionError: String? = null,
     val availableTranslationModels: List<String> = emptyList(),
     val loadingTranslationModels: Boolean = false,
-    val modelDiscoveryMessage: String? = null,
     val translationConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val asrConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
+    val configSaving: Boolean = false,
+    val configError: String? = null,
+    val credentialSave: CredentialSaveUiState? = null,
     val busy: Boolean = false,
     val message: String? = null,
 )
@@ -140,9 +152,11 @@ private data class OverlayState(
     val audioInspectionError: String? = null,
     val availableTranslationModels: List<String> = emptyList(),
     val loadingTranslationModels: Boolean = false,
-    val modelDiscoveryMessage: String? = null,
     val translationConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val asrConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
+    val configSaving: Boolean = false,
+    val configError: String? = null,
+    val credentialSave: CredentialSaveUiState? = null,
     val busy: Boolean = false,
     val message: String? = null,
 )
@@ -153,6 +167,10 @@ class SyncTextUiController(
     private val scope: CoroutineScope,
 ) {
     private val overlay = MutableStateFlow(OverlayState())
+    private val configSaveMutex = Mutex()
+    private val configSaveCounterLock = Any()
+    private var configSaveCounter = 0
+    private var credentialSaveRequestId = 0L
     private var modelDiscoveryJob: Job? = null
     private var modelDiscoveryToken = 0L
 
@@ -173,9 +191,11 @@ class SyncTextUiController(
                 audioInspectionError = local.audioInspectionError,
                 availableTranslationModels = local.availableTranslationModels,
                 loadingTranslationModels = local.loadingTranslationModels,
-                modelDiscoveryMessage = local.modelDiscoveryMessage,
                 translationConnectionTest = local.translationConnectionTest,
                 asrConnectionTest = local.asrConnectionTest,
+                configSaving = local.configSaving,
+                configError = local.configError,
+                credentialSave = local.credentialSave,
                 busy = local.busy,
                 message = local.message,
             )
@@ -215,27 +235,12 @@ class SyncTextUiController(
                     apiKey = action.apiKey,
                     configurationFingerprint = action.configurationFingerprint,
                 )
-            is SyncTextAction.SaveCredential -> runAction {
-                repository.saveCredential(
-                    credentialId = action.credentialId,
-                    name = action.name,
-                    purpose = action.purpose,
-                    secret = action.secret,
-                )
-                "密钥已保存"
-            }
+            is SyncTextAction.SaveCredential -> saveCredential(action)
             is SyncTextAction.DeleteCredential -> runAction {
                 repository.deleteCredential(action.credentialId)
                 "密钥已删除"
             }
-            is SyncTextAction.SaveConfig -> runAction {
-                repository.saveConfigWithSecrets(
-                    action.draft.toConfig(action.configId),
-                    asrSecret = action.draft.asrSecret,
-                    translationSecret = action.draft.translationSecret,
-                )
-                null
-            }
+            is SyncTextAction.SaveConfig -> saveConfig(action)
             is SyncTextAction.SetPresentationMode -> runAction {
                 repository.setPresentationMode(action.slotId, action.mode)
                 null
@@ -261,6 +266,56 @@ class SyncTextUiController(
         }
     }
 
+    private fun saveCredential(action: SyncTextAction.SaveCredential) {
+        val requestId = ++credentialSaveRequestId
+        overlay.update {
+            it.copy(
+                busy = true,
+                credentialSave = null,
+                configError = null,
+                message = null,
+            )
+        }
+        scope.launch {
+            try {
+                val saved =
+                    repository.saveCredential(
+                        credentialId = action.credentialId,
+                        name = action.name,
+                        purpose = action.purpose,
+                        secret = action.secret,
+                    )
+                overlay.update {
+                    it.copy(
+                        busy = false,
+                        credentialSave =
+                            CredentialSaveUiState(
+                                requestId = requestId,
+                                purpose = action.purpose,
+                                credentialId = saved.credentialId,
+                                success = true,
+                            ),
+                    )
+                }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                overlay.update {
+                    it.copy(
+                        busy = false,
+                        credentialSave =
+                            CredentialSaveUiState(
+                                requestId = requestId,
+                                purpose = action.purpose,
+                                credentialId = action.credentialId,
+                                success = false,
+                                message = error.toCredentialSaveMessage(),
+                            ),
+                    )
+                }
+            }
+        }
+    }
+
     private fun discoverTranslationModels(
         protocol: TranslationProtocol,
         endpoint: String,
@@ -274,7 +329,6 @@ class SyncTextUiController(
                 it.copy(
                     availableTranslationModels = emptyList(),
                     loadingTranslationModels = false,
-                    modelDiscoveryMessage = null,
                 )
             }
             return
@@ -283,7 +337,6 @@ class SyncTextUiController(
             it.copy(
                 availableTranslationModels = emptyList(),
                 loadingTranslationModels = true,
-                modelDiscoveryMessage = null,
             )
         }
         modelDiscoveryJob =
@@ -297,8 +350,6 @@ class SyncTextUiController(
                         it.copy(
                             availableTranslationModels = models,
                             loadingTranslationModels = false,
-                            modelDiscoveryMessage =
-                                if (models.isEmpty()) "暂时没有可用模型列表，可以直接填写模型" else null,
                         )
                     }
                 }.onFailure { error ->
@@ -307,9 +358,6 @@ class SyncTextUiController(
                         it.copy(
                             availableTranslationModels = emptyList(),
                             loadingTranslationModels = false,
-                            modelDiscoveryMessage =
-                                error.message?.takeIf(String::isNotBlank)
-                                    ?: "暂时无法获取模型列表，可以直接填写模型",
                         )
                     }
                 }
@@ -325,7 +373,10 @@ class SyncTextUiController(
         configurationFingerprint: String,
     ) {
         overlay.update {
-            it.copy(translationConnectionTest = ConnectionTestUiState(running = true))
+            it.copy(
+                translationConnectionTest = ConnectionTestUiState(running = true),
+                configError = null,
+            )
         }
         scope.launch {
             runCatching {
@@ -360,7 +411,12 @@ class SyncTextUiController(
         apiKey: String?,
         configurationFingerprint: String,
     ) {
-        overlay.update { it.copy(asrConnectionTest = ConnectionTestUiState(running = true)) }
+        overlay.update {
+            it.copy(
+                asrConnectionTest = ConnectionTestUiState(running = true),
+                configError = null,
+            )
+        }
         scope.launch {
             runCatching {
                 repository.testAsrConnection(profile, endpoint, credentialId, apiKey)
@@ -524,6 +580,35 @@ class SyncTextUiController(
         }
     }
 
+    private fun saveConfig(action: SyncTextAction.SaveConfig) {
+        synchronized(configSaveCounterLock) { configSaveCounter++ }
+        overlay.update { it.copy(configSaving = true, configError = null, message = null) }
+        scope.launch {
+            try {
+                configSaveMutex.withLock {
+                    repository.saveConfigWithSecrets(
+                        action.draft.toConfig(action.configId),
+                        asrSecret = action.draft.asrSecret,
+                        translationSecret = action.draft.translationSecret,
+                    )
+                }
+                overlay.update { it.copy(configError = null) }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                overlay.update {
+                    it.copy(configError = "配置未保存，请检查必填项")
+                }
+            } finally {
+                val remaining =
+                    synchronized(configSaveCounterLock) {
+                        configSaveCounter = (configSaveCounter - 1).coerceAtLeast(0)
+                        configSaveCounter
+                    }
+                overlay.update { it.copy(configSaving = remaining > 0) }
+            }
+        }
+    }
+
     private fun handleFailure(error: Throwable) {
         if (error is CancellationException) throw error
         overlay.update {
@@ -533,6 +618,15 @@ class SyncTextUiController(
                 message = error.message?.takeIf(String::isNotBlank) ?: "操作失败",
             )
         }
+    }
+}
+
+private fun Throwable.toCredentialSaveMessage(): String {
+    val raw = message.orEmpty()
+    return when {
+        raw.contains("不能为空") -> "请输入 API Key"
+        raw.contains("遮罩") || raw.contains("不可发送") -> "请输入完整的 API Key"
+        else -> "API Key 保存失败"
     }
 }
 

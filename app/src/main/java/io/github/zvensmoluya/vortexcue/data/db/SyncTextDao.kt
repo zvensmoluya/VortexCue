@@ -12,6 +12,9 @@ interface SyncTextDao {
     @Query("SELECT * FROM sync_text_credential ORDER BY name, credential_id")
     fun observeCredentials(): Flow<List<CredentialMetadataEntity>>
 
+    @Query("SELECT * FROM sync_text_credential ORDER BY name, credential_id")
+    suspend fun credentials(): List<CredentialMetadataEntity>
+
     @Query("SELECT * FROM sync_text_credential WHERE credential_id = :credentialId")
     suspend fun credential(credentialId: String): CredentialMetadataEntity?
 

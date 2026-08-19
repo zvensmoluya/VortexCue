@@ -196,7 +196,7 @@ class SyncTextConnectionTesterTest {
         override suspend fun translateStreaming(request: TranslationProviderRequest): TranslationProviderResponse {
             streamingCalls += 1
             requests += request
-            val text = responses.removeFirst()
+            val text = responses.removeAt(0)
             return TranslationProviderResponse(
                 text = text,
                 usage = UsageRecord(totalTokens = 1L),

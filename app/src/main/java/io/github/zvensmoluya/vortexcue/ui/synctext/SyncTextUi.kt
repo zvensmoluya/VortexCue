@@ -25,30 +25,31 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults
-import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -56,9 +57,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
@@ -66,7 +65,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -152,6 +150,7 @@ internal fun SyncTextConfigPage(
     val existing = state.config
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
     val scope = rememberCoroutineScope()
+    var selectedPage by rememberSaveable { mutableStateOf(0) }
     val translationListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val asrListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     var translationDraft by remember(existing?.configId) {
@@ -179,16 +178,36 @@ internal fun SyncTextConfigPage(
     }
     val asrCredentials = credentialsFor(state.credentials, CredentialPurpose.Asr)
     val translationCredentials = credentialsFor(state.credentials, CredentialPurpose.Translation)
-    LaunchedEffect(asrCredentials, asrDraft.credentialId) {
-        if (asrDraft.credentialId !in asrCredentials.map { it.credentialId }) {
-            asrDraft = asrDraft.copy(credentialId = asrCredentials.firstOrNull()?.credentialId)
+    var asrCredentialInitialized by remember(existing?.configId) { mutableStateOf(false) }
+    var translationCredentialInitialized by remember(existing?.configId) { mutableStateOf(false) }
+    LaunchedEffect(asrCredentials) {
+        if (asrCredentials.isEmpty()) return@LaunchedEffect
+        if (!asrCredentialInitialized) {
+            asrCredentialInitialized = true
+            if (asrDraft.credentialId == null) {
+                asrDraft = asrDraft.copy(credentialId = asrCredentials.first().credentialId)
+            }
+        } else if (asrDraft.credentialId != null &&
+            asrDraft.credentialId !in asrCredentials.map { it.credentialId }
+        ) {
+            asrDraft = asrDraft.copy(credentialId = null)
         }
     }
-    LaunchedEffect(translationCredentials, translationDraft.credentialId) {
-        if (translationDraft.credentialId !in translationCredentials.map { it.credentialId }) {
-            translationDraft = translationDraft.copy(credentialId = translationCredentials.firstOrNull()?.credentialId)
+    LaunchedEffect(translationCredentials) {
+        if (translationCredentials.isEmpty()) return@LaunchedEffect
+        if (!translationCredentialInitialized) {
+            translationCredentialInitialized = true
+            if (translationDraft.credentialId == null) {
+                translationDraft = translationDraft.copy(credentialId = translationCredentials.first().credentialId)
+            }
+        } else if (translationDraft.credentialId != null &&
+            translationDraft.credentialId !in translationCredentials.map { it.credentialId }
+        ) {
+            translationDraft = translationDraft.copy(credentialId = null)
         }
     }
+    val asrSavedCredential = state.credentials.firstOrNull { it.credentialId == asrDraft.credentialId }
+    val translationSavedCredential = state.credentials.firstOrNull { it.credentialId == translationDraft.credentialId }
     val focusManager = LocalFocusManager.current
     fun fullDraft(
         translation: TranslationPageDraft = translationDraft,
@@ -198,13 +217,15 @@ internal fun SyncTextConfigPage(
             asrProfile = asr.profile,
             asrEndpoint = asr.endpoint,
             asrCredentialId = asr.credentialId,
-            asrSecret = asr.secret.takeIf(String::isNotBlank),
+            // Secrets are persisted only through SaveCredential. A page change must never
+            // turn an uncommitted replacement into an implicit credential update.
+            asrSecret = null,
             translationProtocol = translation.protocol,
             translationEndpoint = translation.endpoint,
             translationUserAgent = existing?.translationUserAgent,
             translationModel = translation.model,
             translationCredentialId = translation.credentialId,
-            translationSecret = translation.secret.takeIf(String::isNotBlank),
+            translationSecret = null,
             targetLanguage = translation.targetLanguage,
             presentationMode = existing?.presentationMode ?: TextPresentationMode.TargetOnly,
         )
@@ -213,7 +234,22 @@ internal fun SyncTextConfigPage(
         asr: AsrPageDraft = asrDraft,
     ) {
         val draft = fullDraft(translation, asr)
-        if (!state.busy && draft.isComplete()) onAction(SyncTextAction.SaveConfig(existing?.configId, draft))
+        if (!draft.isComplete()) return
+        onAction(SyncTextAction.SaveConfig(existing?.configId, draft))
+    }
+    fun saveCredential(
+        purpose: CredentialPurpose,
+        credentialId: String?,
+        secret: String,
+    ) {
+        onAction(
+            SyncTextAction.SaveCredential(
+                credentialId = credentialId,
+                name = if (purpose == CredentialPurpose.Asr) "OpenRouter" else "翻译服务",
+                purpose = purpose,
+                secret = secret,
+            ),
+        )
     }
     fun discoverModels(translation: TranslationPageDraft = translationDraft) {
         if (isHttpsEndpoint(translation.endpoint) &&
@@ -229,22 +265,61 @@ internal fun SyncTextConfigPage(
             )
         }
     }
-    LaunchedEffect(pagerState.currentPage) {
-        focusManager.clearFocus(force = true)
-        commitDraft()
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }.collect { page ->
+            selectedPage = page
+            focusManager.clearFocus(force = true)
+            commitDraft()
+        }
+    }
+    LaunchedEffect(state.credentialSave?.requestId) {
+        val result = state.credentialSave ?: return@LaunchedEffect
+        if (!result.success || result.credentialId == null) return@LaunchedEffect
+        when (result.purpose) {
+            CredentialPurpose.Asr -> {
+                val next = asrDraft.copy(credentialId = result.credentialId, secret = "")
+                asrDraft = next
+                commitDraft(asr = next)
+            }
+            CredentialPurpose.Translation -> {
+                val next = translationDraft.copy(credentialId = result.credentialId, secret = "")
+                translationDraft = next
+                commitDraft(translation = next)
+            }
+            CredentialPurpose.Shared -> Unit
+        }
+    }
+    val commitLatestDraft by rememberUpdatedState { commitDraft() }
+    DisposableEffect(Unit) {
+        onDispose { commitLatestDraft() }
     }
     Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
         PagerTabs(
-            pagerState = pagerState,
+            selectedPage = selectedPage,
             onSelect = { page ->
+                selectedPage = page
                 focusManager.clearFocus(force = true)
                 commitDraft()
-                // A two-page pager has no intermediate navigation target.
                 scope.launch {
                     pagerState.animateScrollToPage(page)
                 }
             },
         )
+        if (state.configSaving) {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                color = AppAccent,
+                trackColor = Color.Transparent,
+            )
+        }
+        state.configError?.let { error ->
+            Text(
+                error,
+                color = AppError,
+                fontSize = 12.sp,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+            )
+        }
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -260,13 +335,24 @@ internal fun SyncTextConfigPage(
                         draft = translationDraft,
                         availableModels = state.availableTranslationModels,
                         loadingModels = state.loadingTranslationModels,
-                        modelDiscoveryMessage = state.modelDiscoveryMessage,
                         connectionTest = state.translationConnectionTest,
-                        busy = state.busy,
+                        busy = state.busy || state.configSaving,
+                        hasSavedKey = translationSavedCredential != null,
+                        credentialSaveError = state.credentialSave
+                            ?.takeIf { it.purpose == CredentialPurpose.Translation && !it.success }
+                            ?.message,
+                        saveCompletedRequestId = state.credentialSave
+                            ?.takeIf { it.purpose == CredentialPurpose.Translation && it.success }
+                            ?.requestId,
                         listState = translationListState,
                         onDraftChanged = { translationDraft = it },
                         onCommit = { next -> commitDraft(translation = next) },
                         onDiscoverModels = { next -> discoverModels(next) },
+                        onSaveCredential = { value ->
+                            val next = translationDraft.copy(secret = value)
+                            translationDraft = next
+                            saveCredential(CredentialPurpose.Translation, next.credentialId, value)
+                        },
                         onTest = { fingerprint ->
                             onAction(
                                 SyncTextAction.TestTranslationConnection(
@@ -284,10 +370,22 @@ internal fun SyncTextConfigPage(
                     AsrPage(
                         draft = asrDraft,
                         connectionTest = state.asrConnectionTest,
-                        busy = state.busy,
+                        busy = state.busy || state.configSaving,
+                        hasSavedKey = asrSavedCredential != null,
+                        credentialSaveError = state.credentialSave
+                            ?.takeIf { it.purpose == CredentialPurpose.Asr && !it.success }
+                            ?.message,
+                        saveCompletedRequestId = state.credentialSave
+                            ?.takeIf { it.purpose == CredentialPurpose.Asr && it.success }
+                            ?.requestId,
                         listState = asrListState,
                         onDraftChanged = { asrDraft = it },
                         onCommit = { next -> commitDraft(asr = next) },
+                        onSaveCredential = { value ->
+                            val next = asrDraft.copy(secret = value)
+                            asrDraft = next
+                            saveCredential(CredentialPurpose.Asr, next.credentialId, value)
+                        },
                         onTest = { fingerprint ->
                             onAction(
                                 SyncTextAction.TestAsrConnection(
@@ -307,41 +405,43 @@ internal fun SyncTextConfigPage(
 
 @Composable
 private fun PagerTabs(
-    pagerState: PagerState,
+    selectedPage: Int,
     onSelect: (Int) -> Unit,
 ) {
-    val progress by remember(pagerState) {
-        derivedStateOf {
-            (pagerState.currentPage + pagerState.currentPageOffsetFraction).coerceIn(0f, 1f)
-        }
-    }
     BoxWithConstraints(
         modifier = Modifier.fillMaxWidth().background(Color.Black),
     ) {
         val tabWidth = maxWidth / 2
+        val indicatorInset = (tabWidth - 36.dp) / 2
+        val indicatorOffset by animateDpAsState(
+            targetValue = indicatorInset + tabWidth * selectedPage,
+            animationSpec = tween(220),
+            label = "config-tab-indicator",
+        )
         Column {
             Row(modifier = Modifier.fillMaxWidth()) {
                 listOf("翻译", "语音识别").forEachIndexed { index, label ->
                     Box(
-                        modifier = Modifier.weight(1f).heightIn(min = 48.dp).clickable { onSelect(index) },
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp).clickable {
+                            onSelect(index)
+                        },
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
                             label,
-                            color = if (pagerState.currentPage == index) AppPrimaryText else AppSecondaryText,
+                            color = if (selectedPage == index) AppPrimaryText else AppSecondaryText,
                             fontSize = 14.sp,
                         )
                     }
                 }
             }
-            Box(modifier = Modifier.fillMaxWidth().heightIn(min = 2.dp)) {
+            Box(modifier = Modifier.fillMaxWidth().height(3.dp)) {
                 Box(
                     modifier = Modifier
-                        .padding(horizontal = (tabWidth - 36.dp) / 2)
+                        .offset(x = indicatorOffset)
                         .width(36.dp)
-                        .heightIn(min = 2.dp)
+                        .height(3.dp)
                         .background(AppAccent, RoundedCornerShape(2.dp))
-                        .offset { IntOffset((tabWidth * progress).roundToPx(), 0) },
                 )
             }
         }
@@ -353,19 +453,20 @@ private fun TranslationPage(
     draft: TranslationPageDraft,
     availableModels: List<String>,
     loadingModels: Boolean,
-    modelDiscoveryMessage: String?,
     connectionTest: ConnectionTestUiState,
     busy: Boolean,
+    hasSavedKey: Boolean,
+    credentialSaveError: String?,
+    saveCompletedRequestId: Long?,
     listState: LazyListState,
     onDraftChanged: (TranslationPageDraft) -> Unit,
     onCommit: (TranslationPageDraft) -> Unit,
     onDiscoverModels: (TranslationPageDraft) -> Unit,
+    onSaveCredential: (String) -> Unit,
     onTest: (String) -> Unit,
 ) {
     val fingerprint = draft.translationFingerprint()
     val stale = connectionTest.testedFingerprint != null && connectionTest.testedFingerprint != fingerprint
-    val authFailure = !stale && connectionTest.failureCategory == io.github.zvensmoluya.vortexcue.synctext.GenerationErrorCategory.Authentication
-    var detailsVisible by remember { mutableStateOf(false) }
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().navigationBarsPadding().testTag("sync-text-translation-page"),
@@ -391,12 +492,6 @@ private fun TranslationPage(
             BaseUrlField(
                 value = draft.endpoint,
                 placeholder = draft.protocol.defaultBaseUrl(),
-                supportingText = when {
-                    !isHttpsEndpoint(draft.endpoint) -> "请输入有效的 HTTPS 地址"
-                    loadingModels -> "正在查找可用模型…"
-                    else -> modelDiscoveryMessage
-                },
-                isError = !isHttpsEndpoint(draft.endpoint),
                 onValueChange = { onDraftChanged(draft.copy(endpoint = it)) },
                 onCommit = { value ->
                     val next = draft.copy(endpoint = value)
@@ -410,7 +505,6 @@ private fun TranslationPage(
                 value = draft.model,
                 options = availableModels,
                 loading = loadingModels,
-                message = modelDiscoveryMessage,
                 onOpen = { onDiscoverModels(draft) },
                 onValueChange = {
                     val next = draft.copy(model = it)
@@ -432,14 +526,11 @@ private fun TranslationPage(
         item {
             ApiKeyField(
                 value = draft.secret,
-                hasSavedKey = draft.credentialId != null,
-                authenticationFailed = authFailure,
+                hasSavedKey = hasSavedKey,
+                saveError = credentialSaveError,
+                saveCompletedRequestId = saveCompletedRequestId,
                 onValueChange = { onDraftChanged(draft.copy(secret = it)) },
-                onCommit = { value ->
-                    val next = draft.copy(secret = value)
-                    onCommit(next)
-                    onDiscoverModels(next)
-                },
+                onSave = onSaveCredential,
             )
         }
         item {
@@ -452,16 +543,9 @@ private fun TranslationPage(
                     enabled = !busy && isHttpsEndpoint(draft.endpoint) && draft.model.isNotBlank() &&
                         (draft.credentialId != null || draft.secret.isNotBlank()),
                     onClick = { onTest(fingerprint) },
-                    onDetails = { detailsVisible = true },
                 )
             }
         }
-    }
-    if (detailsVisible) {
-        ConnectionErrorDetailsSheet(
-            state = connectionTest,
-            onDismiss = { detailsVisible = false },
-        )
     }
 }
 
@@ -470,15 +554,17 @@ private fun AsrPage(
     draft: AsrPageDraft,
     connectionTest: ConnectionTestUiState,
     busy: Boolean,
+    hasSavedKey: Boolean,
+    credentialSaveError: String?,
+    saveCompletedRequestId: Long?,
     listState: LazyListState,
     onDraftChanged: (AsrPageDraft) -> Unit,
     onCommit: (AsrPageDraft) -> Unit,
+    onSaveCredential: (String) -> Unit,
     onTest: (String) -> Unit,
 ) {
     val fingerprint = draft.asrFingerprint()
     val stale = connectionTest.testedFingerprint != null && connectionTest.testedFingerprint != fingerprint
-    val authFailure = !stale && connectionTest.failureCategory == io.github.zvensmoluya.vortexcue.synctext.GenerationErrorCategory.Authentication
-    var detailsVisible by remember { mutableStateOf(false) }
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().navigationBarsPadding().testTag("sync-text-asr-page"),
@@ -499,8 +585,6 @@ private fun AsrPage(
             BaseUrlField(
                 value = draft.endpoint,
                 placeholder = DefaultAsrEndpoint,
-                supportingText = if (!isHttpsEndpoint(draft.endpoint)) "请输入有效的 HTTPS 地址" else null,
-                isError = !isHttpsEndpoint(draft.endpoint),
                 onValueChange = { onDraftChanged(draft.copy(endpoint = it)) },
                 onCommit = { value -> onCommit(draft.copy(endpoint = value)) },
             )
@@ -508,10 +592,11 @@ private fun AsrPage(
         item {
             ApiKeyField(
                 value = draft.secret,
-                hasSavedKey = draft.credentialId != null,
-                authenticationFailed = authFailure,
+                hasSavedKey = hasSavedKey,
+                saveError = credentialSaveError,
+                saveCompletedRequestId = saveCompletedRequestId,
                 onValueChange = { onDraftChanged(draft.copy(secret = it)) },
-                onCommit = { value -> onCommit(draft.copy(secret = value)) },
+                onSave = onSaveCredential,
             )
         }
         item {
@@ -524,16 +609,9 @@ private fun AsrPage(
                     enabled = !busy && isHttpsEndpoint(draft.endpoint) &&
                         (draft.credentialId != null || draft.secret.isNotBlank()),
                     onClick = { onTest(fingerprint) },
-                    onDetails = { detailsVisible = true },
                 )
             }
         }
-    }
-    if (detailsVisible) {
-        ConnectionErrorDetailsSheet(
-            state = connectionTest,
-            onDismiss = { detailsVisible = false },
-        )
     }
 }
 
@@ -542,8 +620,6 @@ private fun AsrPage(
 private fun BaseUrlField(
     value: String,
     placeholder: String,
-    supportingText: String?,
-    isError: Boolean,
     onValueChange: (String) -> Unit,
     onCommit: (String) -> Unit,
 ) {
@@ -563,7 +639,6 @@ private fun BaseUrlField(
                 onValueChange(it.text)
             },
             placeholder = { Text(placeholder, color = AppMutedText) },
-            isError = isError,
             singleLine = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = {
@@ -592,9 +667,6 @@ private fun BaseUrlField(
                 }
             },
         )
-        supportingText?.let {
-            Text(it, color = if (isError) AppError else AppMutedText, fontSize = 12.sp)
-        }
     }
 }
 
@@ -602,67 +674,118 @@ private fun BaseUrlField(
 private fun ApiKeyField(
     value: String,
     hasSavedKey: Boolean,
-    authenticationFailed: Boolean,
+    saveError: String?,
+    saveCompletedRequestId: Long?,
     onValueChange: (String) -> Unit,
-    onCommit: (String) -> Unit,
+    onSave: (String) -> Unit,
 ) {
-    val focusManager = LocalFocusManager.current
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
-    var wasFocused by remember { mutableStateOf(false) }
+    var editing by rememberSaveable(hasSavedKey) { mutableStateOf(!hasSavedKey) }
+    var localError by rememberSaveable(hasSavedKey, saveError) { mutableStateOf<String?>(null) }
+    var externalErrorVisible by remember(saveError) { mutableStateOf(true) }
+    val error = localError ?: saveError.takeIf { externalErrorVisible }
+
+    LaunchedEffect(saveCompletedRequestId) {
+        if (saveCompletedRequestId != null) {
+            editing = false
+            localError = null
+            externalErrorVisible = false
+        }
+    }
+
+    fun save() {
+        val normalized = value.trim()
+        when {
+            normalized.isBlank() -> localError = "请输入 API Key"
+            !normalized.all { it.code in 0x21..0x7E } -> localError = "请输入完整的 API Key"
+            else -> {
+                localError = null
+                externalErrorVisible = false
+                onSave(normalized)
+            }
+        }
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ConfigFieldLabel("API Key")
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            placeholder = { Text(if (hasSavedKey) "已配置，留空保持不变" else "输入 API Key", color = AppMutedText) },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            isError = authenticationFailed,
-            trailingIcon = {
-                IconButton(
+        if (hasSavedKey && !editing) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = ConfigControlHeight)
+                    .background(AppSurfaceRaised, ConfigControlShape)
+                    .border(1.dp, AppHairline, ConfigControlShape)
+                    .padding(start = 16.dp, end = 8.dp)
+                    .testTag("sync-text-api-key-field")
+                    .semantics { contentDescription = "API Key 已配置" },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "已配置",
+                    color = AppPrimaryText,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                TextButton(
                     onClick = {
-                        scope.launch {
-                            clipboard.getClipEntry()
-                                ?.clipData
-                                ?.getItemAt(0)
-                                ?.text
-                                ?.toString()
-                                ?.takeIf(String::isNotBlank)
-                                ?.let {
-                                    onValueChange(it)
-                                    onCommit(it)
-                                }
-                        }
+                        editing = true
+                        localError = null
+                        externalErrorVisible = false
+                        onValueChange("")
                     },
-                    modifier = Modifier.semantics { contentDescription = "粘贴 API Key" },
-                ) { Icon(Icons.Outlined.ContentPaste, contentDescription = null, tint = AppSecondaryText) }
-            },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = {
-                onCommit(value)
-                focusManager.clearFocus()
-            }),
-            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = AppSurfaceRaised,
-                unfocusedContainerColor = AppSurfaceRaised,
-                focusedBorderColor = AppAccent,
-                unfocusedBorderColor = AppHairline,
-                errorContainerColor = AppSurfaceRaised,
-            ),
-            shape = ConfigControlShape,
-            modifier = Modifier.fillMaxWidth().heightIn(min = ConfigControlHeight).onFocusChanged { focusState ->
-                if (focusState.isFocused) wasFocused = true
-                else if (wasFocused) {
-                    wasFocused = false
-                    onCommit(value)
-                }
-            },
-        )
-        when {
-            authenticationFailed -> Text("认证失败，请检查密钥", color = AppError, fontSize = 12.sp)
-            hasSavedKey && value.isBlank() -> Text("已配置，留空保持不变", color = AppMutedText, fontSize = 12.sp)
+                ) { Text("更换", color = AppAccent) }
+            }
+        } else {
+            OutlinedTextField(
+                value = value,
+                onValueChange = {
+                    localError = null
+                    externalErrorVisible = false
+                    onValueChange(it)
+                },
+                placeholder = { Text("API Key", color = AppMutedText) },
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                singleLine = true,
+                trailingIcon = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (hasSavedKey) {
+                            TextButton(
+                                onClick = {
+                                    editing = false
+                                    localError = null
+                                    externalErrorVisible = false
+                                    onValueChange("")
+                                },
+                            ) { Text("取消", color = AppSecondaryText) }
+                        }
+                        TextButton(
+                            enabled = value.isNotBlank(),
+                            onClick = ::save,
+                        ) {
+                            Text(
+                                "保存",
+                                color = if (value.isNotBlank()) AppAccent else AppSecondaryText,
+                            )
+                        }
+                    }
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { save() }),
+                colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = AppSurfaceRaised,
+                    unfocusedContainerColor = AppSurfaceRaised,
+                    focusedBorderColor = AppAccent,
+                    unfocusedBorderColor = AppHairline,
+                    errorContainerColor = AppSurfaceRaised,
+                ),
+                shape = ConfigControlShape,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = ConfigControlHeight)
+                    .testTag("sync-text-api-key-field"),
+            )
         }
+        error?.let { Text(it, color = AppError, fontSize = 12.sp) }
     }
 }
 
@@ -701,25 +824,19 @@ private fun ModelPicker(
     value: String,
     options: List<String>,
     loading: Boolean,
-    message: String?,
     onOpen: () -> Unit,
     onValueChange: (String) -> Unit,
 ) {
     var visible by remember { mutableStateOf(false) }
     var manualEntry by remember { mutableStateOf(false) }
     var manualValue by remember(value) { mutableStateOf(value) }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column {
         ConfigChoiceRow(label = "模型", value = value.ifBlank { "选择模型" }, onClick = {
             onOpen()
             manualEntry = false
             manualValue = value
             visible = true
         })
-        when {
-            loading -> Text("正在自动查找模型…", color = AppMutedText, fontSize = 12.sp)
-            message != null -> Text(message, color = AppMutedText, fontSize = 12.sp)
-            options.isNotEmpty() -> Text("已找到 ${options.size} 个可用模型", color = AppMutedText, fontSize = 12.sp)
-        }
     }
     if (visible) {
         ModalBottomSheet(
@@ -903,7 +1020,6 @@ private fun ConnectionStatusRow(
     stale: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
-    onDetails: () -> Unit,
 ) {
     val failure = state.success == false && !stale && !state.running
     Row(
@@ -912,21 +1028,31 @@ private fun ConnectionStatusRow(
     ) {
         Text(
             when {
-                state.running -> "正在连接…"
-                stale -> "配置已修改"
-                state.success == true -> "✓ 服务可用"
-                failure -> "× 连接失败"
-                else -> "测试连接"
+                state.running -> "正在测试…"
+                stale -> "需要测试"
+                state.success == true -> "服务可用"
+                failure -> "连接失败"
+                else -> "未测试"
             },
             color = if (failure) AppError else AppPrimaryText,
             modifier = Modifier.weight(1f),
         )
         when {
-            state.running -> Text("◌", color = AppSecondaryText)
-            stale -> TextButton(enabled = enabled, onClick = onClick) { Text("重新测试", color = AppAccent) }
-            state.success == true -> TextButton(enabled = enabled, onClick = onClick) { Text("重新测试", color = AppAccent) }
-            failure -> TextButton(onClick = onDetails) { Text("查看详情", color = AppAccent) }
-            else -> TextButton(enabled = enabled, onClick = onClick) { Text("未测试", color = AppSecondaryText) }
+            state.running -> CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = AppAccent,
+            )
+            else -> TextButton(enabled = enabled, onClick = onClick) {
+                Text(
+                    when {
+                        state.success == true -> "重新测试"
+                        failure -> "重试"
+                        else -> "测试连接"
+                    },
+                    color = if (enabled) AppAccent else AppSecondaryText,
+                )
+            }
         }
     }
 }
@@ -944,42 +1070,6 @@ private fun ConnectionSection(
         content()
     }
 }
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ConnectionErrorDetailsSheet(
-    state: ConnectionTestUiState,
-    onDismiss: () -> Unit,
-) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = AppSurfaceRaised,
-    ) {
-        SheetTitle("连接失败")
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            state.failureCategory?.let { category ->
-                Text(connectionCategoryLabel(category), color = AppSecondaryText, fontSize = 12.sp)
-            }
-            state.failureStatus?.let { status ->
-                Text("HTTP $status", color = AppSecondaryText, fontSize = 12.sp)
-            }
-            Text(state.message ?: "连接失败", color = AppPrimaryText)
-        }
-        Spacer(Modifier.navigationBarsPadding().padding(bottom = 16.dp))
-    }
-}
-
-private fun connectionCategoryLabel(category: io.github.zvensmoluya.vortexcue.synctext.GenerationErrorCategory): String =
-    when (category) {
-        io.github.zvensmoluya.vortexcue.synctext.GenerationErrorCategory.Authentication -> "认证失败"
-        io.github.zvensmoluya.vortexcue.synctext.GenerationErrorCategory.RateLimited -> "请求过于频繁"
-        io.github.zvensmoluya.vortexcue.synctext.GenerationErrorCategory.TemporaryNetwork -> "网络或服务暂时不可用"
-        io.github.zvensmoluya.vortexcue.synctext.GenerationErrorCategory.ModelOrProtocol -> "模型或协议不匹配"
-        else -> "服务连接失败"
-    }
 
 private fun credentialsFor(
     credentials: List<CredentialMetadata>,
