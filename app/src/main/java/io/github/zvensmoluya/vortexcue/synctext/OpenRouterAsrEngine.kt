@@ -4,8 +4,9 @@ import java.io.File
 import java.io.FilterOutputStream
 import java.io.IOException
 import java.io.OutputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import java.util.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
@@ -45,6 +46,7 @@ class AsrException(
     val category: GenerationErrorCategory,
     val retryable: Boolean,
     val shouldSplit: Boolean,
+    val retryAfterMs: Long? = null,
     val httpStatus: Int? = null,
     val rawResponse: ByteArray? = null,
     message: String,
@@ -90,7 +92,7 @@ class OpenRouterAsrEngine(
                     throw AsrException(
                         category = error.category,
                         retryable = error.retryable,
-                        shouldSplit = error.retryable,
+                        shouldSplit = false,
                         httpStatus = error.httpStatus,
                         rawResponse = error.rawResponse,
                         message = error.message ?: "ASR protocol failed",
@@ -98,13 +100,7 @@ class OpenRouterAsrEngine(
                     )
                 } catch (error: IOException) {
                     budget.degradeToSerial()
-                    throw AsrException(
-                        category = GenerationErrorCategory.TemporaryNetwork,
-                        retryable = true,
-                        shouldSplit = true,
-                        message = "ASR request failed before a valid response",
-                        cause = error,
-                    )
+                    throw asrTransportFailure(error)
                 }
             if (exchange.status !in 200..299) throw classifyFailure(exchange, request.apiKey)
             val root = parseRoot(exchange)
@@ -129,7 +125,7 @@ class OpenRouterAsrEngine(
         }
     }
 
-    private suspend fun classifyFailure(exchange: HttpExchange, apiKey: String): AsrException {
+    internal suspend fun classifyFailure(exchange: HttpExchange, apiKey: String): AsrException {
         val message = extractError(exchange.body).replace(apiKey, "[redacted]").take(600)
         val temporary = exchange.status == 408 || exchange.status == 429 || exchange.status in 500..599
         if (temporary) budget.degradeToSerial()
@@ -137,12 +133,14 @@ class OpenRouterAsrEngine(
             category =
                 when {
                     exchange.status == 401 || exchange.status == 403 -> GenerationErrorCategory.Authentication
+                    exchange.status == 413 -> GenerationErrorCategory.Media
                     exchange.status == 429 -> GenerationErrorCategory.RateLimited
                     temporary -> GenerationErrorCategory.TemporaryNetwork
                     else -> GenerationErrorCategory.ModelOrProtocol
                 },
             retryable = temporary,
-            shouldSplit = temporary || exchange.status == 413,
+            shouldSplit = exchange.status == 413,
+            retryAfterMs = if (temporary) parseRetryAfterMs(exchange.headers["Retry-After"]) else null,
             httpStatus = exchange.status,
             rawResponse = exchange.body,
             message = message,
@@ -248,100 +246,38 @@ class OpenRouterAsrEngine(
             else -> endpoint
         }
     }
-
-    /** Sends a tiny valid WAV payload to verify endpoint, key, and model access. */
-    suspend fun testConnection(profile: AsrProfile, endpoint: String, apiKey: String) {
-        val testFile = File.createTempFile("vortexcue-asr-test-", ".wav")
-        try {
-            testFile.writeBytes(testWavBytes())
-            val request =
-                AsrRequest(
-                    profile = profile,
-                    apiKey = apiKey,
-                    wavFile = testFile,
-                    window =
-                        AsrWindowPlan(
-                            windowId = "connection-test",
-                            ordinal = 0,
-                            ownedStartMs = 0L,
-                            ownedEndMs = 250L,
-                            uploadStartMs = 0L,
-                            uploadEndMs = 250L,
-                            pcmStartFrame = 0L,
-                            pcmEndFrame = 2_000L,
-                            cutReason = "connection-test",
-                            isLast = true,
-                        ),
-                    endpoint = endpoint,
-                )
-            val body = StreamingAsrJsonRequestBody(request)
-            val permit = budget.acquire(body.contentLength())
-            try {
-                val exchange =
-                    executor.execute(
-                        Request.Builder()
-                            .url(validatedEndpoint(endpoint))
-                            .header("Accept", "application/json")
-                            .header("Authorization", "Bearer $apiKey")
-                            .post(body)
-                            .build(),
-                    )
-                if (exchange.status !in 200..299) throw classifyFailure(exchange, apiKey)
-                validateConnectionResponse(exchange)
-            } finally {
-                permit.release()
-            }
-        } finally {
-            testFile.delete()
-        }
-    }
-
-    internal fun validateConnectionResponse(exchange: HttpExchange) {
-        val root = parseRoot(exchange)
-        val hasTranscript =
-            root["text"] is JsonPrimitive ||
-                root["segments"] is JsonArray ||
-                root["words"] is JsonArray
-        if (!hasTranscript) {
-            throw AsrException(
-                category = GenerationErrorCategory.InvalidResponse,
-                retryable = false,
-                shouldSplit = false,
-                httpStatus = exchange.status,
-                rawResponse = exchange.body,
-                message = "ASR response omitted transcript data",
-            )
-        }
-    }
-
-    private fun testWavBytes(): ByteArray {
-        val sampleRate = 8_000
-        val sampleCount = sampleRate / 4
-        val dataSize = sampleCount * 2
-        val bytes = ByteBuffer.allocate(44 + dataSize).order(ByteOrder.LITTLE_ENDIAN)
-        bytes.put("RIFF".toByteArray(Charsets.US_ASCII))
-        bytes.putInt(36 + dataSize)
-        bytes.put("WAVE".toByteArray(Charsets.US_ASCII))
-        bytes.put("fmt ".toByteArray(Charsets.US_ASCII))
-        bytes.putInt(16)
-        bytes.putShort(1)
-        bytes.putShort(1)
-        bytes.putInt(sampleRate)
-        bytes.putInt(sampleRate * 2)
-        bytes.putShort(2)
-        bytes.putShort(16)
-        bytes.put("data".toByteArray(Charsets.US_ASCII))
-        bytes.putInt(dataSize)
-        repeat(sampleCount) { index ->
-            val sample =
-                (kotlin.math.sin(index * 2.0 * Math.PI * 440.0 / sampleRate) * 2_000)
-                    .toInt()
-                    .toShort()
-            bytes.putShort(sample)
-        }
-        return bytes.array()
-    }
 }
+
+internal fun asrTransportFailure(error: IOException) =
+    AsrException(
+        category = GenerationErrorCategory.TemporaryNetwork,
+        retryable = true,
+        shouldSplit = false,
+        message = "ASR request failed before a valid response",
+        cause = error,
+    )
+
+internal fun parseRetryAfterMs(
+    value: String?,
+    nowMs: Long = System.currentTimeMillis(),
+): Long? {
+    val raw = value?.trim().orEmpty()
+    if (raw.isEmpty()) return null
+    val seconds = raw.toDoubleOrNull()
+    val delayMs =
+        if (seconds != null && seconds.isFinite() && seconds >= 0.0) {
+            (seconds * 1_000.0).toLong()
+        } else {
+            try {
+                ZonedDateTime.parse(raw, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() - nowMs
+            } catch (_: DateTimeParseException) {
+                return null
+            }
+        }
+    return delayMs.coerceIn(0L, MaxAsrRetryAfterMs)
+}
+
+private const val MaxAsrRetryAfterMs = 60_000L
 
 private class StreamingAsrJsonRequestBody(request: AsrRequest) : RequestBody() {
     private val file = request.wavFile

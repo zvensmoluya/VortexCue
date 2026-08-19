@@ -120,6 +120,7 @@ internal fun PlayerScreen(
     onAddTextTrack: (TextTrackSlot) -> Unit,
     syncTextTask: GenerationTaskSummary?,
     onGenerateSyncText: () -> Unit,
+    onTranslateSyncText: () -> Unit,
     onCancelSyncText: () -> Unit,
     onRetrySyncText: () -> Unit,
     onGeneratedPresentationModeChanged: (String, TextPresentationMode) -> Unit,
@@ -267,6 +268,7 @@ internal fun PlayerScreen(
             generatedText = session.generatedText,
             syncTextTask = syncTextTask,
             onGenerateSyncText = onGenerateSyncText,
+            onTranslateSyncText = onTranslateSyncText,
             onCancelSyncText = onCancelSyncText,
             onRetrySyncText = onRetrySyncText,
             onPresentationModeChanged = onGeneratedPresentationModeChanged,
@@ -709,6 +711,7 @@ private fun TextTrackDialog(
     generatedText: LoadedGeneratedText?,
     syncTextTask: GenerationTaskSummary?,
     onGenerateSyncText: () -> Unit,
+    onTranslateSyncText: () -> Unit,
     onCancelSyncText: () -> Unit,
     onRetrySyncText: () -> Unit,
     onPresentationModeChanged: (String, TextPresentationMode) -> Unit,
@@ -722,7 +725,14 @@ private fun TextTrackDialog(
         title = { Text("同步文字", color = AppPrimaryText) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                val productStatus = generationProductStatus(syncTextTask, generatedText != null)
+                val productStatus =
+                    generationProductStatus(
+                        syncTextTask,
+                        hasGeneratedText = generatedText != null,
+                        hasPartialText =
+                            generatedText?.completeness ==
+                                io.github.zvensmoluya.vortexcue.synctext.GeneratedResultCompleteness.Partial,
+                    )
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     TextButton(
                         onClick = onGenerateSyncText,
@@ -730,8 +740,20 @@ private fun TextTrackDialog(
                     ) {
                         Text("生成", color = AppAccent, fontSize = 12.sp)
                     }
+                    if (
+                        generatedText?.targetTimeline == null &&
+                        generatedText?.completeness == io.github.zvensmoluya.vortexcue.synctext.GeneratedResultCompleteness.Final
+                    ) {
+                        TextButton(
+                            onClick = onTranslateSyncText,
+                            enabled = syncTextTask == null || syncTextTask.state == GenerationTaskState.Completed,
+                        ) {
+                            Text("翻译", color = AppAccent, fontSize = 12.sp)
+                        }
+                    }
                     if (productStatus != null) {
-                        val failed = productStatus == "失败"
+                        val failed = productStatus.contains("失败")
+                        val paused = productStatus.contains("已暂停")
                         Text(
                             productStatus,
                             color = if (failed) AppError else AppAccent,
@@ -739,8 +761,8 @@ private fun TextTrackDialog(
                             modifier = Modifier.align(Alignment.CenterVertically),
                         )
                         if (productStatus != "完成") {
-                            TextButton(onClick = if (failed) onRetrySyncText else onCancelSyncText) {
-                                Text(if (failed) "重试" else "取消", color = AppSecondaryText, fontSize = 12.sp)
+                            TextButton(onClick = if (failed || paused) onRetrySyncText else onCancelSyncText) {
+                                Text(if (failed) "重试" else if (paused) "继续" else "暂停", color = AppSecondaryText, fontSize = 12.sp)
                             }
                         }
                     }

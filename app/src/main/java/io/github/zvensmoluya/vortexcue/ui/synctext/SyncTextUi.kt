@@ -47,6 +47,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
@@ -130,6 +131,7 @@ private data class TranslationPageDraft(
     val model: String,
     val credentialId: String?,
     val secret: String,
+    val targetLanguage: String,
 )
 
 private data class AsrPageDraft(
@@ -160,6 +162,7 @@ internal fun SyncTextConfigPage(
                 model = existing?.translationModel.orEmpty(),
                 credentialId = existing?.translationCredentialId,
                 secret = "",
+                targetLanguage = existing?.targetLanguage ?: "zh-CN",
             ),
         )
     }
@@ -223,7 +226,7 @@ internal fun SyncTextConfigPage(
             translationModel = translation.model,
             translationCredentialId = translation.credentialId,
             translationSecret = null,
-            targetLanguage = existing?.targetLanguage ?: "zh-CN",
+            targetLanguage = translation.targetLanguage,
             presentationMode = existing?.presentationMode ?: TextPresentationMode.TargetOnly,
         )
     fun commitDraft(
@@ -286,8 +289,9 @@ internal fun SyncTextConfigPage(
             CredentialPurpose.Shared -> Unit
         }
     }
+    val commitLatestDraft by rememberUpdatedState { commitDraft() }
     DisposableEffect(Unit) {
-        onDispose { commitDraft() }
+        onDispose { commitLatestDraft() }
     }
     Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
         PagerTabs(
@@ -332,7 +336,7 @@ internal fun SyncTextConfigPage(
                         availableModels = state.availableTranslationModels,
                         loadingModels = state.loadingTranslationModels,
                         connectionTest = state.translationConnectionTest,
-                        busy = state.busy,
+                        busy = state.busy || state.configSaving,
                         hasSavedKey = translationSavedCredential != null,
                         credentialSaveError = state.credentialSave
                             ?.takeIf { it.purpose == CredentialPurpose.Translation && !it.success }
@@ -366,7 +370,7 @@ internal fun SyncTextConfigPage(
                     AsrPage(
                         draft = asrDraft,
                         connectionTest = state.asrConnectionTest,
-                        busy = state.busy,
+                        busy = state.busy || state.configSaving,
                         hasSavedKey = asrSavedCredential != null,
                         credentialSaveError = state.credentialSave
                             ?.takeIf { it.purpose == CredentialPurpose.Asr && !it.success }
@@ -504,6 +508,16 @@ private fun TranslationPage(
                 onOpen = { onDiscoverModels(draft) },
                 onValueChange = {
                     val next = draft.copy(model = it)
+                    onDraftChanged(next)
+                    onCommit(next)
+                },
+            )
+        }
+        item {
+            TargetLanguagePicker(
+                value = draft.targetLanguage,
+                onValueChange = {
+                    val next = draft.copy(targetLanguage = it)
                     onDraftChanged(next)
                     onCommit(next)
                 },
@@ -875,6 +889,41 @@ private fun ModelPicker(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TargetLanguagePicker(
+    value: String,
+    onValueChange: (String) -> Unit,
+) {
+    var visible by remember { mutableStateOf(false) }
+    val options =
+        listOf(
+            "zh-CN" to "简体中文",
+            "zh-TW" to "繁體中文",
+            "en" to "English",
+            "ja" to "日本語",
+            "ko" to "한국어",
+        )
+    val label = options.firstOrNull { it.first == value }?.second ?: value
+    ConfigChoiceRow(label = "翻译成", value = label, onClick = { visible = true })
+    if (visible) {
+        ModalBottomSheet(onDismissRequest = { visible = false }, containerColor = AppSurfaceRaised) {
+            SheetTitle("翻译成")
+            options.forEach { (tag, title) ->
+                SheetChoiceRow(
+                    title = title,
+                    selected = tag == value,
+                    onClick = {
+                        onValueChange(tag)
+                        visible = false
+                    },
+                )
+            }
+            Spacer(Modifier.navigationBarsPadding())
+        }
+    }
+}
+
 @Composable
 private fun ConfigChoiceRow(
     label: String,
@@ -1030,13 +1079,10 @@ private fun credentialsFor(
 
 private fun SyncTextConfigDraft.isComplete(): Boolean =
     isHttpsEndpoint(asrEndpoint) &&
-        isHttpsEndpoint(translationEndpoint) &&
-        translationModel.isNotBlank() &&
-        asrCredentialId != null &&
-        translationCredentialId != null
+        (asrCredentialId != null || asrSecret?.isNotBlank() == true)
 
 private fun TranslationPageDraft.translationFingerprint(): String =
-    fingerprintOf(protocol.name, endpoint.trim(), model.trim(), credentialId.orEmpty(), secret)
+    fingerprintOf(protocol.name, endpoint.trim(), model.trim(), credentialId.orEmpty(), secret, targetLanguage)
 
 private fun AsrPageDraft.asrFingerprint(): String =
     fingerprintOf(profile.name, endpoint.trim(), credentialId.orEmpty(), secret)
@@ -1155,7 +1201,7 @@ private fun inputChoices(
                 add(
                     InputChoice(
                         label = track.label ?: track.language ?: track.locator.displayName,
-                        detail = "使用现有文字生成译文",
+                        detail = "采用现有同步文字",
                         input = input,
                     ),
                 )

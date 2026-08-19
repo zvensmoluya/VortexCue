@@ -18,6 +18,7 @@ import io.github.zvensmoluya.vortexcue.subtitle.NormalizedSubtitleWriter
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleCue
 import io.github.zvensmoluya.vortexcue.subtitle.WebVttParser
 import java.io.IOException
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
@@ -32,6 +33,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 interface SyncTextNetworkState {
@@ -56,7 +59,7 @@ class SyncTextTaskRunner(
     private val assets: GeneratedTextAssetStore,
     private val sourceText: SourceTextMaterializer,
     private val audio: AudioWindowExtractor,
-    private val spool: BoundedPcmSpool,
+    private val spool: PcmSpool,
     private val asr: AsrEngine,
     private val translation: TranslationNetworkGateway,
     private val networkState: SyncTextNetworkState,
@@ -102,7 +105,9 @@ class SyncTextTaskRunner(
     private suspend fun processTask(task: GenerationTaskEntity) {
         try {
             val snapshot = requireNotNull(repository.taskSnapshot(task.taskId))
-            if (!networkState.permits(snapshot.allowMeteredNetwork)) {
+            val kind = task.kind.enumValueOr(GenerationTaskKind.SourceGeneration)
+            val requiresNetwork = kind == GenerationTaskKind.TranslationDerivation || snapshot.sourceTrackId == null
+            if (requiresNetwork && !networkState.permits(snapshot.allowMeteredNetwork)) {
                 repository.markWaitingForNetwork(task.taskId, true)
                 return
             }
@@ -110,8 +115,7 @@ class SyncTextTaskRunner(
             ensureRunnable(task.taskId)
             val attempt = requireNotNull(repository.currentAttempt(task.taskId))
             val source = resolveSource(task, snapshot, attempt)
-            val targetLanguage = snapshot.targetLanguage
-            if (targetLanguage == null) {
+            if (kind == GenerationTaskKind.SourceGeneration) {
                 if (repository.isTerminal(task.taskId)) return
                 ensureRunnable(task.taskId)
                 repository.publishResult(
@@ -127,6 +131,7 @@ class SyncTextTaskRunner(
                 )
                 return
             }
+            val targetLanguage = requireNotNull(snapshot.targetLanguage) { "Translation target language is missing" }
             ensureRunnable(task.taskId)
             translateAndPublish(task, snapshot, requireNotNull(repository.currentAttempt(task.taskId)), source, targetLanguage)
         } catch (paused: TaskDeferredException) {
@@ -147,7 +152,7 @@ class SyncTextTaskRunner(
                 task.taskId,
                 GenerationErrorCategory.InvalidResponse,
                 "Translation output failed strict cue validation",
-                blockScheme = true,
+                blockScheme = false,
             )
         } catch (error: AsrException) {
             repository.blockTask(
@@ -198,21 +203,31 @@ class SyncTextTaskRunner(
         snapshot: GenerationTaskSnapshotEntity,
         attempt: GenerationAttemptEntity,
     ): SourceWork {
-        attempt.sourceResultId?.let { resultId ->
-            loadSourceResult(resultId)?.let { return it }
-        }
-        task.sourceResultId?.let { resultId ->
-            loadSourceResult(resultId)?.let { return it }
+        if (task.kind.enumValueOr(GenerationTaskKind.SourceGeneration) == GenerationTaskKind.TranslationDerivation) {
+            val frozenResultId = requireNotNull(snapshot.inputSourceResultId) { "Translation source result is missing" }
+            require(task.sourceResultId == frozenResultId && attempt.sourceResultId == frozenResultId) {
+                "Translation source result snapshot does not match the task"
+            }
+            val entity = requireNotNull(dao.generatedResult(frozenResultId)) { "Translation source result is unavailable" }
+            require(entity.targetLanguage == null && entity.completeness == GeneratedResultCompleteness.Final.name) {
+                "Translation requires a final source result"
+            }
+            return requireNotNull(loadSourceResult(frozenResultId)) { "Translation source result is unavailable" }
         }
         return if (snapshot.sourceTrackId != null) {
             repository.markRunning(task.taskId, GenerationStage.MaterializingText, 0.08f)
             ensureRunnable(task.taskId)
-            sourceText.materialize(task.contentId, snapshot).let { materialized ->
-                SourceWork(
-                    cues = materialized.cues,
-                    language = snapshot.sourceLanguage ?: materialized.language,
-                    usage = UsageRecord(),
-                )
+            try {
+                sourceText.materialize(task.contentId, snapshot).let { materialized ->
+                    SourceWork(
+                        cues = materialized.cues,
+                        language = snapshot.sourceLanguage ?: materialized.language,
+                        usage = UsageRecord(),
+                    )
+                }
+            } catch (error: SourceTextUnavailableException) {
+                if (!snapshot.allowAsrFallback || !error.safeToFallback) throw error
+                performAsr(task, snapshot.copy(sourceTrackId = null, embeddedTrackId = null), attempt)
             }
         } else {
             performAsr(task, snapshot, attempt)
@@ -258,8 +273,12 @@ class SyncTextTaskRunner(
                 }
             dao.upsertAsrWindows(entities)
         }
-        val roots = entities.filter { it.parentWindowId == null }
+        val roots = entities.filter { it.parentWindowId == null }.sortedBy(AsrWindowEntity::ownedStartMs)
         val semaphore = Semaphore(AsrParallelism)
+        val publicationMutex = Mutex()
+        val completedByRoot = linkedMapOf<String, List<WindowTranscript>>()
+        var publishedRootCount =
+            task.sourceResultId?.let { dao.generatedResult(it)?.completedWindowCount } ?: 0
         val completed = AtomicInteger(0)
         val transcripts =
             coroutineScope {
@@ -267,7 +286,40 @@ class SyncTextTaskRunner(
                     async {
                         semaphore.acquire()
                         try {
-                            processAsrWindowTree(task, snapshot, attempt, mediaUri, durationMs, planner, entity)
+                            processAsrWindowTree(task, snapshot, attempt, mediaUri, durationMs, planner, entity).also { work ->
+                                publicationMutex.withLock {
+                                    completedByRoot[entity.windowId] = work
+                                    val prefix = roots.takeWhile { completedByRoot.containsKey(it.windowId) }
+                                    if (prefix.size > publishedRootCount) {
+                                        val prefixWork = prefix.flatMap { requireNotNull(completedByRoot[it.windowId]) }
+                                        val prefixCues = mergeWindowTranscripts(prefixWork)
+                                        if (prefixCues.isNotEmpty()) {
+                                            val language = resolveAsrLanguage(snapshot, prefixWork)
+                                            repository.publishResult(
+                                                taskId = task.taskId,
+                                                sourceLanguage = language,
+                                                targetLanguage = null,
+                                                presentationMode = TextPresentationMode.TargetOnly,
+                                                sourceCues = prefixCues,
+                                                targetCues = null,
+                                                usage = prefixWork.map(WindowTranscript::usage).sumRealUsage(),
+                                                sourceModel = attempt.asrProfile.enumValueOr(AsrProfile.OpenRouterWhisperV1).modelId,
+                                                completeTask = prefix.size == roots.size,
+                                                completeness =
+                                                    if (prefix.size == roots.size) {
+                                                        GeneratedResultCompleteness.Final
+                                                    } else {
+                                                        GeneratedResultCompleteness.Partial
+                                                    },
+                                                coveredEndMs = prefix.last().ownedEndMs,
+                                                completedWindowCount = prefix.size,
+                                                totalWindowCount = roots.size,
+                                            )
+                                            publishedRootCount = prefix.size
+                                        }
+                                    }
+                                }
+                            }
                         } finally {
                             semaphore.release()
                             val count = completed.incrementAndGet()
@@ -280,29 +332,26 @@ class SyncTextTaskRunner(
                     }
                 }.awaitAll().flatten()
             }
-        ensureRunnable(task.taskId)
-        val tokens = transcripts.flatMap { transcript -> transcript.cues.map { it.toTimestampedToken() } }
-        val merged = AsrTimelineMerger.mergeSegments(tokens)
+        val merged = mergeWindowTranscripts(transcripts)
         if (merged.isEmpty()) throw AsrException(GenerationErrorCategory.Timeline, false, false, message = "ASR produced no owned cues")
-        val language =
-            snapshot.sourceLanguage
-                ?: transcripts.mapNotNull(WindowTranscript::language).groupingBy { it.lowercase() }.eachCount()
-                    .maxByOrNull { it.value }?.key
+        val language = resolveAsrLanguage(snapshot, transcripts)
         val usage = transcripts.map(WindowTranscript::usage).sumRealUsage()
-        val sourceResult =
-            repository.publishResult(
-                taskId = task.taskId,
-                sourceLanguage = language,
-                targetLanguage = null,
-                presentationMode = TextPresentationMode.TargetOnly,
-                sourceCues = merged,
-                targetCues = null,
-                usage = usage,
-                sourceModel = attempt.asrProfile.enumValueOr(AsrProfile.OpenRouterWhisperV1).modelId,
-                completeTask = snapshot.targetLanguage == null,
-            )
-        return SourceWork(merged, language, usage, sourceResult.resultId)
+        val resultId = dao.task(task.taskId)?.sourceResultId
+        return SourceWork(merged, language, usage, resultId)
     }
+
+    private fun mergeWindowTranscripts(transcripts: List<WindowTranscript>): List<SubtitleCue> {
+        val tokens = transcripts.flatMap { transcript -> transcript.cues.map { it.toTimestampedToken() } }
+        return AsrTimelineMerger.mergeSegments(tokens)
+    }
+
+    private fun resolveAsrLanguage(
+        snapshot: GenerationTaskSnapshotEntity,
+        transcripts: List<WindowTranscript>,
+    ): String? =
+        snapshot.sourceLanguage
+            ?: transcripts.mapNotNull(WindowTranscript::language).groupingBy { it.lowercase() }.eachCount()
+                .maxByOrNull { it.value }?.key
 
     private suspend fun processAsrWindowTree(
         task: GenerationTaskEntity,
@@ -317,7 +366,7 @@ class SyncTextTaskRunner(
         if (entity.state == CompletedState && entity.transcriptAssetFileName != null) {
             return listOf(
                 WindowTranscript(
-                    cues = WebVttParser.parse(assets.readCheckpoint(entity.transcriptAssetFileName)),
+                    cues = readAsrCheckpoint(entity),
                     language = entity.detectedLanguage,
                     usage = UsageRecord(entity.inputTokens, entity.outputTokens, entity.totalTokens, entity.costUsd),
                 ),
@@ -359,12 +408,14 @@ class SyncTextTaskRunner(
                         } else {
                             AsrTimelineMerger.mergeSegments(result.segments)
                         }
-                    val checkpointName = assets.writeCheckpoint("${plan.windowId}.vtt", NormalizedSubtitleWriter.encode(cues))
+                    val checkpoint = assets.writeCheckpoint("${plan.windowId}.vtt", NormalizedSubtitleWriter.encode(cues))
                     dao.upsertAsrWindow(
                         entity.copy(
                             state = CompletedState,
                             encodedBytes = wav.length(),
-                            transcriptAssetFileName = checkpointName,
+                            transcriptAssetFileName = checkpoint.fileName,
+                            transcriptSha256 = checkpoint.sha256,
+                            cueCount = cues.size,
                             errorMessage = null,
                             detectedLanguage = result.detectedLanguage,
                             inputTokens = result.usage.inputTokens,
@@ -378,6 +429,11 @@ class SyncTextTaskRunner(
                     finalFailure = error
                     recordAsrAttempt(attempt, null, error)
                     if (!error.retryable || index == MaxAsrAttempts - 1) break
+                    if (!networkState.permits(snapshot.allowMeteredNetwork)) {
+                        repository.markWaitingForNetwork(task.taskId, true)
+                        throw TaskDeferredException()
+                    }
+                    delay(AsrRetryPolicy.delayMs(error, index))
                 }
             }
         } finally {
@@ -385,7 +441,7 @@ class SyncTextTaskRunner(
         }
 
         val failure = requireNotNull(finalFailure)
-        if (failure.shouldSplit) {
+        if (AsrRetryPolicy.shouldSplit(failure, plan)) {
             val nextOrdinal = dao.nextAsrWindowOrdinal(attempt.attemptId)
             val split = runCatching { planner.split(plan, mediaDurationMs, nextOrdinal) }.getOrNull()
             if (split != null) {
@@ -401,6 +457,22 @@ class SyncTextTaskRunner(
         }
         dao.upsertAsrWindow(entity.copy(state = FailedState, errorMessage = failure.message?.take(600)))
         throw failure
+    }
+
+    private suspend fun readAsrCheckpoint(entity: AsrWindowEntity): List<SubtitleCue> {
+        val fileName = requireNotNull(entity.transcriptAssetFileName)
+        val expectedHash = entity.transcriptSha256
+            ?: throw CheckpointIntegrityException("ASR checkpoint hash is missing")
+        val expectedCueCount = entity.cueCount
+            ?: throw CheckpointIntegrityException("ASR checkpoint cue count is missing")
+        val bytes = assets.readCheckpoint(fileName)
+        if (sha256(bytes) != expectedHash) throw CheckpointIntegrityException("ASR checkpoint hash does not match")
+        val cues = WebVttParser.parse(bytes)
+        if (cues.size != expectedCueCount) throw CheckpointIntegrityException("ASR checkpoint cue count does not match")
+        if (cues.any { it.startMs < entity.ownedStartMs || it.endMs > entity.ownedEndMs }) {
+            throw CheckpointIntegrityException("ASR checkpoint cue range is invalid")
+        }
+        return cues
     }
 
     private suspend fun translateAndPublish(
@@ -488,7 +560,7 @@ class SyncTextTaskRunner(
         if (entity.state == CompletedState && entity.resultAssetFileName != null) {
             return listOf(
                 BatchWork(
-                    cues = WebVttParser.parse(assets.readCheckpoint(entity.resultAssetFileName)),
+                    cues = readTranslationCheckpoint(entity, plan),
                     usage = entity.usage(),
                 ),
             )
@@ -501,7 +573,9 @@ class SyncTextTaskRunner(
             }
         }
 
-        val key = repository.credentialSecret(attempt.translationCredentialId)
+        val key = repository.credentialSecret(requireNotNull(attempt.translationCredentialId))
+        val endpoint = requireNotNull(attempt.translationEndpoint) { "Translation endpoint is missing from the attempt" }
+        val model = requireNotNull(attempt.translationModel) { "Translation model is missing from the attempt" }
         val protocol = attempt.translationProtocol.enumValueOr(TranslationProtocol.Responses)
         val batchExecutor =
             TranslationBatchExecutor { systemPrompt, userPrompt ->
@@ -509,8 +583,8 @@ class SyncTextTaskRunner(
                     protocol = protocol,
                     request =
                         TranslationProviderRequest(
-                            endpoint = attempt.translationEndpoint,
-                            model = attempt.translationModel,
+                            endpoint = endpoint,
+                            model = model,
                             apiKey = key,
                             systemPrompt = systemPrompt,
                             userPrompt = userPrompt,
@@ -527,14 +601,16 @@ class SyncTextTaskRunner(
                     sourceLanguage = sourceLanguage,
                     targetLanguage = requireNotNull(snapshot.targetLanguage),
                 )
-            val checkpointName =
+            val checkpoint =
                 assets.writeCheckpoint("${entity.batchId}.vtt", NormalizedSubtitleWriter.encode(output.targetCues))
             dao.upsertTranslationBatch(
                 entity.copy(
                     state = CompletedState,
                     formatRecoveryCount = output.formatRecoveryCount,
                     repairCount = output.repairCount,
-                    resultAssetFileName = checkpointName,
+                    resultAssetFileName = checkpoint.fileName,
+                    resultSha256 = checkpoint.sha256,
+                    cueCount = output.targetCues.size,
                     inputTokens = output.usage.inputTokens,
                     outputTokens = output.usage.outputTokens,
                     totalTokens = output.usage.totalTokens,
@@ -562,6 +638,28 @@ class SyncTextTaskRunner(
                 processTranslationBatch(task, snapshot, attempt, policy, sourceLanguage, allSource, childPlan, childEntity)
             }
         }
+    }
+
+    private suspend fun readTranslationCheckpoint(
+        entity: TranslationBatchEntity,
+        plan: TranslationBatchPlan,
+    ): List<SubtitleCue> {
+        val fileName = requireNotNull(entity.resultAssetFileName)
+        val expectedHash = entity.resultSha256
+            ?: throw CheckpointIntegrityException("Translation checkpoint hash is missing")
+        val expectedCueCount = entity.cueCount
+            ?: throw CheckpointIntegrityException("Translation checkpoint cue count is missing")
+        val bytes = assets.readCheckpoint(fileName)
+        if (sha256(bytes) != expectedHash) throw CheckpointIntegrityException("Translation checkpoint hash does not match")
+        val cues = WebVttParser.parse(bytes)
+        if (cues.size != expectedCueCount || cues.size != plan.translateOnly.size) {
+            throw CheckpointIntegrityException("Translation checkpoint cue count does not match")
+        }
+        val expectedIds = plan.translateOnly.map { it.stableId }
+        if (cues.map { it.stableId } != expectedIds) {
+            throw CheckpointIntegrityException("Translation checkpoint cue ids do not match")
+        }
+        return cues
     }
 
     private suspend fun recordTranslationAttempt(
@@ -684,6 +782,20 @@ class SyncTextTaskRunner(
     }
 }
 
+internal object AsrRetryPolicy {
+    fun delayMs(
+        error: AsrException,
+        failedAttemptIndex: Int,
+    ): Long = error.retryAfterMs ?: (BaseDelayMs * (1L shl failedAttemptIndex.coerceIn(0, 6)))
+
+    fun shouldSplit(
+        error: AsrException,
+        window: AsrWindowPlan,
+    ): Boolean = error.shouldSplit && window.parentWindowId == null
+
+    private const val BaseDelayMs = 500L
+}
+
 private class RoomRunnerLease(
     private val dao: io.github.zvensmoluya.vortexcue.data.db.SyncTextDao,
     private val ownerId: String,
@@ -716,6 +828,8 @@ private class RoomRunnerLease(
 private class LeaseLostException : CancellationException("Sync text runner lease was lost")
 
 private class TaskDeferredException : Exception()
+
+private class CheckpointIntegrityException(message: String) : IOException(message)
 
 private data class SourceWork(
     val cues: List<SubtitleCue>,
@@ -788,6 +902,8 @@ private fun TranslationBatchPlan.toEntity(
         formatRecoveryCount = 0,
         repairCount = 0,
         resultAssetFileName = null,
+        resultSha256 = null,
+        cueCount = null,
         inputTokens = null,
         outputTokens = null,
         totalTokens = null,
@@ -807,6 +923,11 @@ private fun GenerationErrorCategory.blocksScheme(): Boolean =
         this == GenerationErrorCategory.ModelOrProtocol ||
         this == GenerationErrorCategory.Policy ||
         this == GenerationErrorCategory.InvalidResponse
+
+private fun sha256(bytes: ByteArray): String =
+    MessageDigest.getInstance("SHA-256")
+        .digest(bytes)
+        .joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
 private inline fun <reified T : Enum<T>> String.enumValueOr(default: T): T =
     enumValues<T>().firstOrNull { it.name == this } ?: default

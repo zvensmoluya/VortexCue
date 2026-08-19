@@ -3,7 +3,9 @@ package io.github.zvensmoluya.vortexcue.data.db
 import androidx.paging.PagingSource
 import androidx.room3.Room
 import androidx.room3.withWriteTransaction
+import androidx.room3.testing.MigrationTestHelper
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -275,6 +277,48 @@ class VortexDatabaseTest {
                     while (statement.step()) add(statement.getText(1))
                 }
                 assertFalse("last_surface" in columns)
+            }
+        }
+    }
+
+    @Test
+    fun versionFourMigrationPreservesCompletedGeneratedResults() = runBlocking {
+        val helper =
+            MigrationTestHelper(
+                databasePath = temporaryFolder.root.resolve("migration-v4-v5.db").toPath(),
+                schemaDirectoryPath = File("schemas").toPath(),
+                driver = BundledSQLiteDriver(),
+                databaseClass = VortexDatabase::class,
+                databaseFactory = { VortexDatabase_Impl() },
+                autoMigrationSpecs = emptyList(),
+            )
+        helper.createDatabase(4).use { connection ->
+            connection.prepare(
+                "INSERT INTO content (content_id, created_at_ms, subtitle_offset_ms) VALUES ('content', 1, 0)",
+            ).use { it.step() }
+            connection.prepare(
+                "INSERT INTO generated_text_slot " +
+                    "(slot_id, content_id, target_key, target_language, presentation_mode, current_result_id, created_at_ms, updated_at_ms) " +
+                    "VALUES ('slot', 'content', '__source__', NULL, 'TargetOnly', 'result', 1, 1)",
+            ).use { it.step() }
+            connection.prepare(
+                "INSERT INTO generated_text_result " +
+                    "(result_id, slot_id, content_id, task_id, attempt_id, source_language, target_language, " +
+                    "presentation_mode, source_asset_file_name, target_asset_file_name, source_sha256, target_sha256, " +
+                    "cue_count, scheme_id, model, policy_id, policy_version, policy_revision, system_prompt_sha256, " +
+                    "style_prompt_sha256, input_tokens, output_tokens, total_tokens, cost_usd, created_at_ms) " +
+                    "VALUES ('result', 'slot', 'content', NULL, NULL, 'en', NULL, 'TargetOnly', 'result.vtt', NULL, " +
+                    "'hash', NULL, 1, 'scheme', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1)",
+            ).use { it.step() }
+        }
+
+        helper.runMigrationsAndValidate(5).use { connection ->
+            connection.prepare(
+                "SELECT completeness, cue_count FROM generated_text_result WHERE result_id = 'result'",
+            ).use { statement ->
+                assertTrue(statement.step())
+                assertEquals("Final", statement.getText(0))
+                assertEquals(1L, statement.getLong(1))
             }
         }
     }

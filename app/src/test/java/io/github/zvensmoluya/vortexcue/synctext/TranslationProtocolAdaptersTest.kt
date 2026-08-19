@@ -15,6 +15,20 @@ import org.junit.Test
 
 class TranslationProtocolAdaptersTest {
     @Test
+    fun `empty successful response reaches format recovery layer`() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(MockResponse(body = """{"output":[],"usage":{"total_tokens":1}}"""))
+            val adapter = ResponsesTranslationAdapter(BoundedHttpExecutor(testClient()))
+
+            val response = adapter.translate(request(server.url("/").toString()))
+
+            assertEquals("", response.text)
+            assertEquals(1L, response.usage.totalTokens)
+        }
+    }
+
+    @Test
     fun `all protocols send their exact contract and parse usage`() = runBlocking {
         val cases =
             listOf(
@@ -319,6 +333,64 @@ class TranslationProtocolAdaptersTest {
         assertEquals("ok", response.text)
         assertEquals(3, calls)
         assertEquals(listOf(500L, 1_500L), waits)
+    }
+
+    @Test
+    fun `rate limit uses server delay and degrades shared concurrency`() = runBlocking {
+        var calls = 0
+        val waits = mutableListOf<Long>()
+        val budget = TranslationRequestBudget(maxParallelRequests = 4)
+        val adapter =
+            object : TranslationProtocolAdapter {
+                override val protocol = TranslationProtocol.Responses
+
+                override suspend fun translate(request: TranslationProviderRequest): TranslationProviderResponse {
+                    calls += 1
+                    if (calls == 1) {
+                        throw TranslationProtocolException(
+                            category = GenerationErrorCategory.RateLimited,
+                            retryable = true,
+                            capacityExceeded = false,
+                            retryAfterMs = 12_000L,
+                            message = "rate limited",
+                        )
+                    }
+                    return TranslationProviderResponse("ok", UsageRecord(), byteArrayOf(), 200, 1L, 1L, null, request.endpoint)
+                }
+            }
+        val gateway =
+            TranslationNetworkGateway(
+                registry = TranslationAdapterRegistry(listOf(adapter)),
+                requestBudget = budget,
+                waitBeforeRetry = { waits += it },
+            )
+
+        gateway.translate(TranslationProtocol.Responses, request("https://example.test/v1/responses"))
+
+        assertEquals(listOf(12_000L), waits)
+        assertEquals(1, budget.parallelLimit())
+    }
+
+    @Test
+    fun `http rate limit parses retry after`() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(
+                MockResponse(
+                    code = 429,
+                    headers = headersOf("Retry-After", "12"),
+                    body = """{"error":{"message":"slow down"}}""",
+                ),
+            )
+            val adapter = ResponsesTranslationAdapter(BoundedHttpExecutor(testClient()))
+
+            val error =
+                runCatching { adapter.translate(request(server.url("/").toString())) }
+                    .exceptionOrNull() as TranslationProtocolException
+
+            assertEquals(GenerationErrorCategory.RateLimited, error.category)
+            assertEquals(12_000L, error.retryAfterMs)
+        }
     }
 
     private fun request(

@@ -272,10 +272,12 @@ internal fun VortexCueApp(
     val loadedGeneratedText =
         effectiveGeneratedPresentation?.let { presentation ->
             LoadedGeneratedText(
+                resultId = presentation.result.resultId,
                 slotId = presentation.result.slotId,
                 sourceTimeline = SubtitleTimeline(presentation.sourceCues),
                 targetTimeline = presentation.targetCues?.let(::SubtitleTimeline),
                 presentationMode = presentation.result.presentationMode,
+                completeness = presentation.result.completeness,
             )
         }
 
@@ -751,6 +753,11 @@ internal fun VortexCueApp(
                     onGenerateSyncText = {
                         currentDetails?.let { details ->
                             dispatchSyncTextAction(SyncTextAction.OpenGeneration(details))
+                        }
+                    },
+                    onTranslateSyncText = {
+                        currentContentId?.let { id ->
+                            dispatchSyncTextAction(SyncTextAction.TranslateForContent(id))
                         }
                     },
                     onCancelSyncText = {

@@ -835,8 +835,10 @@ private fun ItemActions(
         ActionButton("移动到文件夹", Icons.Outlined.Folder, onMove)
         ActionButton("同步文字", Icons.Outlined.Translate, onSync)
         task?.let {
-            if (it.needsAttention) ActionButton("重试同步文字", Icons.Outlined.Refresh, onRetrySync)
-            else ActionButton("取消同步文字", Icons.Outlined.Close, onCancelSync)
+            if (it.needsAttention || it.state == io.github.zvensmoluya.vortexcue.synctext.GenerationTaskState.Paused) {
+                ActionButton("继续同步文字", Icons.Outlined.Refresh, onRetrySync)
+            }
+            else ActionButton("暂停同步文字", Icons.Outlined.Close, onCancelSync)
         }
         ActionButton("移出内容", Icons.Outlined.DeleteOutline, onIgnore)
         Spacer(Modifier.height(16.dp))

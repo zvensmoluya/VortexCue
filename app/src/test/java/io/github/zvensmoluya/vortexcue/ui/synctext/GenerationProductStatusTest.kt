@@ -3,6 +3,7 @@ package io.github.zvensmoluya.vortexcue.ui.synctext
 import io.github.zvensmoluya.vortexcue.synctext.GenerationStage
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskState
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskSummary
+import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -28,6 +29,7 @@ class GenerationProductStatusTest {
             taskId = "task",
             contentId = "content",
             schemeId = "config",
+            kind = GenerationTaskKind.SourceGeneration,
             queuePosition = 0,
             state = state,
             stage = GenerationStage.Queued,

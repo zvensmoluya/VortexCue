@@ -67,6 +67,7 @@ class TranslationProtocolException(
     val httpStatus: Int? = null,
     val requestId: String? = null,
     val rawResponse: ByteArray? = null,
+    val retryAfterMs: Long? = null,
     message: String,
     cause: Throwable? = null,
 ) : IOException(message, cause)
@@ -94,35 +95,41 @@ class TranslationAdapterRegistry(adapters: List<TranslationProtocolAdapter>) {
 class TranslationNetworkGateway(
     private val registry: TranslationAdapterRegistry,
     private val streamResponses: Boolean = true,
+    private val requestBudget: TranslationRequestBudget = TranslationRequestBudget(),
     private val waitBeforeRetry: suspend (Long) -> Unit = { delay(it) },
 ) {
-    suspend fun test(request: TranslationProviderRequest, protocol: TranslationProtocol): TranslationProviderResponse =
-        registry.adapter(protocol).translate(request)
-
     suspend fun translate(
         protocol: TranslationProtocol,
         request: TranslationProviderRequest,
         onAttempt: suspend (TranslationNetworkAttempt) -> Unit = {},
     ): TranslationProviderResponse {
         var lastFailure: TranslationProtocolException? = null
+        var attemptEpoch = 0L
         repeat(MaxNetworkAttempts) { index ->
             try {
                 val adapter = registry.adapter(protocol)
-                val response =
-                    if (streamResponses) {
-                        adapter.translateStreaming(request)
-                    } else {
-                        adapter.translate(request)
-                    }
+                val permit = requestBudget.acquire()
+                attemptEpoch = permit.cooldownEpoch
+                val response = try {
+                    if (streamResponses) adapter.translateStreaming(request) else adapter.translate(request)
+                } finally {
+                    permit.release()
+                }
                 onAttempt(TranslationNetworkAttempt(index + 1, response = response))
                 return response
             } catch (error: CancellationException) {
                 throw error
             } catch (error: TranslationProtocolException) {
                 lastFailure = error
+                if (error.category == GenerationErrorCategory.RateLimited) requestBudget.degradeToSerial()
                 onAttempt(TranslationNetworkAttempt(index + 1, error = error))
                 if (!error.retryable || index == MaxNetworkAttempts - 1) throw error
-                waitBeforeRetry(RetryDelaysMs[index])
+                val retryDelay = error.retryAfterMs ?: RetryDelaysMs[index]
+                if (error.category == GenerationErrorCategory.RateLimited) {
+                    requestBudget.awaitSharedBackoff(attemptEpoch, retryDelay, waitBeforeRetry)
+                } else {
+                    waitBeforeRetry(retryDelay)
+                }
             }
         }
         throw requireNotNull(lastFailure)
@@ -420,17 +427,6 @@ abstract class JsonTranslationProtocolAdapter(
         if (exchange.status !in 200..299) throw classifyHttpFailure(exchange, request.apiKey)
         val root = parseRoot(exchange)
         val text = extractText(root).trim()
-        if (text.isBlank()) {
-            throw TranslationProtocolException(
-                category = GenerationErrorCategory.InvalidResponse,
-                retryable = false,
-                capacityExceeded = false,
-                httpStatus = exchange.status,
-                requestId = exchange.requestId,
-                rawResponse = exchange.body,
-                message = "Translation response did not contain text",
-            )
-        }
         return TranslationProviderResponse(
             text = text,
             usage = extractUsage(root),
@@ -496,17 +492,6 @@ abstract class JsonTranslationProtocolAdapter(
             val root = parseRoot(exchange)
             text = extractText(root).trim()
             usage = extractUsage(root)
-        }
-        if (text.isBlank()) {
-            throw TranslationProtocolException(
-                category = GenerationErrorCategory.InvalidResponse,
-                retryable = false,
-                capacityExceeded = false,
-                httpStatus = exchange.status,
-                requestId = exchange.requestId,
-                rawResponse = exchange.body,
-                message = "Streaming translation response did not contain text",
-            )
         }
         return TranslationProviderResponse(
             text = text,
@@ -582,6 +567,7 @@ abstract class JsonTranslationProtocolAdapter(
             httpStatus = exchange.status,
             requestId = exchange.requestId,
             rawResponse = exchange.body,
+            retryAfterMs = if (category == GenerationErrorCategory.RateLimited) parseRetryAfterMs(exchange.headers["Retry-After"]) else null,
             message = message,
         )
     }

@@ -32,7 +32,7 @@ interface GeneratedTextAssetStore {
 
     suspend fun readTextAsset(fileName: String): List<SubtitleCue>
 
-    suspend fun writeCheckpoint(fileName: String, bytes: ByteArray): String
+    suspend fun writeCheckpoint(fileName: String, bytes: ByteArray): StoredTextAsset
 
     suspend fun readCheckpoint(fileName: String): ByteArray
 
@@ -77,10 +77,10 @@ class PrivateGeneratedTextAssetStore(context: Context) : GeneratedTextAssetStore
             WebVttParser.parse(file.readBytes())
         }
 
-    override suspend fun writeCheckpoint(fileName: String, bytes: ByteArray): String =
+    override suspend fun writeCheckpoint(fileName: String, bytes: ByteArray): StoredTextAsset =
         withContext(Dispatchers.IO) {
             require(bytes.size <= MaxCheckpointBytes) { "Checkpoint is too large" }
-            writeAsset(checkpoints, requireSafeFileName(fileName), bytes).fileName
+            writeAsset(checkpoints, requireSafeFileName(fileName), bytes)
         }
 
     override suspend fun readCheckpoint(fileName: String): ByteArray =
