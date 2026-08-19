@@ -378,6 +378,11 @@ class SyncTextTaskRunner(
                     finalFailure = error
                     recordAsrAttempt(attempt, null, error)
                     if (!error.retryable || index == MaxAsrAttempts - 1) break
+                    if (!networkState.permits(snapshot.allowMeteredNetwork)) {
+                        repository.markWaitingForNetwork(task.taskId, true)
+                        throw TaskDeferredException()
+                    }
+                    delay(AsrRetryPolicy.delayMs(error, index))
                 }
             }
         } finally {
@@ -385,7 +390,7 @@ class SyncTextTaskRunner(
         }
 
         val failure = requireNotNull(finalFailure)
-        if (failure.shouldSplit) {
+        if (AsrRetryPolicy.shouldSplit(failure, plan)) {
             val nextOrdinal = dao.nextAsrWindowOrdinal(attempt.attemptId)
             val split = runCatching { planner.split(plan, mediaDurationMs, nextOrdinal) }.getOrNull()
             if (split != null) {
@@ -682,6 +687,20 @@ class SyncTextTaskRunner(
         private const val FailedState = "Failed"
         private const val SplitState = "Split"
     }
+}
+
+internal object AsrRetryPolicy {
+    fun delayMs(
+        error: AsrException,
+        failedAttemptIndex: Int,
+    ): Long = error.retryAfterMs ?: (BaseDelayMs * (1L shl failedAttemptIndex.coerceIn(0, 6)))
+
+    fun shouldSplit(
+        error: AsrException,
+        window: AsrWindowPlan,
+    ): Boolean = error.shouldSplit && window.parentWindowId == null
+
+    private const val BaseDelayMs = 500L
 }
 
 private class RoomRunnerLease(

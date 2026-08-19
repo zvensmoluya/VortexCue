@@ -4,6 +4,9 @@ import java.io.File
 import java.io.FilterOutputStream
 import java.io.IOException
 import java.io.OutputStream
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import java.util.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
@@ -43,6 +46,7 @@ class AsrException(
     val category: GenerationErrorCategory,
     val retryable: Boolean,
     val shouldSplit: Boolean,
+    val retryAfterMs: Long? = null,
     val httpStatus: Int? = null,
     val rawResponse: ByteArray? = null,
     message: String,
@@ -88,7 +92,7 @@ class OpenRouterAsrEngine(
                     throw AsrException(
                         category = error.category,
                         retryable = error.retryable,
-                        shouldSplit = error.retryable,
+                        shouldSplit = false,
                         httpStatus = error.httpStatus,
                         rawResponse = error.rawResponse,
                         message = error.message ?: "ASR protocol failed",
@@ -96,13 +100,7 @@ class OpenRouterAsrEngine(
                     )
                 } catch (error: IOException) {
                     budget.degradeToSerial()
-                    throw AsrException(
-                        category = GenerationErrorCategory.TemporaryNetwork,
-                        retryable = true,
-                        shouldSplit = true,
-                        message = "ASR request failed before a valid response",
-                        cause = error,
-                    )
+                    throw asrTransportFailure(error)
                 }
             if (exchange.status !in 200..299) throw classifyFailure(exchange, request.apiKey)
             val root = parseRoot(exchange)
@@ -127,7 +125,7 @@ class OpenRouterAsrEngine(
         }
     }
 
-    private suspend fun classifyFailure(exchange: HttpExchange, apiKey: String): AsrException {
+    internal suspend fun classifyFailure(exchange: HttpExchange, apiKey: String): AsrException {
         val message = extractError(exchange.body).replace(apiKey, "[redacted]").take(600)
         val temporary = exchange.status == 408 || exchange.status == 429 || exchange.status in 500..599
         if (temporary) budget.degradeToSerial()
@@ -135,12 +133,14 @@ class OpenRouterAsrEngine(
             category =
                 when {
                     exchange.status == 401 || exchange.status == 403 -> GenerationErrorCategory.Authentication
+                    exchange.status == 413 -> GenerationErrorCategory.Media
                     exchange.status == 429 -> GenerationErrorCategory.RateLimited
                     temporary -> GenerationErrorCategory.TemporaryNetwork
                     else -> GenerationErrorCategory.ModelOrProtocol
                 },
             retryable = temporary,
-            shouldSplit = temporary || exchange.status == 413,
+            shouldSplit = exchange.status == 413,
+            retryAfterMs = if (temporary) parseRetryAfterMs(exchange.headers["Retry-After"]) else null,
             httpStatus = exchange.status,
             rawResponse = exchange.body,
             message = message,
@@ -247,6 +247,37 @@ class OpenRouterAsrEngine(
         }
     }
 }
+
+internal fun asrTransportFailure(error: IOException) =
+    AsrException(
+        category = GenerationErrorCategory.TemporaryNetwork,
+        retryable = true,
+        shouldSplit = false,
+        message = "ASR request failed before a valid response",
+        cause = error,
+    )
+
+internal fun parseRetryAfterMs(
+    value: String?,
+    nowMs: Long = System.currentTimeMillis(),
+): Long? {
+    val raw = value?.trim().orEmpty()
+    if (raw.isEmpty()) return null
+    val seconds = raw.toDoubleOrNull()
+    val delayMs =
+        if (seconds != null && seconds.isFinite() && seconds >= 0.0) {
+            (seconds * 1_000.0).toLong()
+        } else {
+            try {
+                ZonedDateTime.parse(raw, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() - nowMs
+            } catch (_: DateTimeParseException) {
+                return null
+            }
+        }
+    return delayMs.coerceIn(0L, MaxAsrRetryAfterMs)
+}
+
+private const val MaxAsrRetryAfterMs = 60_000L
 
 private class StreamingAsrJsonRequestBody(request: AsrRequest) : RequestBody() {
     private val file = request.wavFile
