@@ -44,6 +44,11 @@ data class StoredTimelineRevision(
     val createdAtMs: Long,
 )
 
+internal data class StoredTimelineRevisionRead(
+    val revision: StoredTimelineRevision,
+    val artifacts: List<Pair<RevisionArtifactRole, StoredTextArtifact>>,
+)
+
 class TextStorageRepository(
     private val database: VortexDatabase,
     private val store: TextArtifactStore,
@@ -145,18 +150,26 @@ class TextStorageRepository(
         return store.read(metadata)
     }
 
+    internal suspend fun readArtifact(metadata: StoredTextArtifact): DecodedTextArtifact = store.read(metadata)
+
     suspend fun inspectPublishedArtifact(
         artifactId: String,
         expectedKind: TextArtifactKind,
     ): InspectedTextArtifact = store.inspectPublished(artifactId, expectedKind)
 
-    suspend fun revisionArtifacts(revisionId: String): List<Pair<RevisionArtifactRole, StoredTextArtifact>> =
-        dao.revisionArtifacts(revisionId).map { relation ->
-            val role = enumValueOf<RevisionArtifactRole>(relation.role)
-            val artifact = dao.artifact(relation.artifactId)?.toStored()
-                ?: throw IOException("Revision artifact metadata is unavailable")
-            role to artifact
-        }
+    internal suspend fun revisionRead(revisionId: String): StoredTimelineRevisionRead? {
+        val rows = dao.revisionReadRows(revisionId)
+        if (rows.isEmpty()) return null
+        val revision = rows.first().revision
+        require(rows.all { it.revision == revision }) { "Revision read returned inconsistent metadata" }
+        return StoredTimelineRevisionRead(
+            revision = revision.toStored(),
+            artifacts =
+                rows.map { row ->
+                    enumValueOf<RevisionArtifactRole>(row.relation.role) to row.artifact.toStored()
+                },
+        )
+    }
 
     private fun deterministicRevisionId(
         contentId: String,
@@ -203,21 +216,24 @@ class TimelineRevisionReader(
 
     suspend fun read(revisionId: String): CanonicalTimeline {
         synchronized(cache) { cache[revisionId] }?.let { return it }
-        val revision = storage.revision(revisionId) ?: throw IOException("Timeline revision is unavailable")
-        val timeline = readUncached(revision)
-        require(timeline.cues.size == revision.cueCount) { "Timeline revision cue count does not match" }
-        require(canonicalContentHash(timeline) == revision.contentHash) { "Timeline revision hash does not match" }
+        val revisionRead = storage.revisionRead(revisionId) ?: throw IOException("Timeline revision is unavailable")
+        val timeline = readUncached(revisionRead)
+        require(timeline.cues.size == revisionRead.revision.cueCount) { "Timeline revision cue count does not match" }
+        require(canonicalContentHash(timeline) == revisionRead.revision.contentHash) {
+            "Timeline revision hash does not match"
+        }
         synchronized(cache) { cache[revisionId] = timeline }
         return timeline
     }
 
-    private suspend fun readUncached(revision: StoredTimelineRevision): CanonicalTimeline {
-        val relations = storage.revisionArtifacts(revision.revisionId)
+    private suspend fun readUncached(revisionRead: StoredTimelineRevisionRead): CanonicalTimeline {
+        val revision = revisionRead.revision
+        val relations = revisionRead.artifacts
         val deltaRelation = relations.singleOrNull { it.first == RevisionArtifactRole.TranslationDelta }
         if (deltaRelation != null) {
             val sourceId = requireNotNull(revision.sourceRevisionId)
             val source = read(sourceId)
-            val decoded = storage.readArtifact(deltaRelation.second.artifactId)
+            val decoded = storage.readArtifact(deltaRelation.second)
             val delta = (decoded.payload as? TextArtifactPayload.Delta)?.value
                 ?: throw IOException("Target revision does not contain a translation delta")
             if (delta.sourceRevisionId != sourceId || delta.sourceRevisionHash != revision.sourceRevisionHash) {
@@ -234,7 +250,7 @@ class TimelineRevisionReader(
 
         val timelines =
             relations.map { (_, metadata) ->
-                val decoded = storage.readArtifact(metadata.artifactId)
+                val decoded = storage.readArtifact(metadata)
                 (decoded.payload as? TextArtifactPayload.Timeline)?.value
                     ?: throw IOException("Revision contains a non-timeline artifact")
             }

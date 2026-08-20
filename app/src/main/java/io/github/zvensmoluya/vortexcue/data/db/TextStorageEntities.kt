@@ -1,6 +1,7 @@
 package io.github.zvensmoluya.vortexcue.data.db
 
 import androidx.room3.ColumnInfo
+import androidx.room3.Embedded
 import androidx.room3.Entity
 import androidx.room3.ForeignKey
 import androidx.room3.Index
@@ -212,4 +213,13 @@ data class TextImportOperationEntity(
     val createdAtMs: Long,
     @ColumnInfo(name = "updated_at_ms")
     val updatedAtMs: Long,
+)
+
+data class TimelineRevisionReadRow(
+    @Embedded(prefix = "revision_")
+    val revision: TimelineRevisionEntity,
+    @Embedded(prefix = "relation_")
+    val relation: TimelineRevisionArtifactEntity,
+    @Embedded(prefix = "artifact_")
+    val artifact: TextArtifactEntity,
 )

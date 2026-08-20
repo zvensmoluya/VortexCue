@@ -79,6 +79,12 @@ class TimelineStorageTest {
         assertEquals(revision, repeated)
         assertEquals(assembled, reader.read(revision.revisionId))
         assertEquals(2, database.textStorageDao().revisionArtifacts(revision.revisionId).size)
+        val readRows = database.textStorageDao().revisionReadRows(revision.revisionId)
+        assertEquals(listOf(firstArtifact.artifactId, secondArtifact.artifactId), readRows.map { it.artifact.artifactId })
+        assertEquals(
+            listOf(RevisionArtifactRole.AsrWorkUnit.name, RevisionArtifactRole.AsrWorkUnit.name),
+            readRows.map { it.relation.role },
+        )
     }
 
     @Test

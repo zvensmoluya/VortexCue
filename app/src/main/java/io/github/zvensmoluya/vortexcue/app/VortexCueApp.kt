@@ -245,12 +245,24 @@ internal fun VortexCueApp(
     var deferredAtCueKey by remember(currentContentId, generatedSlotId) {
         mutableStateOf<String?>(null)
     }
-    val effectiveGeneratedBoundaryTimeline =
-        remember(effectiveGeneratedPresentation?.result?.resultId) {
-            effectiveGeneratedPresentation
-                ?.let { presentation -> presentation.targetCues ?: presentation.sourceCues }
-                ?.let(::SubtitleTimeline)
+    val loadedGeneratedText =
+        remember(
+            effectiveGeneratedPresentation?.result?.resultId,
+            effectiveGeneratedPresentation?.result?.presentationMode,
+        ) {
+            effectiveGeneratedPresentation?.let { presentation ->
+                LoadedGeneratedText(
+                    resultId = presentation.result.resultId,
+                    slotId = presentation.result.slotId,
+                    sourceTimeline = SubtitleTimeline(presentation.sourceCues),
+                    targetTimeline = presentation.targetCues?.let(::SubtitleTimeline),
+                    presentationMode = presentation.result.presentationMode,
+                    completeness = presentation.result.completeness,
+                )
+            }
         }
+    val effectiveGeneratedBoundaryTimeline =
+        loadedGeneratedText?.targetTimeline ?: loadedGeneratedText?.sourceTimeline
     val effectiveCueKey =
         effectiveGeneratedBoundaryTimeline
             ?.resolve((playback.positionMs + (currentDetails?.subtitleOffsetMs ?: 0L)).coerceAtLeast(0L))
@@ -289,18 +301,6 @@ internal fun VortexCueApp(
             }
         }
     }
-    val loadedGeneratedText =
-        effectiveGeneratedPresentation?.let { presentation ->
-            LoadedGeneratedText(
-                resultId = presentation.result.resultId,
-                slotId = presentation.result.slotId,
-                sourceTimeline = SubtitleTimeline(presentation.sourceCues),
-                targetTimeline = presentation.targetCues?.let(::SubtitleTimeline),
-                presentationMode = presentation.result.presentationMode,
-                completeness = presentation.result.completeness,
-            )
-        }
-
     LaunchedEffect(currentContentId, selectedPrimaryTrack?.stableId) {
         primarySubtitle =
             loadSelectedTrack(
