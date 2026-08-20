@@ -5,6 +5,8 @@
 build/
 */build/
 local.properties
+.env
+.env.local
 captures/
 .externalNativeBuild/
 .cxx/
