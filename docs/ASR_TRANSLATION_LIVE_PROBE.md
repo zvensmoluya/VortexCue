@@ -39,3 +39,28 @@ through the production gateway. It does not score translation style.
 
 Android device testing remains necessary for media URI access, audio extraction, Room recovery,
 network consent, background execution, and process restart behavior.
+
+## Run a local media excerpt
+
+`LiveMediaPipelineTest` exercises a representative local excerpt through real ASR, timeline merging,
+translation batch planning, the production prompts, and strict response validation. It requires both
+provider configurations plus `ffmpeg` on `PATH` (or `VORTEX_LIVE_FFMPEG` pointing to the executable).
+
+Set `VORTEX_LIVE_MEDIA_TEST=1` and `VORTEX_LIVE_MEDIA_FILE` to one local audio file. The separate
+media switch prevents a saved path from making normal provider smoke runs upload a long excerpt.
+The optional start and duration values default to the first 225 seconds; the host test converts only
+that range to a temporary 16 kHz mono WAV and never uploads the original file. Keep the duration at
+or below 300 seconds so it remains one ASR window.
+
+```powershell
+$env:VORTEX_LIVE_MEDIA_TEST="1"
+$env:VORTEX_LIVE_MEDIA_FILE="D:\media\sample.wav"
+$env:VORTEX_LIVE_MEDIA_START_SECONDS="0"
+$env:VORTEX_LIVE_MEDIA_DURATION_SECONDS="225"
+$env:VORTEX_LIVE_MEDIA_SOURCE_LANGUAGE="ja"
+
+.\gradlew.bat :app:testDebugUnitTest --tests "*LiveMediaPipelineTest"
+```
+
+The local transcript/translation comparison is written below `app/build/reports/live-provider/`,
+which is excluded from Git. This host-side conversion does not replace Android decoder coverage.
