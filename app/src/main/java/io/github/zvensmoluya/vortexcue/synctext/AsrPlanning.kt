@@ -201,12 +201,21 @@ object AsrTimelineMerger {
         buildString {
             words.forEach { word ->
                 val value = word.trim()
-                if (isNotEmpty() && value.firstOrNull()?.let { it.isLetterOrDigit() } == true && last().isLetterOrDigit()) {
+                if (isNotEmpty() && value.firstOrNull()?.let { shouldSeparateWords(last(), it) } == true) {
                     append(' ')
                 }
                 append(value)
             }
         }.trim()
+
+    private fun shouldSeparateWords(previous: Char, next: Char): Boolean =
+        previous.isLetterOrDigit() && next.isLetterOrDigit() && !previous.isCjk() && !next.isCjk()
+
+    private fun Char.isCjk(): Boolean =
+        this in '\u3040'..'\u30ff' ||
+            this in '\u3400'..'\u4dbf' ||
+            this in '\u4e00'..'\u9fff' ||
+            this in '\uac00'..'\ud7af'
 }
 
 internal fun secondsToMilliseconds(seconds: Double): Long =

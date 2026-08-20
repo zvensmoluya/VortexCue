@@ -61,6 +61,22 @@ class AsrPlanningTest {
     }
 
     @Test
+    fun `word cue joining keeps CJK tokens unspaced but separates Latin words`() {
+        val cues =
+            AsrTimelineMerger.wordsToCues(
+                listOf(
+                    AsrTimestampedToken(0L, 200L, "ご"),
+                    AsrTimestampedToken(200L, 400L, "主人様"),
+                    AsrTimestampedToken(2_000L, 2_200L, "good"),
+                    AsrTimestampedToken(2_200L, 2_400L, "night"),
+                ),
+            )
+
+        assertEquals("ご主人様", cues.first().text)
+        assertEquals("good night", cues.last().text)
+    }
+
+    @Test
     fun `owned segments are clipped to the checkpoint ownership range`() {
         val windows = FixedAsrWindowPlanner().plan(597_000L)
         val firstBoundary = windows[0].ownedEndMs
