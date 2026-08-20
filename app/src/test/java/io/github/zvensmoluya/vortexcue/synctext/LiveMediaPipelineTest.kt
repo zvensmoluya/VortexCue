@@ -19,22 +19,29 @@ class LiveMediaPipelineTest {
         requireNotNull(sourceFile)
         require(sourceFile.isFile) { "Live media file is unavailable: ${sourceFile.absolutePath}" }
         require(config.mediaStartSeconds >= 0.0) { "Media start must not be negative" }
-        require(config.mediaDurationSeconds in 0.001..300.0) {
-            "Media duration must be positive and no longer than one 300-second ASR window"
+        require(config.mediaDurationSeconds in 0.001..900.0) {
+            "Media duration must be positive and no longer than 15 minutes"
         }
         val asrApiKey = requireNotNull(config.asrApiKey) {
             "VORTEX_LIVE_ASR_API_KEY is required for the live media pipeline"
         }
 
-        val normalizedWav = normalizeExcerpt(sourceFile, config)
         val httpClientWrapper = SyncTextHttpClient("live-media-pipeline")
         val httpClient = httpClientWrapper.client
+        val normalizedWavs = mutableListOf<File>()
         try {
             val executor = BoundedHttpExecutor(httpClient)
             val asr = OpenRouterAsrEngine(executor, EncodedAudioBudget())
             val durationMs = (config.mediaDurationSeconds * 1_000.0).toLong()
-            val window = FixedAsrWindowPlanner().plan(durationMs).single()
-            val asrResult =
+            val windows = FixedAsrWindowPlanner().plan(durationMs)
+            val asrResults = windows.map { window ->
+                val normalizedWav =
+                    normalizeWindow(
+                        source = sourceFile,
+                        config = config,
+                        startSeconds = config.mediaStartSeconds + window.uploadStartMs / 1_000.0,
+                        durationSeconds = window.uploadDurationMs / 1_000.0,
+                    ).also(normalizedWavs::add)
                 asr.transcribe(
                     AsrRequest(
                         profile = config.asrProfile,
@@ -45,29 +52,49 @@ class LiveMediaPipelineTest {
                         endpoint = config.asrEndpoint,
                     ),
                 )
-            val sourceCues =
-                when (config.asrProfile) {
-                    AsrProfile.OpenRouterWhisperV1 -> AsrTimelineMerger.mergeSegments(asrResult.segments)
-                    AsrProfile.OpenRouterGrokV1 -> AsrTimelineMerger.wordsToCues(asrResult.segments)
-                }
-            require(sourceCues.isNotEmpty()) { "Live media ASR returned no usable timestamped speech" }
+            }
+            val sourceCues = mergeAsrWindows(config.asrProfile, asrResults)
+            require(sourceCues.isNotEmpty()) {
+                "Live media ASR returned no usable timestamped speech across ${windows.size} windows"
+            }
 
-            val report = liveReportFile(sourceFile)
-            writeReport(report, config, asrResult, sourceCues, emptyList(), emptyList())
+            val report = liveReportFile(sourceFile, config.asrProfile)
+            writeReport(report, config, asrResults, sourceCues, emptyList(), emptyList(), windows.size)
             val outputs = translate(config, httpClientWrapper, sourceCues)
             val targetCues = outputs.flatMap(TranslationBatchOutput::targetCues)
             require(targetCues.size == sourceCues.size) { "Translated cue count does not match ASR output" }
-            writeReport(report, config, asrResult, sourceCues, targetCues, outputs)
+            writeReport(report, config, asrResults, sourceCues, targetCues, outputs, windows.size)
             println("Live media report: ${report.absolutePath}")
         } finally {
-            normalizedWav.delete()
+            normalizedWavs.forEach(File::delete)
             httpClient.dispatcher.executorService.shutdown()
             httpClient.connectionPool.evictAll()
         }
         Unit
     }
 
-    private fun normalizeExcerpt(source: File, config: LiveProviderProbeConfig): File {
+    private fun mergeAsrWindows(
+        profile: AsrProfile,
+        results: List<AsrWindowResult>,
+    ): List<SubtitleCue> {
+        val windowCues =
+            results.flatMap { result ->
+                when (profile) {
+                    AsrProfile.OpenRouterWhisperV1 -> AsrTimelineMerger.mergeSegments(result.segments)
+                    AsrProfile.OpenRouterGrokV1 -> AsrTimelineMerger.wordsToCues(result.segments)
+                }
+            }
+        return AsrTimelineMerger.mergeSegments(
+            windowCues.map { cue -> AsrTimestampedToken(cue.startMs, cue.endMs, cue.text) },
+        )
+    }
+
+    private fun normalizeWindow(
+        source: File,
+        config: LiveProviderProbeConfig,
+        startSeconds: Double,
+        durationSeconds: Double,
+    ): File {
         val output = File.createTempFile("vortexcue-live-media-", ".wav")
         val command =
             listOf(
@@ -77,9 +104,9 @@ class LiveMediaPipelineTest {
                 "error",
                 "-nostdin",
                 "-ss",
-                decimal(config.mediaStartSeconds),
+                decimal(startSeconds),
                 "-t",
-                decimal(config.mediaDurationSeconds),
+                decimal(durationSeconds),
                 "-i",
                 source.absolutePath,
                 "-vn",
@@ -153,23 +180,25 @@ class LiveMediaPipelineTest {
         }
     }
 
-    private fun liveReportFile(source: File): File {
+    private fun liveReportFile(source: File, profile: AsrProfile): File {
         val appDirectory = requireNotNull(requireNotNull(findRepositoryFile("app/build.gradle.kts")).canonicalFile.parentFile)
         val directory = appDirectory.resolve("build/reports/live-provider")
         require(directory.isDirectory || directory.mkdirs()) { "Could not create live provider report directory" }
-        val safeName = source.nameWithoutExtension.replace(UnsafeFileName, "_").take(80)
-        return directory.resolve("$safeName.md")
+        val safeName = source.nameWithoutExtension.replace(UnsafeFileName, "_").take(70)
+        return directory.resolve("${safeName}_${profile.name}.md")
     }
 
     private fun writeReport(
         report: File,
         config: LiveProviderProbeConfig,
-        asrResult: AsrWindowResult,
+        asrResults: List<AsrWindowResult>,
         sourceCues: List<SubtitleCue>,
         targetCues: List<SubtitleCue>,
         translationOutputs: List<TranslationBatchOutput>,
+        windowCount: Int,
     ) {
         val targetById = targetCues.associateBy(SubtitleCue::stableId)
+        val asrUsage = asrResults.map(AsrWindowResult::usage).sumRealUsage()
         val usage = translationOutputs.map(TranslationBatchOutput::usage).sumRealUsage()
         report.writeText(
             buildString {
@@ -177,12 +206,13 @@ class LiveMediaPipelineTest {
                 appendLine()
                 appendLine("- Excerpt: ${decimal(config.mediaStartSeconds)}s + ${decimal(config.mediaDurationSeconds)}s")
                 appendLine("- ASR profile: ${config.asrProfile}")
-                appendLine("- Detected language: ${asrResult.detectedLanguage ?: "unknown"}")
+                appendLine("- ASR windows: $windowCount")
+                appendLine("- Detected language: ${asrResults.mapNotNull(AsrWindowResult::detectedLanguage).distinct().joinToString().ifEmpty { "unknown" }}")
                 appendLine("- Source cues: ${sourceCues.size}")
                 appendLine("- Translation batches: ${translationOutputs.size}")
                 appendLine("- Format recoveries: ${translationOutputs.sumOf(TranslationBatchOutput::formatRecoveryCount)}")
                 appendLine("- Repair calls: ${translationOutputs.sumOf(TranslationBatchOutput::repairCount)}")
-                appendLine("- ASR cost USD: ${asrResult.usage.costUsd ?: "unreported"}")
+                appendLine("- ASR cost USD: ${asrUsage.costUsd ?: "unreported"}")
                 appendLine("- Translation cost USD: ${usage.costUsd ?: "unreported"}")
                 appendLine()
                 appendLine("| Time | ASR (${config.mediaSourceLanguage}) | Translation (${config.targetLanguage}) |")

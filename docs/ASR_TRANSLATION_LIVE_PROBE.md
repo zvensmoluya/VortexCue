@@ -48,15 +48,16 @@ provider configurations plus `ffmpeg` on `PATH` (or `VORTEX_LIVE_FFMPEG` pointin
 
 Set `VORTEX_LIVE_MEDIA_TEST=1` and `VORTEX_LIVE_MEDIA_FILE` to one local audio file. The separate
 media switch prevents a saved path from making normal provider smoke runs upload a long excerpt.
-The optional start and duration values default to the first 225 seconds; the host test converts only
-that range to a temporary 16 kHz mono WAV and never uploads the original file. Keep the duration at
-or below 300 seconds so it remains one ASR window.
+The optional start and duration values default to the first 225 seconds. The host test plans the
+requested range with the production fixed-window planner, converts each upload window to a temporary
+16 kHz mono WAV, and never uploads the original file. A range longer than 300 seconds intentionally
+exercises overlap ownership and cross-window merge behavior.
 
 ```powershell
 $env:VORTEX_LIVE_MEDIA_TEST="1"
 $env:VORTEX_LIVE_MEDIA_FILE="D:\media\sample.wav"
 $env:VORTEX_LIVE_MEDIA_START_SECONDS="0"
-$env:VORTEX_LIVE_MEDIA_DURATION_SECONDS="225"
+$env:VORTEX_LIVE_MEDIA_DURATION_SECONDS="453.9"
 $env:VORTEX_LIVE_MEDIA_SOURCE_LANGUAGE="ja"
 
 .\gradlew.bat :app:testDebugUnitTest --tests "*LiveMediaPipelineTest"
