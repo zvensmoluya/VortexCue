@@ -63,17 +63,21 @@ V1 不包含：
 - 换方案创建新 attempt，复用已完成的原文 / ASR 成果，清空并重做翻译；
 - 一个结果不得混用不同模型、policy 或 attempt 的输出。
 
-## 3. 持久化与私有资产
+## 3. 持久化、Revision 与私有资产
 
-Room schema 使用关系表表达 credential metadata、scheme、task、不可变 task snapshot、attempt、ASR window、translation batch、request attempt、generated slot / result、runner lease 和 queue control。不得重新引入聚合 JSON 快照或把完整 cue 正文存入 Room。
+Room v6 使用关系表表达 credential metadata、scheme、task、不可变 task snapshot、attempt、ASR window、translation batch、request attempt、generated slot / result、runner lease、queue control、Artifact metadata、Timeline revision 和 revision-artifact manifest。不得重新引入聚合 JSON 快照或把完整 cue 正文存入 Room。
 
-最终 source / target 分别保存为规范化 WebVTT：
+正文统一保存到 `noBackupFilesDir/text_artifacts/<kind>/<prefix>/<artifactId>.bin`。Artifact ID 是完整确定性 envelope 的 SHA-256；envelope 包含 magic、schema / codec / canonicalizer version、kind 和长度前缀 payload。decoder 必须拒绝未知版本、损坏、截断和 metadata/hash 不一致。SRT / VTT / ASS / LRC 仅是导入边界格式，不再作为内部 checkpoint 或 result 协议。
 
-- 每条 cue 都有稳定 ID；
-- source 与 target 使用相同 ID 和时间范围；
-- Room 保存关系、hash、状态、用量、provenance 和文件引用。
+- ASR window 发布 `AsrWorkUnitOutput`，translation batch 发布 `TranslationWorkUnitOutput`；Artifact 文件发布成功后，Room transaction 才能登记 WorkUnit 引用和完成状态；
+- Partial source revision 通过 immutable manifest 引用连续完成前缀，不重复写累计 VTT；Final source 由 `TimelineAssembler` 发布单个 `FinalTimeline`；
+- target 保存 `TranslationDelta`，并固定 source revision ID/hash；source 与 target 使用相同 cue ID 和时间范围，不得跨 source revision、attempt 或 policy 混合；
+- `GeneratedTextResult` 保存 source / target revision，slot current result、generated track、结果和任务状态在 publication transaction 中原子切换；
+- 播放只通过 `TimelineRevisionReader` 顺序解码 publication 并在内存中按位置解析。
 
-原始响应、检查点、临时 WAV 和诊断正文保存在应用私有文件。原始响应在任务终结或最后尝试后保留 7 天；暂停与需处理任务保留恢复检查点；最终结果长期保留上游真实 usage / cost 与 provenance。
+原始响应、临时 WAV / PCM 和诊断正文使用独立私有目录，不进入 Timeline Artifact GC。原始响应按 request attempt 的现有保留期限清理；暂停与需处理任务通过 Room 引用保留 WorkUnit Artifact；最终结果保留上游真实 usage / cost 与 provenance。恢复只重新执行没有已提交 Artifact 的 WorkUnit，损坏引用进入 `Storage / NeedsAttention`，不静默重复 provider 请求。
+
+Artifact GC 以 Room 可达图为准：当前 Track / slot publication、target 固定的 source revision，以及 active / paused / needs-attention 任务恢复资产为 root。不可达 metadata 先记录 `gcCandidateSinceMs`，持续不可达满 24 小时后才删除；未注册文件按文件年龄使用同一宽限。启动审计同时处理 missing、orphan、未知 codec/schema 和损坏引用。
 
 API key 由 Android Keystore 中的 AES-GCM 主密钥加密，密文位于 `noBackupFilesDir`。备份规则排除 Room、WorkManager 数据库、生成文字、字幕缓存、任务工件和凭据，只允许少量显示偏好备份。
 
@@ -155,7 +159,7 @@ API 34+ 使用一个覆盖整条队列的 UIDT Job；API 26-33 使用唯一前�
 - 其他方案继续运行；网络恢复后唤醒符合许可的等待任务；
 - runner 与进程重建后从 window / batch / request attempt 检查点恢复。
 
-UI 只通过可替换的 `AsrEngine`、`TranslationProtocolAdapter`、`CredentialStore`、`GeneratedTextAssetStore` 和 `SyncTextScheduler` 间接工作，不直接调用网络、Worker 或媒体解码器。
+UI 只通过可替换的 `AsrEngine`、`TranslationProtocolAdapter`、`CredentialStore`、`TextArtifactStore`、`RawResponseStore` 和 `SyncTextScheduler` 间接工作，不直接调用网络、Worker 或媒体解码器。
 
 ## 8. Player / Glow 行为
 
@@ -183,7 +187,8 @@ V1 UI 只增加方案编辑器、生成确认页、Home / Player 共用任务抽
 - prompt hash、80 / 40 只读上下文、严格 ID、格式恢复、repair、通用语言与简中 policy；
 - 四种协议的 URL、认证头、请求结构、响应解析、usage、错误分类、重试、跨源重定向和脱敏；
 - Room 的不可变方案 snapshot、任务恢复、slot 替换、凭据引用约束、TTL prune；
-- VTT 稳定 cue ID 往返，以及普通字幕无 ID 往返；
+- canonical cue 稳定 ID、binary codec 确定性、版本拒绝、损坏与截断检测；
+- WorkUnit Artifact 恢复、partial/final assembler、translation delta 对齐、source pin、publication 原子替换与两阶段 GC；
 - 音频 / 视频、声道转换、多音轨选择、内嵌文字物化和失败回退。
 
 合并前执行：

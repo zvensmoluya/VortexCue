@@ -2,9 +2,9 @@
 
 ## 生成文字与导入字幕统一存储详细设计（2026-08-20）
 
-> 状态：目标设计已确定，待实施。
+> 状态：已实施；真机生命周期矩阵待执行。
 >
-> 本文把生成文字的 Artifact / Revision 设计与用户导入字幕的资源拥有权设计放在同一个内部模型中。它是 [`DECISION_2026-08-20_GENERATED_TEXT_ARTIFACT_STORAGE.md`](DECISION_2026-08-20_GENERATED_TEXT_ARTIFACT_STORAGE.md) 的详细实施设计，不声明当前代码已经完成迁移。当前产品行为仍以 [`GUIDE.md`](../GUIDE.md) 为准。
+> 本文把生成文字的 Artifact / Revision 设计与用户导入字幕的资源拥有权设计放在同一个内部模型中。它是 [`DECISION_2026-08-20_GENERATED_TEXT_ARTIFACT_STORAGE.md`](DECISION_2026-08-20_GENERATED_TEXT_ARTIFACT_STORAGE.md) 的详细设计和实现状态记录；当前产品行为仍以 [`GUIDE.md`](../GUIDE.md) 为准。
 
 ## 1. 设计结论
 
@@ -51,7 +51,7 @@ ASR / translation task
 - Artifact Store 保存不可变、可校验、可恢复的结构化 payload。
 - 播放开始后一次顺序加载到内存，不按播放位置逐句查询 Room 或文件。
 - 进程终止、重试、拆分、部分发布和垃圾回收都有明确的引用关系。
-- 导出只在用户明确请求时把内部时间轴重新编码为 SRT / VTT / ASS / LRC。
+- 为未来显式导出保留 `revision reader -> exporter` 边界，不在本轮增加导出 UI。
 
 ### 2.2 非目标
 
@@ -159,10 +159,11 @@ artifactId = SHA-256(
 ImportedTimeline       // 用户导入后得到的完整时间轴
 AsrWorkUnitOutput      // 一个 ASR window 的结构化输出
 TranslationWorkUnitOutput
-PartialTimeline        // 已发布的部分时间轴
 FinalTimeline          // 已发布的完整时间轴
 TranslationDelta       // 固定 source revision 上的翻译文本映射
 ```
+
+Partial revision 当前不另写累计 Artifact，而由 immutable revision-artifact rows 直接引用连续完成前缀的 `AsrWorkUnitOutput`。
 
 Artifact payload 不包含 URI、SAF 权限、原始绝对路径或用户设备路径。
 
@@ -215,7 +216,7 @@ TimedTextTrack {
 Slot 表达某个内容的生成结果位置，例如 source、target language 和 presentation mode。Slot 只保存当前 publication pointer，不复制完整正文：
 
 ```text
-GeneratedTextSlot.currentRevisionId -> TimelineRevision
+GeneratedTextSlot.currentResultId -> GeneratedTextResult -> source / target TimelineRevision
 ```
 
 历史 revision 可以保留用于恢复、诊断、target pin 或 GC 判断，但播放器只读取当前发布版本。
@@ -297,6 +298,8 @@ Failed / Cancelled
    - 将导入操作标记为 `Committed`；
    - 清除 staging URI 和临时状态。
 6. 事务成功后，尽力释放 SAF 权限。释放失败只记录清理问题，不影响播放；完成后的 Track 绝不回退到 URI。
+
+恢复时保留持久化阶段：`Reading` / `Parsed` 可从 staging URI 重读，`ArtifactPublished` 必须按 Artifact ID 校验并继续提交，即使原 URI 已不可读也不得回退或重新解析。
 
 核心不变量：
 
@@ -437,6 +440,7 @@ text_artifact
   byte_size
   cue_count               nullable
   created_at_ms
+  gc_candidate_since_ms   nullable
 ```
 
 Artifact metadata 不保存正文。`payload_sha256` 与 identity 用于完整性检查和幂等写入。
@@ -448,8 +452,6 @@ timeline_revision
   revision_id             primary key
   content_id
   role
-  artifact_id             nullable
-  manifest_id              nullable
   source_revision_id      nullable
   source_revision_hash    nullable
   completeness
@@ -481,17 +483,17 @@ timed_text_track
   label
   readiness
   match_basis
-  provenance_json         optional, not runtime locator
 
 text_import_operation
   import_id               primary key
   content_id
+  candidate_id            nullable
   staging_uri             nullable, only before completion
   source_display_name
   detected_format
-  input_sha256             nullable
   state
   artifact_id              nullable
+  revision_id              nullable
   track_id                 nullable
   failure_category         nullable
   failure_message          nullable
@@ -603,37 +605,36 @@ published revision
 
 导出不会覆盖导入时的原文件，也不会要求原文件仍然存在。默认导出只表达 canonical 文本和时间，不恢复被剥离的 ASS 样式。若将来需要样式保真，应另建一个明确的 style-preservation 产品能力，不能偷偷把 ASS 样式重新混入当前内部模型。
 
-## 12. 当前实现到目标设计的映射
+## 12. 实现状态（2026-08-20）
 
-| 当前实现 | 目标职责 |
+| 已实施组件/字段 | 当前职责 |
 | --- | --- |
-| `SubtitleAssetStore` | 演化为 content-addressed `TextArtifactStore`，不再按 URI hash 命名事实资产 |
-| `TimedTextTrackEntity.uriValue` | 仅允许作为导入暂存或非运行时 provenance，Ready Track 改用 revision/artifact 引用 |
-| `TimedTextTrackEntity.cachedFileName` | 替换为 typed Artifact / Revision reference |
-| `addManualTextTrack` | 演化为 `ImportCoordinator`，导入时完成 parse、normalize、publish、Room commit |
-| `loadSubtitleSource` | 只解析内部 published revision；外部 URI 仅服务于未完成导入或未接受的发现候选 |
-| `pruneExcept` | 演化为基于 Room 引用图和 grace period 的 Artifact GC |
-| `AsrWindowEntity.transcriptAssetFileName` | `AsrWorkUnitOutput` Artifact reference |
-| `TranslationBatchEntity.resultAssetFileName` | `TranslationWorkUnitOutput` Artifact reference |
-| `GeneratedTextResultEntity.*AssetFileName` | `TimelineRevision` / typed Artifact reference |
+| `PrivateTextArtifactStore` | content-addressed `TextArtifactStore`，按 kind/prefix/id 发布确定性 binary envelope |
+| `TimedTextTrackEntity.revisionId` | Imported Ready Track 的唯一 owned locator；实体不再保存 URI/cache 文件名 |
+| `TextImportCoordinator` | parse、canonicalize、Artifact publish、revision/track/selection transaction、恢复和 SAF grant 释放 |
+| `TimelineRevisionReader` | 统一读取 imported/final、partial manifest 和 translation delta；播放只消费内存 timeline |
+| `TextStorageMaintenance` | dangling 审计、`MissingArtifact` / `Storage` 标记、24 小时两阶段 Artifact GC 和旧目录清理 |
+| `AsrWindowEntity.transcriptArtifactId` | `AsrWorkUnitOutput` Artifact reference |
+| `TranslationBatchEntity.resultArtifactId` | `TranslationWorkUnitOutput` Artifact reference |
+| `GeneratedTextResultEntity.sourceRevisionId/targetRevisionId` | source / target immutable revision reference |
 | `AsrTimelineMerger`、`CueIdNormalizer` | 组合为纯逻辑 `TimelineAssembler` |
 | `SubtitleTimeline` | 保持为播放运行时对象，不接触 Room 实体 |
 
-迁移阶段不建立旧 VTT 与新 Artifact 的长期双写。当前规范化 VTT 可以作为一次性迁移输入；迁移成功后，运行时必须走新 reader，旧文件由受控清理回收。用户原始媒体和外部字幕文件不受迁移清理影响。
+Room 已升级到 v6 并采用破坏性重建；没有旧 VTT 与新 Artifact 双写，也不迁移 v5 generated VTT 或字幕缓存。启动时受控清理旧 `subtitle_assets`、`session_subtitles`、result/checkpoint VTT 目录；用户原始媒体、外部字幕文件和 Settings 不受影响。当前不存在导出 UI，因此只保留 codec、revision reader 与未来 exporter 的边界。
 
 ## 13. 实施边界与顺序
 
 这不是把长期架构拆成若干“最小闭环单点验证”再决定方向。方向已经由本设计确定；实现应作为一次完整的存储边界迁移交付，验证用于证明不变量和恢复路径，而不是替代设计。
 
-推荐顺序：
+实际落地顺序：
 
 1. 建立 canonical timeline payload、版本化 codec、Artifact Store 和完整性校验。
 2. 增加 Artifact metadata、Revision、导入操作和 Track 引用的 Room schema。
 3. 将手动字幕导入切换为导入即规范化、原子发布和事务提交。
 4. 将生成 WorkUnit 的 VTT 文件引用切换为 Artifact 引用，保留现有任务、attempt、retry、split 和 publication 语义。
 5. 统一 playback reader，删除已完成 Track 对外部 URI 的 fallback。
-6. 将导出接到 revision reader，并清理旧的内部 VTT 路径。
-7. 完成 GC、恢复、损坏引用处理和真机 SAF 生命周期验证。
+6. 保留 exporter 边界并清理旧的内部 VTT 路径；本轮不新增导出 UI。
+7. 完成 GC、恢复和损坏引用处理的实现与自动化；SAF 生命周期保留为真机验证矩阵。
 
 任何中间提交都必须保持明确的兼容边界；不把“临时双写”当作长期架构，也不在没有真实访问压力前引入逐 Cue 表或分块索引。
 
@@ -665,7 +666,6 @@ published revision
 - 导入过程中强制停止后可恢复或明确要求重新选择；
 - 进程重建后生成任务从已完成 WorkUnit 恢复；
 - 外部文件不可用时不会出现“播放时才失败”的隐藏依赖；
-- 导出到用户指定位置，且不修改原始输入。
 
 ## 15. 文档关系
 

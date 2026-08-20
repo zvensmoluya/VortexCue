@@ -2,19 +2,25 @@ package io.github.zvensmoluya.vortexcue.synctext
 
 import android.content.Context
 import android.net.Uri
-import io.github.zvensmoluya.vortexcue.core.storage.readSubtitleBytes
 import io.github.zvensmoluya.vortexcue.data.db.GenerationTaskSnapshotEntity
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase
-import io.github.zvensmoluya.vortexcue.subtitle.SubtitleAssetStore
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleCue
-import io.github.zvensmoluya.vortexcue.subtitle.SubtitleParser
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import io.github.zvensmoluya.vortexcue.text.CanonicalTextNormalizer
+import io.github.zvensmoluya.vortexcue.text.RevisionArtifactRole
+import io.github.zvensmoluya.vortexcue.text.TextArtifactKind
+import io.github.zvensmoluya.vortexcue.text.TextStorageRepository
+import io.github.zvensmoluya.vortexcue.text.TimelineCompleteness
+import io.github.zvensmoluya.vortexcue.text.TimelineRevisionReader
+import io.github.zvensmoluya.vortexcue.text.TimelineRole
+import io.github.zvensmoluya.vortexcue.text.canonicalContentHash
 
 data class SourceTextMaterialization(
     val cues: List<SubtitleCue>,
     val language: String?,
+    val revisionId: String,
 )
 
 class EmbeddedTextMaterializationUnsupportedException :
@@ -33,10 +39,9 @@ interface SourceTextMaterializer {
 class AndroidSourceTextMaterializer(
     context: Context,
     database: VortexDatabase,
-    private val subtitleAssets: SubtitleAssetStore,
-    private val generatedAssets: GeneratedTextAssetStore,
+    private val storage: TextStorageRepository,
+    private val reader: TimelineRevisionReader,
 ) : SourceTextMaterializer {
-    private val contentResolver = context.applicationContext.contentResolver
     private val embeddedTextExtractor = Media3EmbeddedTextExtractor(context.applicationContext)
     private val contentDao = database.contentDao()
     private val syncTextDao = database.syncTextDao()
@@ -49,26 +54,18 @@ class AndroidSourceTextMaterializer(
             val trackId = requireNotNull(snapshot.sourceTrackId) { "Text input did not preserve a track id" }
             val track = contentDao.textTracks(contentId).firstOrNull { it.trackId == trackId }
                 ?: throw SourceTextUnavailableException(true, "The selected text track is no longer available")
+            var resolvedRevisionId: String? = null
             val cues =
                 when {
                     track.generatedSlotId != null -> {
                         val result = syncTextDao.currentGeneratedResult(track.generatedSlotId)
                             ?: throw SourceTextUnavailableException(true, "Generated text result is unavailable")
-                        generatedAssets.readTextAsset(result.sourceAssetFileName)
+                        resolvedRevisionId = result.sourceRevisionId
+                        reader.read(result.sourceRevisionId).toSubtitleCues()
                     }
-                    track.uriValue != null -> {
-                        val provider = runCatching { contentResolver.readSubtitleBytes(Uri.parse(track.uriValue)) }
-                        val bytes = provider.getOrElse { error ->
-                            subtitleAssets.read(track.cachedFileName)
-                                ?: throw SourceTextUnavailableException(false, "Text track access must be restored", error)
-                        }
-                        val parseName =
-                            if (provider.isSuccess) track.displayName else track.cachedFileName ?: track.displayName
-                        try {
-                            SubtitleParser.parse(parseName, bytes)
-                        } catch (error: IllegalArgumentException) {
-                            throw SourceTextUnavailableException(true, "Text track could not be parsed", error)
-                        }
+                    track.revisionId != null -> {
+                        resolvedRevisionId = track.revisionId
+                        reader.read(track.revisionId).toSubtitleCues()
                     }
                     track.embeddedTrackId != null -> {
                         val active = contentDao.activeLocator(contentId)
@@ -95,6 +92,24 @@ class AndroidSourceTextMaterializer(
             SourceTextMaterialization(
                 cues = CueIdNormalizer.normalize(cues),
                 language = track.language?.let { runCatching { LanguageTags.normalize(it) }.getOrNull() },
+                revisionId = resolvedRevisionId ?: publishEmbeddedRevision(contentId, cues),
             )
         }
+
+    private suspend fun publishEmbeddedRevision(
+        contentId: String,
+        cues: List<SubtitleCue>,
+    ): String {
+        val timeline = CanonicalTextNormalizer.normalizeGenerated(cues)
+        val artifact = storage.publishTimelineArtifact(TextArtifactKind.FinalTimeline, timeline)
+        return storage.createRevision(
+            contentId = contentId,
+            role = TimelineRole.Source,
+            completeness = TimelineCompleteness.Final,
+            artifacts = listOf(RevisionArtifactRole.Timeline to artifact),
+            contentHash = canonicalContentHash(timeline),
+            cueCount = timeline.cues.size,
+            coveredEndMs = timeline.cues.maxOf { it.endMs },
+        ).revisionId
+    }
 }

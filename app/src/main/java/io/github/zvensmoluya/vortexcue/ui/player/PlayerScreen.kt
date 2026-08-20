@@ -922,7 +922,11 @@ private fun TextTrackChoiceRow(
 ) {
     val failed =
         track.readiness in
-            setOf(TimedTextReadiness.Unreadable, TimedTextReadiness.ParseFailed)
+            setOf(
+                TimedTextReadiness.Unreadable,
+                TimedTextReadiness.ParseFailed,
+                TimedTextReadiness.MissingArtifact,
+            )
     Column(
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -996,11 +1000,12 @@ private fun textTrackDetail(track: TimedTextTrack): String =
         "SDH".takeIf { TimedTextRole.Sdh in track.roles },
         "CC".takeIf { TimedTextRole.ClosedCaptions in track.roles },
         when (track.readiness) {
-            TimedTextReadiness.Unknown -> "待验证"
+            TimedTextReadiness.Unknown -> "待导入"
             TimedTextReadiness.Ready -> "可用"
             TimedTextReadiness.PrivateCopy -> "应用副本可用"
             TimedTextReadiness.Unreadable -> "文件不可读"
             TimedTextReadiness.ParseFailed -> "无法解析"
+            TimedTextReadiness.MissingArtifact -> "内部资产缺失"
         },
     ).joinToString(" · ")
 

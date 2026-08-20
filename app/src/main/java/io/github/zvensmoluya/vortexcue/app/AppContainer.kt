@@ -4,11 +4,12 @@ import android.app.Application
 import android.content.Context
 import androidx.work.Configuration
 import io.github.zvensmoluya.vortexcue.R
+import io.github.zvensmoluya.vortexcue.core.model.TextSelectionMode
+import io.github.zvensmoluya.vortexcue.core.model.TextTrackSlot
 import io.github.zvensmoluya.vortexcue.data.ContentRepository
 import io.github.zvensmoluya.vortexcue.data.PlaybackStateRepository
 import io.github.zvensmoluya.vortexcue.data.SettingsStore
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase
-import io.github.zvensmoluya.vortexcue.subtitle.SubtitleAssetStore
 import io.github.zvensmoluya.vortexcue.synctext.AndroidKeystoreCredentialStore
 import io.github.zvensmoluya.vortexcue.synctext.AndroidSourceTextMaterializer
 import io.github.zvensmoluya.vortexcue.synctext.AndroidSyncTextNetworkState
@@ -18,7 +19,7 @@ import io.github.zvensmoluya.vortexcue.synctext.BoundedPcmSpool
 import io.github.zvensmoluya.vortexcue.synctext.EncodedAudioBudget
 import io.github.zvensmoluya.vortexcue.synctext.OpenRouterAsrEngine
 import io.github.zvensmoluya.vortexcue.synctext.PlatformAudioWindowExtractor
-import io.github.zvensmoluya.vortexcue.synctext.PrivateGeneratedTextAssetStore
+import io.github.zvensmoluya.vortexcue.synctext.PrivateRawResponseStore
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextHttpClient
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextNetworkMonitor
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextRepository
@@ -31,6 +32,11 @@ import io.github.zvensmoluya.vortexcue.synctext.TranslationNetworkGateway
 import io.github.zvensmoluya.vortexcue.synctext.TranslationPolicyRegistry
 import io.github.zvensmoluya.vortexcue.synctext.defaultTranslationAdapters
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextUiController
+import io.github.zvensmoluya.vortexcue.text.PrivateTextArtifactStore
+import io.github.zvensmoluya.vortexcue.text.TextImportCoordinator
+import io.github.zvensmoluya.vortexcue.text.TextStorageRepository
+import io.github.zvensmoluya.vortexcue.text.TextStorageMaintenance
+import io.github.zvensmoluya.vortexcue.text.TimelineRevisionReader
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -64,8 +70,13 @@ class AppContainer(context: Context) {
     val contentRepository = ContentRepository(database)
     val playbackStateRepository = PlaybackStateRepository(database, contentRepository)
     val settingsStore = SettingsStore(appContext)
-    val subtitleAssetStore = SubtitleAssetStore(appContext)
-    val generatedTextAssetStore = PrivateGeneratedTextAssetStore(appContext)
+    val rawResponseStore = PrivateRawResponseStore(appContext)
+    val textArtifactStore = PrivateTextArtifactStore(appContext)
+    val textStorageRepository = TextStorageRepository(database, textArtifactStore)
+    val timelineRevisionReader = TimelineRevisionReader(textStorageRepository)
+    val textImportCoordinator = TextImportCoordinator(appContext, database, textStorageRepository)
+    val textStorageMaintenance =
+        TextStorageMaintenance(appContext, database, textStorageRepository, textArtifactStore)
     val credentialStore = AndroidKeystoreCredentialStore(appContext)
     val translationPolicyRegistry = TranslationPolicyRegistry.fromContext(appContext)
     val syncTextScheduler = AndroidSyncTextScheduler(appContext)
@@ -92,7 +103,8 @@ class AppContainer(context: Context) {
     val syncTextRepository =
         SyncTextRepository(
             database = database,
-            assets = generatedTextAssetStore,
+            textStorage = textStorageRepository,
+            revisionReader = timelineRevisionReader,
             credentials = credentialStore,
             policies = translationPolicyRegistry,
             scope = scope,
@@ -104,6 +116,13 @@ class AppContainer(context: Context) {
         SyncTextUiController(
             repository = syncTextRepository,
             audio = audioWindowExtractor,
+            materializeCandidate = { candidateId ->
+                textImportCoordinator.importCandidate(
+                    candidateId = candidateId,
+                    slot = TextTrackSlot.Primary,
+                    selectionMode = TextSelectionMode.Manual,
+                ).trackId
+            },
             scope = scope,
         )
     val syncTextTaskRunner =
@@ -111,13 +130,15 @@ class AppContainer(context: Context) {
             database = database,
             repository = syncTextRepository,
             policies = translationPolicyRegistry,
-            assets = generatedTextAssetStore,
+            rawResponses = rawResponseStore,
+            textStorage = textStorageRepository,
+            revisionReader = timelineRevisionReader,
             sourceText =
                 AndroidSourceTextMaterializer(
                     appContext,
                     database,
-                    subtitleAssetStore,
-                    generatedTextAssetStore,
+                    textStorageRepository,
+                    timelineRevisionReader,
                 ),
             audio = audioWindowExtractor,
             spool = pcmSpool,
@@ -152,20 +173,15 @@ class AppContainer(context: Context) {
         scope.launch {
             playbackStateRepository.initialize()
             settingsStore.initializeFromLegacyAndCleanDomainStores()
-            val retained = database.contentDao().referencedSubtitleCacheFiles().toSet()
-            withContext(Dispatchers.IO) { subtitleAssetStore.pruneExcept(retained) }
+            textImportCoordinator.recoverPending()
+            textStorageMaintenance.recoverAuditAndCollect()
             val retainedCredentials = database.syncTextDao().credentialIds().toSet()
             credentialStore.pruneExcept(retainedCredentials)
             val nowMs = System.currentTimeMillis()
             database.syncTextDao().pruneExpiredRequestAttempts(nowMs)
             database.syncTextDao().pruneTerminalTasks(nowMs - SyncTextTerminalRetentionMs)
-            val generatedRetained =
-                buildSet {
-                    addAll(database.syncTextDao().referencedGeneratedAssetFiles())
-                    addAll(database.syncTextDao().referencedCheckpointAssetFiles())
-                    addAll(database.syncTextDao().referencedRawResponseFiles())
-                }
-            generatedTextAssetStore.pruneExcept(generatedRetained)
+            val generatedRetained = database.syncTextDao().referencedRawResponseFiles().toSet()
+            rawResponseStore.pruneExcept(generatedRetained)
             pcmSpool.pruneUnreserved()
             if (database.syncTextDao().activeTasks().isNotEmpty()) syncTextScheduler.schedule()
         }

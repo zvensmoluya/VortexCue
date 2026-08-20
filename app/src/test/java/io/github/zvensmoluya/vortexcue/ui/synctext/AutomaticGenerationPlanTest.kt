@@ -7,6 +7,7 @@ import io.github.zvensmoluya.vortexcue.core.model.TimedTextOrigin
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextReadiness
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextTrack
 import io.github.zvensmoluya.vortexcue.data.ContentDetails
+import io.github.zvensmoluya.vortexcue.data.DiscoveredTextCandidate
 import io.github.zvensmoluya.vortexcue.synctext.GenerationInput
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -78,15 +79,44 @@ class AutomaticGenerationPlanTest {
         )
     }
 
+    @Test
+    fun `strong discovered sidecar is materialized before generation submission`() {
+        val details =
+            content(
+                candidates =
+                    listOf(
+                        DiscoveredTextCandidate(
+                            candidateId = "candidate",
+                            displayName = "item.srt",
+                            mimeType = "application/x-subrip",
+                            format = "srt",
+                            language = null,
+                            label = null,
+                            origin = TimedTextOrigin.Sidecar,
+                            roles = emptyList(),
+                            matchBasis = TimedTextMatchBasis.ExactStem,
+                            failureMessage = null,
+                        ),
+                    ),
+            )
+
+        assertEquals(
+            GenerationLaunchPlan.Submit(GenerationInput.DiscoveredCandidate("candidate"), allowAsrFallback = true),
+            planAutomaticGeneration(details),
+        )
+    }
+
     private fun content(
         tracks: List<TimedTextTrack> = emptyList(),
         activeText: ActiveTextSelection = ActiveTextSelection(),
+        candidates: List<DiscoveredTextCandidate> = emptyList(),
     ) =
         ContentDetails(
             contentId = "content",
             mediaLocators = emptyList(),
             activeMediaLocatorId = "",
             timedTextTracks = tracks,
+            discoveredTextCandidates = candidates,
             activeText = activeText,
             subtitleOffsetMs = 0L,
             disposition = null,
@@ -96,7 +126,7 @@ class AutomaticGenerationPlanTest {
         TimedTextTrack(
             stableId = id,
             origin = TimedTextOrigin.Sidecar,
-            locator = TimedTextLocator.External("content://text/$id", "$id.srt"),
+            locator = TimedTextLocator.Revision("revision-$id", "$id.srt"),
             matchBasis = TimedTextMatchBasis.ExactStem,
             readiness = TimedTextReadiness.Ready,
         )

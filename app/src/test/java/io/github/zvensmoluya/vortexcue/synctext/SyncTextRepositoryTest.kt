@@ -11,9 +11,19 @@ import io.github.zvensmoluya.vortexcue.data.db.TimedTextTrackEntity
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase_Impl
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleCue
+import io.github.zvensmoluya.vortexcue.text.CanonicalTextNormalizer
+import io.github.zvensmoluya.vortexcue.text.DecodedTextArtifact
+import io.github.zvensmoluya.vortexcue.text.StoredTextArtifact
+import io.github.zvensmoluya.vortexcue.text.TextArtifactCodec
+import io.github.zvensmoluya.vortexcue.text.TextArtifactFile
+import io.github.zvensmoluya.vortexcue.text.TextArtifactKind
+import io.github.zvensmoluya.vortexcue.text.TextArtifactPayload
+import io.github.zvensmoluya.vortexcue.text.TextArtifactStore
+import io.github.zvensmoluya.vortexcue.text.TextStorageRepository
+import io.github.zvensmoluya.vortexcue.text.TimelineRevisionReader
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
-import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CompletableDeferred
@@ -36,7 +46,9 @@ import org.robolectric.annotation.Config
 class SyncTextRepositoryTest {
     private lateinit var database: VortexDatabase
     private lateinit var scope: CoroutineScope
-    private lateinit var assets: MemoryGeneratedTextAssetStore
+    private lateinit var artifactStore: MemoryTextArtifactStore
+    private lateinit var textStorage: TextStorageRepository
+    private lateinit var revisionReader: TimelineRevisionReader
     private lateinit var credentials: MemoryCredentialStore
     private lateinit var repository: SyncTextRepository
 
@@ -48,12 +60,15 @@ class SyncTextRepositoryTest {
                 .setQueryCoroutineContext(Dispatchers.IO)
                 .build()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-        assets = MemoryGeneratedTextAssetStore()
+        artifactStore = MemoryTextArtifactStore()
+        textStorage = TextStorageRepository(database, artifactStore, nowMs = { clock++ })
+        revisionReader = TimelineRevisionReader(textStorage)
         credentials = MemoryCredentialStore()
         repository =
             SyncTextRepository(
                 database = database,
-                assets = assets,
+                textStorage = textStorage,
+                revisionReader = revisionReader,
                 credentials = credentials,
                 policies = TranslationPolicyRegistry.forTesting(::promptBytes),
                 scope = scope,
@@ -281,7 +296,7 @@ class SyncTextRepositoryTest {
         assertEquals(firstResult.slotId, secondResult.slotId)
         assertEquals(secondResult.resultId, database.syncTextDao().currentGeneratedResult(secondResult.slotId)?.resultId)
         assertNull(database.syncTextDao().generatedResult(firstResult.resultId))
-        assertFalse(assets.contains(firstResult.sourceAssetFileName))
+        assertTrue(textStorage.revision(firstResult.sourceRevisionId) != null)
         assertEquals(TextPresentationMode.TargetOnly, repository.loadPresentation(secondResult.slotId)?.result?.presentationMode)
         assertEquals(TranslationPolicyRegistry.OriginRevision, secondResult.policyRevision)
         assertEquals(
@@ -318,6 +333,11 @@ class SyncTextRepositoryTest {
                 GenerationRequest(ContentId, GenerationInput.ExistingTrack(TrackId), GenerationOutput.SourceOnly, scheme.schemeId),
             )
         val cues = CueIdNormalizer.normalize(listOf(SubtitleCue(0L, 1_000L, "source")))
+        val partialArtifact =
+            textStorage.publishTimelineArtifact(
+                TextArtifactKind.AsrWorkUnitOutput,
+                CanonicalTextNormalizer.normalizeGenerated(cues),
+            ).also { textStorage.registerArtifact(it) }
         val partial =
             repository.publishResult(
                 taskId = task.taskId,
@@ -329,6 +349,7 @@ class SyncTextRepositoryTest {
                 completeTask = false,
                 completedWindowCount = 1,
                 totalWindowCount = 2,
+                partialArtifactIds = listOf(partialArtifact.artifactId),
             )
 
         assertEquals(GenerationTaskKind.SourceGeneration, task.kind)
@@ -443,13 +464,12 @@ class SyncTextRepositoryTest {
                 trackId = TrackId,
                 contentId = ContentId,
                 origin = "Sidecar",
-                locatorIdentity = "uri:content://text/item",
-                uriValue = "content://text/item",
-                embeddedTrackId = null,
+                locatorIdentity = "embedded:text:0",
+                revisionId = null,
+                embeddedTrackId = "text:0",
                 generatedSlotId = null,
                 displayName = "item.vtt",
                 mimeType = "text/vtt",
-                cachedFileName = null,
                 format = "vtt",
                 language = "en",
                 label = "English",
@@ -479,7 +499,10 @@ class SyncTextRepositoryTest {
 class SyncTextTaskRunnerRecoveryTest {
     private lateinit var database: VortexDatabase
     private lateinit var scope: CoroutineScope
-    private lateinit var assets: MemoryGeneratedTextAssetStore
+    private lateinit var artifactStore: MemoryTextArtifactStore
+    private lateinit var textStorage: TextStorageRepository
+    private lateinit var revisionReader: TimelineRevisionReader
+    private lateinit var rawResponses: MemoryRawResponseStore
     private lateinit var repository: SyncTextRepository
     private lateinit var credentials: MemoryCredentialStore
 
@@ -491,12 +514,16 @@ class SyncTextTaskRunnerRecoveryTest {
                 .setQueryCoroutineContext(Dispatchers.IO)
                 .build()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-        assets = MemoryGeneratedTextAssetStore()
+        artifactStore = MemoryTextArtifactStore()
+        textStorage = TextStorageRepository(database, artifactStore, nowMs = { runnerClock++ })
+        revisionReader = TimelineRevisionReader(textStorage)
+        rawResponses = MemoryRawResponseStore()
         credentials = MemoryCredentialStore()
         repository =
             SyncTextRepository(
                 database = database,
-                assets = assets,
+                textStorage = textStorage,
+                revisionReader = revisionReader,
                 credentials = credentials,
                 policies = TranslationPolicyRegistry.forTesting(::promptBytes),
                 scope = scope,
@@ -588,7 +615,7 @@ class SyncTextTaskRunnerRecoveryTest {
                 database.syncTextDao().asrWindows(attemptId)
                     .firstOrNull { it.ordinal == 0 && it.state == "Completed" },
             )
-        assets.corruptCheckpoint(requireNotNull(firstWindow.transcriptAssetFileName))
+        artifactStore.corrupt(requireNotNull(firstWindow.transcriptArtifactId))
 
         repository.resumeTask(task.taskId)
         assertTrue(runner.runUntilIdle())
@@ -604,7 +631,9 @@ class SyncTextTaskRunnerRecoveryTest {
             database = database,
             repository = repository,
             policies = TranslationPolicyRegistry.forTesting(::promptBytes),
-            assets = assets,
+            rawResponses = rawResponses,
+            textStorage = textStorage,
+            revisionReader = revisionReader,
             sourceText =
                 object : SourceTextMaterializer {
                     override suspend fun materialize(
@@ -750,55 +779,90 @@ private class MemoryCredentialStore : CredentialStore {
     override suspend fun contains(credentialId: String): Boolean = credentialId in values
 }
 
-private class MemoryGeneratedTextAssetStore : GeneratedTextAssetStore {
-    private val cues = mutableMapOf<String, List<SubtitleCue>>()
+private class MemoryRawResponseStore : RawResponseStore {
     private val bytes = mutableMapOf<String, ByteArray>()
 
-    override suspend fun writeResult(
-        resultId: String,
-        sourceCues: List<SubtitleCue>,
-        targetCues: List<SubtitleCue>?,
-    ): StoredGeneratedAssets {
-        val sourceName = "$resultId.source.vtt"
-        val targetName = targetCues?.let { "$resultId.target.vtt" }
-        cues[sourceName] = sourceCues
-        targetName?.let { cues[it] = requireNotNull(targetCues) }
-        return StoredGeneratedAssets(
-            source = StoredTextAsset(sourceName, "source-$resultId", 1L),
-            target = targetName?.let { StoredTextAsset(it, "target-$resultId", 1L) },
-            cueCount = sourceCues.size,
-        )
-    }
-
-    override suspend fun readTextAsset(fileName: String): List<SubtitleCue> = requireNotNull(cues[fileName])
-
-    override suspend fun writeCheckpoint(fileName: String, bytes: ByteArray): StoredTextAsset {
+    override suspend fun write(fileName: String, bytes: ByteArray): String {
         this.bytes[fileName] = bytes
-        val hash =
-            MessageDigest.getInstance("SHA-256")
-                .digest(bytes)
-                .joinToString("") { "%02x".format(it.toInt() and 0xff) }
-        return StoredTextAsset(fileName, hash, bytes.size.toLong())
+        return fileName
     }
-
-    override suspend fun readCheckpoint(fileName: String): ByteArray = requireNotNull(bytes[fileName])
-
-    override suspend fun writeRawResponse(fileName: String, bytes: ByteArray): String =
-        writeCheckpoint(fileName, bytes).fileName
 
     override suspend fun delete(fileName: String) {
-        cues.remove(fileName)
         bytes.remove(fileName)
     }
 
     override suspend fun pruneExcept(retainedFileNames: Set<String>) {
-        cues.keys.retainAll(retainedFileNames)
         bytes.keys.retainAll(retainedFileNames)
     }
+}
 
-    fun contains(fileName: String): Boolean = fileName in cues || fileName in bytes
+private class MemoryTextArtifactStore : TextArtifactStore {
+    private val bytes = mutableMapOf<String, ByteArray>()
 
-    fun corruptCheckpoint(fileName: String) {
-        bytes[fileName] = "corrupt".toByteArray()
+    override suspend fun publish(
+        kind: TextArtifactKind,
+        payload: TextArtifactPayload,
+        canonicalizerVersion: Int,
+    ): StoredTextArtifact {
+        val encoded = TextArtifactCodec.encode(kind, payload, canonicalizerVersion)
+        bytes.putIfAbsent(encoded.artifactId, encoded.bytes)
+        return StoredTextArtifact(
+            artifactId = encoded.artifactId,
+            kind = encoded.kind,
+            schemaVersion = encoded.schemaVersion,
+            codecVersion = encoded.codecVersion,
+            canonicalizerVersion = encoded.canonicalizerVersion,
+            payloadSha256 = encoded.artifactId,
+            byteSize = encoded.bytes.size.toLong(),
+            cueCount = encoded.cueCount,
+        )
+    }
+
+    override suspend fun read(metadata: StoredTextArtifact): DecodedTextArtifact {
+        val value = bytes[metadata.artifactId] ?: throw IOException("Artifact is unavailable")
+        if (value.size.toLong() != metadata.byteSize) throw IOException("Artifact size does not match")
+        if (TextArtifactCodec.sha256(value) != metadata.artifactId) throw IOException("Artifact hash does not match")
+        return TextArtifactCodec.decode(value)
+    }
+
+    override suspend fun inspectPublished(
+        artifactId: String,
+        expectedKind: TextArtifactKind,
+    ): io.github.zvensmoluya.vortexcue.text.InspectedTextArtifact {
+        val value = bytes[artifactId] ?: throw IOException("Artifact is unavailable")
+        if (TextArtifactCodec.sha256(value) != artifactId) throw IOException("Artifact hash does not match")
+        val decoded = TextArtifactCodec.decode(value)
+        if (decoded.kind != expectedKind) throw IOException("Artifact kind does not match")
+        val cueCount =
+            when (val payload = decoded.payload) {
+                is TextArtifactPayload.Timeline -> payload.value.cues.size
+                is TextArtifactPayload.Delta -> payload.value.entries.size
+            }
+        return io.github.zvensmoluya.vortexcue.text.InspectedTextArtifact(
+            StoredTextArtifact(
+                artifactId,
+                decoded.kind,
+                decoded.schemaVersion,
+                decoded.codecVersion,
+                decoded.canonicalizerVersion,
+                artifactId,
+                value.size.toLong(),
+                cueCount,
+            ),
+            decoded,
+        )
+    }
+
+    override suspend fun exists(metadata: StoredTextArtifact): Boolean =
+        runCatching { read(metadata) }.isSuccess
+
+    override suspend fun listFiles(): List<TextArtifactFile> = emptyList()
+
+    override suspend fun delete(metadata: StoredTextArtifact): Boolean = bytes.remove(metadata.artifactId) != null
+
+    override suspend fun deleteUnregistered(file: TextArtifactFile): Boolean = true
+
+    fun corrupt(artifactId: String) {
+        bytes[artifactId] = "corrupt".toByteArray()
     }
 }

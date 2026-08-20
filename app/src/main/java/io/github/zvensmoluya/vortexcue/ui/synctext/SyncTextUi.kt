@@ -1187,12 +1187,19 @@ private fun inputChoices(
     audioTracks: List<AudioTrackInfo>,
 ): List<InputChoice> =
     buildList {
-        content.timedTextTracks
-            .filter { it.readiness !in setOf(TimedTextReadiness.Unreadable, TimedTextReadiness.ParseFailed) }
+        content.availableTextTracks
+            .filter {
+                it.readiness !in
+                    setOf(
+                        TimedTextReadiness.Unreadable,
+                        TimedTextReadiness.ParseFailed,
+                        TimedTextReadiness.MissingArtifact,
+                    )
+            }
             .forEach { track ->
                 val input =
-                    when (track.origin) {
-                        TimedTextOrigin.Embedded ->
+                    track.locator.candidateId?.let(GenerationInput::DiscoveredCandidate) ?: when {
+                        track.origin == TimedTextOrigin.Embedded ->
                             track.locator.embeddedTrackId?.let {
                                 GenerationInput.EmbeddedTrack(track.stableId, it)
                             }

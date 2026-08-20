@@ -1,5 +1,6 @@
 package io.github.zvensmoluya.vortexcue.data
 
+import android.provider.DocumentsContract
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
@@ -9,10 +10,12 @@ import io.github.zvensmoluya.vortexcue.core.model.ActiveTextSelection
 import io.github.zvensmoluya.vortexcue.core.model.ContentAvailability
 import io.github.zvensmoluya.vortexcue.core.model.MediaOrigin
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
-import io.github.zvensmoluya.vortexcue.core.model.SubtitleSourceRef
 import io.github.zvensmoluya.vortexcue.core.model.TextSelectionMode
 import io.github.zvensmoluya.vortexcue.core.model.TextTrackSlot
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextReadiness
+import io.github.zvensmoluya.vortexcue.core.model.TimedTextMatchBasis
+import io.github.zvensmoluya.vortexcue.core.model.TimedTextOrigin
+import io.github.zvensmoluya.vortexcue.core.model.TimedTextRole
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextTrack
 import io.github.zvensmoluya.vortexcue.core.model.mediaIdentityKey
 import io.github.zvensmoluya.vortexcue.core.model.stableContentId
@@ -28,6 +31,7 @@ import io.github.zvensmoluya.vortexcue.data.db.ContentRedirectEntity
 import io.github.zvensmoluya.vortexcue.data.db.CurrentPlaybackSessionEntity
 import io.github.zvensmoluya.vortexcue.data.db.CurrentQueueEntryEntity
 import io.github.zvensmoluya.vortexcue.data.db.CurrentDraftEntity
+import io.github.zvensmoluya.vortexcue.data.db.DiscoveredTextCandidateEntity
 import io.github.zvensmoluya.vortexcue.data.db.RecentEntryEntity
 import io.github.zvensmoluya.vortexcue.data.db.SourceEntity
 import io.github.zvensmoluya.vortexcue.data.db.TextSelectionEntity
@@ -37,7 +41,6 @@ import io.github.zvensmoluya.vortexcue.library.LibrarySourceKind
 import io.github.zvensmoluya.vortexcue.library.TextTrackCatalogState
 import io.github.zvensmoluya.vortexcue.library.TimedTextTrackCandidate
 import io.github.zvensmoluya.vortexcue.library.mergeTracks
-import io.github.zvensmoluya.vortexcue.library.manualTimedTextTrack
 import io.github.zvensmoluya.vortexcue.library.restoreAutomaticTrack
 import io.github.zvensmoluya.vortexcue.library.selectManualTrack
 import io.github.zvensmoluya.vortexcue.library.withTrackReadiness
@@ -52,6 +55,7 @@ class ContentRepository(
     private val idFactory: () -> String = { UUID.randomUUID().toString() },
 ) {
     private val dao: ContentDao = database.contentDao()
+    private val textStorageDao = database.textStorageDao()
 
     /** Virtual folders are deliberately independent from source folders. */
     val contentFolders: Flow<List<ContentFolderSummary>> =
@@ -176,13 +180,18 @@ class ContentRepository(
                 dao.observeLocators(canonicalId),
                 dao.observeActiveLocator(canonicalId),
             ) { content, locators, active -> DetailBase(content, locators, active) }
+        val textInputs =
+            combine(
+                dao.observeDisposition(canonicalId),
+                textStorageDao.observeCandidates(canonicalId),
+            ) { disposition, candidates -> disposition to candidates }
         return combine(
             base,
             dao.observeTextTracks(canonicalId),
             dao.observeTextRoles(canonicalId),
             dao.observeTextSelections(canonicalId),
-            dao.observeDisposition(canonicalId),
-        ) { current, tracks, roles, selections, disposition ->
+            textInputs,
+        ) { current, tracks, roles, selections, textInput ->
             current.content ?: return@combine null
             val activeId = current.active?.locatorId ?: return@combine null
             if (current.locators.none { it.locatorId == activeId }) return@combine null
@@ -192,10 +201,11 @@ class ContentRepository(
                 mediaLocators = current.locators.map { it.toDomain() },
                 activeMediaLocatorId = activeId,
                 timedTextTracks = domainTracks,
+                discoveredTextCandidates = textInput.second.map { it.toDomainCandidate() },
                 activeText = selections.toActiveText(tracks),
                 subtitleOffsetMs = current.content.subtitleOffsetMs,
                 disposition =
-                    disposition?.let {
+                    textInput.first?.let {
                         if (it.isCollected) ContentDisposition.Collected else ContentDisposition.Ignored
                     },
             )
@@ -389,10 +399,7 @@ class ContentRepository(
             }
             textCandidates.groupBy { it.mediaUriValue }.forEach { (uriValue, candidates) ->
                 val contentId = contentByUri[uriValue] ?: return@forEach
-                persistTextCatalogInside(
-                    contentId,
-                    textCatalogInside(contentId).mergeTracks(candidates.map { it.track.rekey(contentId) }),
-                )
+                persistDiscoveredCandidatesInside(descriptor.sourceId, generation, contentId, candidates)
             }
         }
     }
@@ -434,16 +441,45 @@ class ContentRepository(
             }
             textCandidates.groupBy { it.mediaUriValue }.forEach { (uriValue, candidates) ->
                 val contentId = contentByUri[uriValue] ?: return@forEach
-                val current = textCatalogInside(contentId)
-                val normalized = candidates.map { it.track.rekey(contentId) }
-                persistTextCatalogInside(contentId, current.mergeTracks(normalized))
+                persistDiscoveredCandidatesInside(descriptor.sourceId, generation, contentId, candidates)
             }
+            textStorageDao.deleteOlderCandidates(descriptor.sourceId, generation)
             dao.markOlderSourceLocatorsUnavailable(descriptor.sourceId, generation, timestamp)
             for (contentId in dao.contentIdsForSource(descriptor.sourceId)) {
                 selectAvailableLocatorInside(contentId)
             }
             garbageCollectInside()
         }
+    }
+
+    private suspend fun persistDiscoveredCandidatesInside(
+        sourceId: String,
+        generation: Long,
+        contentId: String,
+        candidates: List<TimedTextTrackCandidate>,
+    ) {
+        val entities =
+            candidates.mapNotNull { candidate ->
+                val source = candidate.externalSource ?: return@mapNotNull null
+                val documentId = runCatching { DocumentsContract.getDocumentId(source.uri) }.getOrNull()
+                    ?: return@mapNotNull null
+                val track = candidate.track
+                DiscoveredTextCandidateEntity(
+                    candidateId = stableTimedTextTrackId(contentId, track.origin, "candidate:$sourceId:$documentId"),
+                    contentId = contentId,
+                    sourceId = sourceId,
+                    documentId = documentId,
+                    displayName = source.displayName,
+                    mimeType = source.mimeType,
+                    format = track.format,
+                    language = track.language,
+                    label = track.label,
+                    rolesMask = track.roles.fold(0) { mask, role -> mask or (1 shl role.ordinal) },
+                    matchBasis = track.matchBasis.name,
+                    sourceGeneration = generation,
+                )
+            }
+        if (entities.isNotEmpty()) textStorageDao.upsertCandidates(entities)
     }
 
     suspend fun recordSourceScanFailure(
@@ -515,19 +551,6 @@ class ContentRepository(
         }
     }
 
-    suspend fun addManualTextTrack(
-        contentId: String,
-        slot: TextTrackSlot,
-        source: SubtitleSourceRef,
-    ): TimedTextTrack =
-        database.withWriteTransaction {
-            val canonical = resolveRedirect(contentId)
-            val track = manualTimedTextTrack(canonical, source)
-            val updated = textCatalogInside(canonical).selectManualTrack(slot, track)
-            persistTextCatalogInside(canonical, updated)
-            requireNotNull(updated.selectedTrack(slot))
-        }
-
     suspend fun selectManualTextTrack(
         contentId: String,
         slot: TextTrackSlot,
@@ -558,7 +581,6 @@ class ContentRepository(
         trackId: String,
         readiness: TimedTextReadiness,
         failureMessage: String? = null,
-        resolvedSource: SubtitleSourceRef? = null,
     ) {
         database.withWriteTransaction {
             val canonical = resolveRedirect(contentId)
@@ -567,7 +589,6 @@ class ContentRepository(
                     trackId = trackId,
                     readiness = readiness,
                     failureMessage = failureMessage,
-                    resolvedSource = resolvedSource,
                 )
             persistTextCatalogInside(canonical, updated)
         }
@@ -662,11 +683,13 @@ class ContentRepository(
         val trackEntities = dao.textTracks(contentId)
         val roles = dao.textRoles(contentId)
         val selections = dao.textSelections(contentId)
+        val candidates = textStorageDao.candidates(contentId)
         return ContentDetails(
             contentId = contentId,
             mediaLocators = locators.map { it.toDomain() },
             activeMediaLocatorId = active,
             timedTextTracks = trackEntities.map { it.toDomain(roles) },
+            discoveredTextCandidates = candidates.map { it.toDomainCandidate() },
             activeText = selections.toActiveText(trackEntities),
             subtitleOffsetMs = content.subtitleOffsetMs,
             disposition = dao.disposition(contentId)?.let {
@@ -876,6 +899,20 @@ private fun List<TextSelectionEntity>.toActiveText(
         rejectedTrackIds = tracks.filter { it.isRejected }.map { it.trackId },
     )
 }
+
+private fun DiscoveredTextCandidateEntity.toDomainCandidate(): DiscoveredTextCandidate =
+    DiscoveredTextCandidate(
+        candidateId = candidateId,
+        displayName = displayName,
+        mimeType = mimeType,
+        format = format,
+        language = language,
+        label = label,
+        origin = if (format == "lrc") TimedTextOrigin.Lyrics else TimedTextOrigin.Sidecar,
+        roles = TimedTextRole.entries.filterIndexed { index, _ -> rolesMask and (1 shl index) != 0 },
+        matchBasis = matchBasis.enumValueOr(TimedTextMatchBasis.FilenameCandidate),
+        failureMessage = failureMessage,
+    )
 
 private fun TimedTextTrack.rekey(contentId: String): TimedTextTrack =
     copy(stableId = stableTimedTextTrackId(contentId, origin, locator.stableIdentity))

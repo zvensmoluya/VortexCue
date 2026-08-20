@@ -27,7 +27,7 @@ internal interface SourceResolver {
 
 internal object TrustedSourceResolver : SourceResolver {
     override fun resolve(content: ContentDetails): GenerationLaunchPlan {
-        val usable = content.timedTextTracks.filter(TimedTextTrack::isUsable)
+        val usable = content.availableTextTracks.filter(TimedTextTrack::isUsable)
         val selected = usable.firstOrNull { it.stableId == content.activeText.primaryTrackId }
         if (selected != null) {
             val input = selected.toGenerationInputOrNull()
@@ -72,11 +72,16 @@ internal fun planAutomaticGeneration(content: ContentDetails): GenerationLaunchP
     TrustedSourceResolver.resolve(content)
 
 private fun TimedTextTrack.isUsable(): Boolean =
-    readiness !in setOf(TimedTextReadiness.Unreadable, TimedTextReadiness.ParseFailed)
+    readiness !in
+        setOf(
+            TimedTextReadiness.Unreadable,
+            TimedTextReadiness.ParseFailed,
+            TimedTextReadiness.MissingArtifact,
+        )
 
 private fun TimedTextTrack.toGenerationInputOrNull(): GenerationInput? =
-    if (origin == TimedTextOrigin.Embedded) {
-        locator.embeddedTrackId?.let { GenerationInput.EmbeddedTrack(stableId, it) }
-    } else {
-        GenerationInput.ExistingTrack(stableId)
+    locator.candidateId?.let(GenerationInput::DiscoveredCandidate) ?: when {
+        origin == TimedTextOrigin.Embedded ->
+            locator.embeddedTrackId?.let { GenerationInput.EmbeddedTrack(stableId, it) }
+        else -> GenerationInput.ExistingTrack(stableId)
     }

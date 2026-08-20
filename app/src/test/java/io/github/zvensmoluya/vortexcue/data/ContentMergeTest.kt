@@ -268,13 +268,13 @@ class ContentMergeTest {
         TimedTextTrackEntity(
             trackId = trackId,
             contentId = contentId,
-            origin = "Sidecar",
+            origin = "Embedded",
             locatorIdentity = SharedTextIdentity,
-            uriValue = "content://text/shared.srt",
-            embeddedTrackId = null,
+            revisionId = null,
+            embeddedTrackId = "embedded-shared",
+            generatedSlotId = null,
             displayName = "shared.srt",
             mimeType = "application/x-subrip",
-            cachedFileName = null,
             format = "srt",
             language = "en",
             label = null,
@@ -284,6 +284,6 @@ class ContentMergeTest {
         )
 
     private companion object {
-        const val SharedTextIdentity = "uri:content://text/shared.srt"
+        const val SharedTextIdentity = "embedded:embedded-shared"
     }
 }

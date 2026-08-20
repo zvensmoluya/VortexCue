@@ -14,11 +14,13 @@ import io.github.zvensmoluya.vortexcue.data.db.RequestAttemptEntity
 import io.github.zvensmoluya.vortexcue.data.db.SyncTextRunnerLeaseEntity
 import io.github.zvensmoluya.vortexcue.data.db.TranslationBatchEntity
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase
-import io.github.zvensmoluya.vortexcue.subtitle.NormalizedSubtitleWriter
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleCue
-import io.github.zvensmoluya.vortexcue.subtitle.WebVttParser
+import io.github.zvensmoluya.vortexcue.text.CanonicalTextNormalizer
+import io.github.zvensmoluya.vortexcue.text.TextArtifactKind
+import io.github.zvensmoluya.vortexcue.text.TextArtifactPayload
+import io.github.zvensmoluya.vortexcue.text.TextStorageRepository
+import io.github.zvensmoluya.vortexcue.text.TimelineRevisionReader
 import java.io.IOException
-import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
@@ -56,7 +58,9 @@ class SyncTextTaskRunner(
     private val database: VortexDatabase,
     private val repository: SyncTextRepository,
     private val policies: TranslationPolicyRegistry,
-    private val assets: GeneratedTextAssetStore,
+    private val rawResponses: RawResponseStore,
+    private val textStorage: TextStorageRepository,
+    private val revisionReader: TimelineRevisionReader,
     private val sourceText: SourceTextMaterializer,
     private val audio: AudioWindowExtractor,
     private val spool: PcmSpool,
@@ -128,6 +132,7 @@ class SyncTextTaskRunner(
                     usage = source.usage,
                     sourceModel = null,
                     completeTask = true,
+                    sourceRevisionId = source.revisionId,
                 )
                 return
             }
@@ -223,6 +228,7 @@ class SyncTextTaskRunner(
                         cues = materialized.cues,
                         language = snapshot.sourceLanguage ?: materialized.language,
                         usage = UsageRecord(),
+                        revisionId = materialized.revisionId,
                     )
                 }
             } catch (error: SourceTextUnavailableException) {
@@ -237,10 +243,11 @@ class SyncTextTaskRunner(
     private suspend fun loadSourceResult(resultId: String): SourceWork? {
         val result = dao.generatedResult(resultId) ?: return null
         return SourceWork(
-            cues = assets.readTextAsset(result.sourceAssetFileName),
+            cues = revisionReader.read(result.sourceRevisionId).toSubtitleCues(),
             language = result.sourceLanguage,
             usage = UsageRecord(result.inputTokens, result.outputTokens, result.totalTokens, result.costUsd),
             resultId = resultId,
+            revisionId = result.sourceRevisionId,
         )
     }
 
@@ -314,6 +321,7 @@ class SyncTextTaskRunner(
                                                 coveredEndMs = prefix.last().ownedEndMs,
                                                 completedWindowCount = prefix.size,
                                                 totalWindowCount = roots.size,
+                                                partialArtifactIds = prefixWork.map(WindowTranscript::artifactId),
                                             )
                                             publishedRootCount = prefix.size
                                         }
@@ -336,8 +344,8 @@ class SyncTextTaskRunner(
         if (merged.isEmpty()) throw AsrException(GenerationErrorCategory.Timeline, false, false, message = "ASR produced no owned cues")
         val language = resolveAsrLanguage(snapshot, transcripts)
         val usage = transcripts.map(WindowTranscript::usage).sumRealUsage()
-        val resultId = dao.task(task.taskId)?.sourceResultId
-        return SourceWork(merged, language, usage, resultId)
+        val result = dao.task(task.taskId)?.sourceResultId?.let { dao.generatedResult(it) }
+        return SourceWork(merged, language, usage, result?.resultId, result?.sourceRevisionId)
     }
 
     private fun mergeWindowTranscripts(transcripts: List<WindowTranscript>): List<SubtitleCue> {
@@ -363,12 +371,13 @@ class SyncTextTaskRunner(
         entity: AsrWindowEntity,
     ): List<WindowTranscript> {
         ensureRunnable(task.taskId)
-        if (entity.state == CompletedState && entity.transcriptAssetFileName != null) {
+        if (entity.state == CompletedState && entity.transcriptArtifactId != null) {
             return listOf(
                 WindowTranscript(
                     cues = readAsrCheckpoint(entity),
                     language = entity.detectedLanguage,
                     usage = UsageRecord(entity.inputTokens, entity.outputTokens, entity.totalTokens, entity.costUsd),
+                    artifactId = entity.transcriptArtifactId,
                 ),
             )
         }
@@ -408,23 +417,34 @@ class SyncTextTaskRunner(
                         } else {
                             AsrTimelineMerger.mergeSegments(result.segments)
                         }
-                    val checkpoint = assets.writeCheckpoint("${plan.windowId}.vtt", NormalizedSubtitleWriter.encode(cues))
-                    dao.upsertAsrWindow(
-                        entity.copy(
-                            state = CompletedState,
-                            encodedBytes = wav.length(),
-                            transcriptAssetFileName = checkpoint.fileName,
-                            transcriptSha256 = checkpoint.sha256,
-                            cueCount = cues.size,
-                            errorMessage = null,
-                            detectedLanguage = result.detectedLanguage,
-                            inputTokens = result.usage.inputTokens,
-                            outputTokens = result.usage.outputTokens,
-                            totalTokens = result.usage.totalTokens,
-                            costUsd = result.usage.costUsd,
+                    val timeline = CanonicalTextNormalizer.normalizeAsrWorkUnit(cues)
+                    val checkpoint = textStorage.publishTimelineArtifact(TextArtifactKind.AsrWorkUnitOutput, timeline)
+                    database.withWriteTransaction {
+                        textStorage.registerArtifact(checkpoint)
+                        dao.upsertAsrWindow(
+                            entity.copy(
+                                state = CompletedState,
+                                encodedBytes = wav.length(),
+                                transcriptArtifactId = checkpoint.artifactId,
+                                transcriptSha256 = checkpoint.payloadSha256,
+                                cueCount = checkpoint.cueCount,
+                                errorMessage = null,
+                                detectedLanguage = result.detectedLanguage,
+                                inputTokens = result.usage.inputTokens,
+                                outputTokens = result.usage.outputTokens,
+                                totalTokens = result.usage.totalTokens,
+                                costUsd = result.usage.costUsd,
+                            ),
+                        )
+                    }
+                    return listOf(
+                        WindowTranscript(
+                            timeline.toSubtitleCues(),
+                            result.detectedLanguage,
+                            result.usage,
+                            checkpoint.artifactId,
                         ),
                     )
-                    return listOf(WindowTranscript(cues, result.detectedLanguage, result.usage))
                 } catch (error: AsrException) {
                     finalFailure = error
                     recordAsrAttempt(attempt, null, error)
@@ -460,14 +480,19 @@ class SyncTextTaskRunner(
     }
 
     private suspend fun readAsrCheckpoint(entity: AsrWindowEntity): List<SubtitleCue> {
-        val fileName = requireNotNull(entity.transcriptAssetFileName)
+        val artifactId = requireNotNull(entity.transcriptArtifactId)
         val expectedHash = entity.transcriptSha256
             ?: throw CheckpointIntegrityException("ASR checkpoint hash is missing")
         val expectedCueCount = entity.cueCount
             ?: throw CheckpointIntegrityException("ASR checkpoint cue count is missing")
-        val bytes = assets.readCheckpoint(fileName)
-        if (sha256(bytes) != expectedHash) throw CheckpointIntegrityException("ASR checkpoint hash does not match")
-        val cues = WebVttParser.parse(bytes)
+        val metadata = textStorage.artifact(artifactId)
+            ?: throw CheckpointIntegrityException("ASR checkpoint metadata is missing")
+        if (metadata.payloadSha256 != expectedHash) {
+            throw CheckpointIntegrityException("ASR checkpoint hash does not match")
+        }
+        val decoded = textStorage.readArtifact(artifactId)
+        val cues = (decoded.payload as? TextArtifactPayload.Timeline)?.value?.toSubtitleCues()
+            ?: throw CheckpointIntegrityException("ASR checkpoint payload is invalid")
         if (cues.size != expectedCueCount) throw CheckpointIntegrityException("ASR checkpoint cue count does not match")
         if (cues.any { it.startMs < entity.ownedStartMs || it.endMs > entity.ownedEndMs }) {
             throw CheckpointIntegrityException("ASR checkpoint cue range is invalid")
@@ -543,6 +568,7 @@ class SyncTextTaskRunner(
             targetCues = target,
             usage = (outputs.map(BatchWork::usage) + source.usage).sumRealUsage(),
             completeTask = true,
+            sourceRevisionId = requireNotNull(source.revisionId) { "Translation source revision is missing" },
         )
     }
 
@@ -557,7 +583,7 @@ class SyncTextTaskRunner(
         entity: TranslationBatchEntity,
     ): List<BatchWork> {
         ensureRunnable(task.taskId)
-        if (entity.state == CompletedState && entity.resultAssetFileName != null) {
+        if (entity.state == CompletedState && entity.resultArtifactId != null) {
             return listOf(
                 BatchWork(
                     cues = readTranslationCheckpoint(entity, plan),
@@ -601,23 +627,27 @@ class SyncTextTaskRunner(
                     sourceLanguage = sourceLanguage,
                     targetLanguage = requireNotNull(snapshot.targetLanguage),
                 )
+            val timeline = CanonicalTextNormalizer.normalizeGenerated(output.targetCues)
             val checkpoint =
-                assets.writeCheckpoint("${entity.batchId}.vtt", NormalizedSubtitleWriter.encode(output.targetCues))
-            dao.upsertTranslationBatch(
-                entity.copy(
-                    state = CompletedState,
-                    formatRecoveryCount = output.formatRecoveryCount,
-                    repairCount = output.repairCount,
-                    resultAssetFileName = checkpoint.fileName,
-                    resultSha256 = checkpoint.sha256,
-                    cueCount = output.targetCues.size,
-                    inputTokens = output.usage.inputTokens,
-                    outputTokens = output.usage.outputTokens,
-                    totalTokens = output.usage.totalTokens,
-                    costUsd = output.usage.costUsd,
-                    errorMessage = null,
-                ),
-            )
+                textStorage.publishTimelineArtifact(TextArtifactKind.TranslationWorkUnitOutput, timeline)
+            database.withWriteTransaction {
+                textStorage.registerArtifact(checkpoint)
+                dao.upsertTranslationBatch(
+                    entity.copy(
+                        state = CompletedState,
+                        formatRecoveryCount = output.formatRecoveryCount,
+                        repairCount = output.repairCount,
+                        resultArtifactId = checkpoint.artifactId,
+                        resultSha256 = checkpoint.payloadSha256,
+                        cueCount = checkpoint.cueCount,
+                        inputTokens = output.usage.inputTokens,
+                        outputTokens = output.usage.outputTokens,
+                        totalTokens = output.usage.totalTokens,
+                        costUsd = output.usage.costUsd,
+                        errorMessage = null,
+                    ),
+                )
+            }
             return listOf(BatchWork(output.targetCues, output.usage))
         } catch (error: TranslationProtocolException) {
             if (!error.capacityExceeded || plan.translateOnly.size <= 1) {
@@ -644,14 +674,19 @@ class SyncTextTaskRunner(
         entity: TranslationBatchEntity,
         plan: TranslationBatchPlan,
     ): List<SubtitleCue> {
-        val fileName = requireNotNull(entity.resultAssetFileName)
+        val artifactId = requireNotNull(entity.resultArtifactId)
         val expectedHash = entity.resultSha256
             ?: throw CheckpointIntegrityException("Translation checkpoint hash is missing")
         val expectedCueCount = entity.cueCount
             ?: throw CheckpointIntegrityException("Translation checkpoint cue count is missing")
-        val bytes = assets.readCheckpoint(fileName)
-        if (sha256(bytes) != expectedHash) throw CheckpointIntegrityException("Translation checkpoint hash does not match")
-        val cues = WebVttParser.parse(bytes)
+        val metadata = textStorage.artifact(artifactId)
+            ?: throw CheckpointIntegrityException("Translation checkpoint metadata is missing")
+        if (metadata.payloadSha256 != expectedHash) {
+            throw CheckpointIntegrityException("Translation checkpoint hash does not match")
+        }
+        val decoded = textStorage.readArtifact(artifactId)
+        val cues = (decoded.payload as? TextArtifactPayload.Timeline)?.value?.toSubtitleCues()
+            ?: throw CheckpointIntegrityException("Translation checkpoint payload is invalid")
         if (cues.size != expectedCueCount || cues.size != plan.translateOnly.size) {
             throw CheckpointIntegrityException("Translation checkpoint cue count does not match")
         }
@@ -671,7 +706,7 @@ class SyncTextTaskRunner(
         val error = networkAttempt.error
         val raw = response?.rawResponse ?: error?.rawResponse
         val requestAttemptId = newId()
-        val rawFile = raw?.let { assets.writeRawResponse("$requestAttemptId.json", it) }
+        val rawFile = raw?.let { rawResponses.write("$requestAttemptId.json", it) }
         val timestamp = nowMs()
         database.withWriteTransaction {
             val sequence = dao.nextRequestSequence(attempt.attemptId)
@@ -707,7 +742,7 @@ class SyncTextTaskRunner(
     ) {
         val raw = result?.rawResponse ?: error?.rawResponse
         val requestAttemptId = newId()
-        val rawFile = raw?.let { assets.writeRawResponse("$requestAttemptId.json", it) }
+        val rawFile = raw?.let { rawResponses.write("$requestAttemptId.json", it) }
         val timestamp = nowMs()
         database.withWriteTransaction {
             val sequence = dao.nextRequestSequence(attempt.attemptId)
@@ -836,12 +871,14 @@ private data class SourceWork(
     val language: String?,
     val usage: UsageRecord,
     val resultId: String? = null,
+    val revisionId: String? = null,
 )
 
 private data class WindowTranscript(
     val cues: List<SubtitleCue>,
     val language: String?,
     val usage: UsageRecord,
+    val artifactId: String,
 )
 
 private data class BatchWork(
@@ -865,7 +902,7 @@ private fun AsrWindowPlan.toEntity(attemptId: String) =
         parentWindowId = parentWindowId,
         state = "Waiting",
         encodedBytes = null,
-        transcriptAssetFileName = null,
+        transcriptArtifactId = null,
         errorMessage = null,
     )
 
@@ -901,7 +938,7 @@ private fun TranslationBatchPlan.toEntity(
         state = "Waiting",
         formatRecoveryCount = 0,
         repairCount = 0,
-        resultAssetFileName = null,
+        resultArtifactId = null,
         resultSha256 = null,
         cueCount = null,
         inputTokens = null,
@@ -924,10 +961,6 @@ private fun GenerationErrorCategory.blocksScheme(): Boolean =
         this == GenerationErrorCategory.Policy ||
         this == GenerationErrorCategory.InvalidResponse
 
-private fun sha256(bytes: ByteArray): String =
-    MessageDigest.getInstance("SHA-256")
-        .digest(bytes)
-        .joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
 private inline fun <reified T : Enum<T>> String.enumValueOr(default: T): T =
     enumValues<T>().firstOrNull { it.name == this } ?: default

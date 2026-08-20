@@ -82,6 +82,12 @@ sealed interface GenerationInput {
         val embeddedTrackId: String,
     ) : GenerationInput
 
+    data class DiscoveredCandidate(
+        val candidateId: String,
+    ) : GenerationInput {
+        override val trackId: String? = null
+    }
+
     data class AudioTrack(
         val audioTrackId: String? = null,
     ) : GenerationInput {
@@ -182,8 +188,8 @@ data class GeneratedTextResult(
     val contentId: String,
     val sourceLanguage: String?,
     val targetLanguage: String?,
-    val sourceAssetFileName: String,
-    val targetAssetFileName: String?,
+    val sourceRevisionId: String,
+    val targetRevisionId: String?,
     val sourceSha256: String,
     val targetSha256: String?,
     val cueCount: Int,

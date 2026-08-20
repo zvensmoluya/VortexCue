@@ -49,6 +49,12 @@ interface ContentDao {
     @Query("SELECT * FROM timed_text_track WHERE content_id = :contentId ORDER BY track_id")
     suspend fun textTracks(contentId: String): List<TimedTextTrackEntity>
 
+    @Query("SELECT * FROM timed_text_track ORDER BY content_id, track_id")
+    suspend fun allTextTracks(): List<TimedTextTrackEntity>
+
+    @Query("SELECT * FROM timed_text_track WHERE content_id = :contentId AND revision_id = :revisionId LIMIT 1")
+    suspend fun textTrackByRevision(contentId: String, revisionId: String): TimedTextTrackEntity?
+
     @Query("SELECT * FROM timed_text_track WHERE content_id = :contentId ORDER BY track_id")
     fun observeTextTracks(contentId: String): Flow<List<TimedTextTrackEntity>>
 
@@ -266,9 +272,6 @@ interface ContentDao {
     @Query("SELECT * FROM current_draft WHERE singleton_id = 1")
     suspend fun draft(): CurrentDraftEntity?
 
-    @Query("SELECT cached_file_name FROM timed_text_track WHERE cached_file_name IS NOT NULL")
-    suspend fun referencedSubtitleCacheFiles(): List<String>
-
     @Query("DELETE FROM current_draft")
     suspend fun clearDraft()
 
@@ -283,6 +286,12 @@ interface ContentDao {
 
     @Query("DELETE FROM timed_text_track WHERE track_id = :trackId")
     suspend fun deleteTextTrack(trackId: String)
+
+    @Query(
+        "UPDATE timed_text_track SET readiness = 'MissingArtifact', failure_message = :message " +
+            "WHERE track_id = :trackId",
+    )
+    suspend fun markTextTrackMissingArtifact(trackId: String, message: String): Int
 
     @Query("DELETE FROM text_selection WHERE content_id = :contentId")
     suspend fun clearTextSelections(contentId: String)

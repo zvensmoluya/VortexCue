@@ -463,8 +463,8 @@ class ContentCatalogTest {
             stableId = id,
             origin = origin,
             locator =
-                TimedTextLocator.External(
-                    uriValue = "content://subtitle/$id",
+                TimedTextLocator.Revision(
+                    revisionId = "revision-$id",
                     displayName = "$id.srt",
                 ),
             format = "srt",

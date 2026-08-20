@@ -90,17 +90,23 @@ Glow 为纯黑、安全 Insets、独立亮度；双击分区、长按临时控�
 
 Normal Player 的主体固定为“上一句弱化 / 当前句主视觉 / 下一句弱化”，不显示假封面。播放控制、进度、速度、同步偏移、Sleep Timer、播放列表和进入 Glow 按本指南视觉重排。
 
-同步文字页面只负责主文字、第二文字、手动文件、恢复自动匹配和生成状态。手动添加或恢复不改变媒体来源；生成结果完成后自动成为可选文字轨。
+同步文字页面只负责主文字、第二文字、手动文件、恢复自动匹配和生成状态。手动导入会读取、解析并规范化 SRT / VTT / ASS / LRC，然后发布为应用自有的 immutable revision；成功后的文字轨不再依赖原 URI 或 SAF 权限。Folder 扫描到的外挂字幕只登记为候选，首次自动命中、用户点选或生成流程采用时才物化；媒体播放不等待候选导入。内嵌文字仍由 Media3 实时播放，仅在生成任务把它作为固定输入时物化 source revision。生成结果完成后自动成为可选文字轨。
 
 ## 8. 数据与迁移
 
-Room 使用新 schema 并允许破坏性重建。重建清理应用私有字幕、生成工件、孤立凭据文件和旧的命名 Playlist/Home shortcut 数据；保留 Glow 设置、用户原始媒体和 SAF 外部文件。数据库不再把 `lastSurface` 当作启动入口；`PlayerSurface` 只管理运行期 Normal/Calibration/Glow 层级。
+Room 当前 schema 为 v6，并允许从 v5 及其他不兼容版本破坏性重建。重建清理应用私有旧字幕缓存、旧 result/checkpoint VTT、孤立凭据文件和旧的命名 Playlist/Home shortcut 数据；保留 Settings、用户原始媒体和 SAF 外部字幕文件。数据库不再把 `lastSurface` 当作启动入口；`PlayerSurface` 只管理运行期 Normal/Calibration/Glow 层级。
+
+导入与生成文字统一使用 `CanonicalTimeline`、`TimelineRevision` 和 content-addressed `TextArtifactStore`。Artifact 位于 `noBackupFilesDir/text_artifacts/<kind>/<prefix>/<id>.bin`，ID 是包含 kind、schema、codec 与 canonicalizer version 的完整二进制 envelope SHA-256。Room 只保存 Artifact metadata、不可变 revision、manifest 和 publication pointer，不保存逐 cue 正文。`TimelineRevisionReader` 一次解码当前 publication 为内存 `SubtitleTimeline`；播放进度解析不访问 Room、Artifact 文件或 SAF。
+
+ASR window 与 translation batch 先发布 typed Artifact，再在同一 Room transaction 中登记引用和完成状态。Partial revision 引用连续完成前缀的 WorkUnit Artifact，Final source 使用单个 `FinalTimeline` Artifact；target 保存固定 source revision/hash 的 `TranslationDelta`。启动恢复只重跑没有已提交 Artifact 的单元。启动审计将缺失、损坏或未知版本引用标记为 `MissingArtifact` 或 `Storage / NeedsAttention`，不回读旧 URI，也不静默重发付费请求。不可达 Artifact 与未注册文件使用 24 小时宽限的两阶段 GC；当前 publication、target source pin 和可恢复任务资产是 GC root。
+
+当前没有导出功能；内部 codec 与 revision reader 保留明确的 exporter 边界，但本轮不增加导出 UI。
 
 核心新接口包括 `MainTab`、`ContentSort`、`ContentFolderSummary`、`SyncTextConfig` 及对应 Repository 查询/写入。Home projection、HomeSection、PlaylistSummary、命名 Playlist CRUD、Home shortcut 和 UI-facing Scheme/Task actions 不得成为新 UI 依赖。
 
 ## 9. 验收
 
-自动化覆盖：虚拟文件夹单归属、删除回根目录、搜索排序、移出/恢复、Queue 唯一与重排、外部打开不收录、单套配置校验、生成状态归并；Room 首次创建与旧 schema 破坏性重建；Settings DataStore 与用户媒体不受影响。
+自动化覆盖：虚拟文件夹单归属、删除回根目录、搜索排序、移出/恢复、Queue 唯一与重排、外部打开不收录、单套配置校验、生成状态归并；四种字幕格式 canonicalization、稳定 cue ID、版本化 binary codec、partial/final assembly、translation source pin、Artifact 审计与 24 小时 GC；Room 首次创建与 v5→v6 破坏性重建；Settings DataStore 与用户媒体不受影响。
 
 Compose UI 覆盖四 Tab、中央 Import Hub、Mini Player、空态、文件夹导航、长按菜单、Queue、配置校验和 Back Stack。默认验证命令：
 

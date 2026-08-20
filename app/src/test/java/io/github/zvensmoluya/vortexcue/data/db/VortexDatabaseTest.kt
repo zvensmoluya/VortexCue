@@ -13,6 +13,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -323,6 +324,35 @@ class VortexDatabaseTest {
         }
     }
 
+    @Test
+    fun versionFiveIsDestructivelyRebuiltAsVersionSix() = runBlocking {
+        val path = temporaryFolder.root.resolve("migration-v5-v6.db").toPath()
+        val helper =
+            MigrationTestHelper(
+                databasePath = path,
+                schemaDirectoryPath = File("schemas").toPath(),
+                driver = BundledSQLiteDriver(),
+                databaseClass = VortexDatabase::class,
+                databaseFactory = { VortexDatabase_Impl() },
+                autoMigrationSpecs = emptyList(),
+            )
+        helper.createDatabase(5).use { connection ->
+            connection.prepare(
+                "INSERT INTO content (content_id, created_at_ms, subtitle_offset_ms) VALUES ('old-content', 1, 0)",
+            ).use { it.step() }
+        }
+
+        val rebuilt =
+            Room.databaseBuilder<VortexDatabase>(path.toString()) { VortexDatabase_Impl() }
+                .setDriver(BundledSQLiteDriver())
+                .setQueryCoroutineContext(Dispatchers.IO)
+                .fallbackToDestructiveMigration(dropAllTables = true)
+                .build()
+        assertNull(rebuilt.contentDao().content("old-content"))
+        assertTrue(rebuilt.textStorageDao().artifacts().isEmpty())
+        rebuilt.close()
+    }
+
     private suspend fun insertContent(
         contentId: String,
         uri: String,
@@ -368,12 +398,12 @@ class VortexDatabaseTest {
             trackId = trackId,
             contentId = contentId,
             origin = "Sidecar",
-            locatorIdentity = "uri:content://text/$trackId",
-            uriValue = "content://text/$trackId",
+            locatorIdentity = "revision:$trackId",
+            revisionId = null,
             embeddedTrackId = null,
+            generatedSlotId = null,
             displayName = "$trackId.srt",
             mimeType = "application/x-subrip",
-            cachedFileName = null,
             format = "srt",
             language = null,
             label = null,

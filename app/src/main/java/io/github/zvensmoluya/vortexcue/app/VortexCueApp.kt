@@ -42,12 +42,13 @@ import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
 import io.github.zvensmoluya.vortexcue.core.model.PlayerSurface
 import io.github.zvensmoluya.vortexcue.core.model.SubtitleSourceRef
 import io.github.zvensmoluya.vortexcue.core.model.TextTrackSlot
+import io.github.zvensmoluya.vortexcue.core.model.TextSelectionMode
+import io.github.zvensmoluya.vortexcue.core.model.TimedTextMatchBasis
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextOrigin
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextReadiness
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextTrack
 import io.github.zvensmoluya.vortexcue.core.storage.displayName
 import io.github.zvensmoluya.vortexcue.core.storage.persistReadPermission
-import io.github.zvensmoluya.vortexcue.core.storage.readSubtitleBytes
 import io.github.zvensmoluya.vortexcue.data.ContentDetails
 import io.github.zvensmoluya.vortexcue.data.ContentDisposition
 import io.github.zvensmoluya.vortexcue.data.PlaybackRecoveryProjection
@@ -57,7 +58,6 @@ import io.github.zvensmoluya.vortexcue.library.LibraryCoordinatorState
 import io.github.zvensmoluya.vortexcue.library.LibrarySourceIds
 import io.github.zvensmoluya.vortexcue.library.TimedTextTrackCandidate
 import io.github.zvensmoluya.vortexcue.library.mediaLibraryPermissionsToRequest
-import io.github.zvensmoluya.vortexcue.library.toSubtitleSourceRef
 import io.github.zvensmoluya.vortexcue.playback.PlaybackGateway
 import io.github.zvensmoluya.vortexcue.playback.PlayerMaterializationState
 import io.github.zvensmoluya.vortexcue.playback.ownsRuntimePlaybackState
@@ -68,9 +68,9 @@ import io.github.zvensmoluya.vortexcue.playback.rememberSleepTimerState
 import io.github.zvensmoluya.vortexcue.playback.setSleepTimer
 import io.github.zvensmoluya.vortexcue.playback.stopAfterCurrentItem
 import io.github.zvensmoluya.vortexcue.playback.stopAfterTonight
-import io.github.zvensmoluya.vortexcue.subtitle.SubtitleAssetStore
-import io.github.zvensmoluya.vortexcue.subtitle.SubtitleParser
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleTimeline
+import io.github.zvensmoluya.vortexcue.text.TextImportCoordinator
+import io.github.zvensmoluya.vortexcue.text.TimelineRevisionReader
 import io.github.zvensmoluya.vortexcue.synctext.GeneratedTextPresentation
 import io.github.zvensmoluya.vortexcue.ui.player.PlayerScreen
 import io.github.zvensmoluya.vortexcue.ui.player.GlowCalibrationScreen
@@ -80,7 +80,6 @@ import io.github.zvensmoluya.vortexcue.ui.main.MainTabScreen
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextAction
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextUiHost
 import java.io.FileNotFoundException
-import java.io.IOException
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -150,7 +149,8 @@ internal fun VortexCueApp(
     val repository = container.contentRepository
     val playbackRepository = container.playbackStateRepository
     val settingsStore = container.settingsStore
-    val subtitleAssetStore = container.subtitleAssetStore
+    val timelineRevisionReader = container.timelineRevisionReader
+    val textImportCoordinator = container.textImportCoordinator
     val contentResolver = context.contentResolver
     val gateway = remember(player) { PlaybackGateway(player) }
     val coordinator =
@@ -210,6 +210,26 @@ internal fun VortexCueApp(
     val currentUnit = currentDetails?.contentUnit
     val selectedPrimaryTrack = currentDetails?.selectedTrack(TextTrackSlot.Primary)
     val selectedSecondaryTrack = currentDetails?.selectedTrack(TextTrackSlot.Secondary)
+    val automaticCandidate =
+        currentDetails
+            ?.takeIf {
+                it.activeText.primaryMode == TextSelectionMode.Automatic &&
+                    it.activeText.primaryTrackId == null
+            }
+            ?.discoveredTextCandidates
+            ?.filter { it.failureMessage == null && it.matchBasis == TimedTextMatchBasis.ExactStem }
+            ?.singleOrNull()
+
+    LaunchedEffect(currentContentId, automaticCandidate?.candidateId) {
+        val candidate = automaticCandidate ?: return@LaunchedEffect
+        runCatchingSuspend {
+            textImportCoordinator.importCandidate(
+                candidateId = candidate.candidateId,
+                slot = TextTrackSlot.Primary,
+                selectionMode = TextSelectionMode.Automatic,
+            )
+        }
+    }
     val generatedSlotId = selectedPrimaryTrack?.locator?.generatedSlotId
     val generatedPresentationFlow =
         remember(container.syncTextRepository, generatedSlotId) {
@@ -286,8 +306,7 @@ internal fun VortexCueApp(
             loadSelectedTrack(
                 contentId = currentContentId,
                 track = selectedPrimaryTrack,
-                contentResolver = contentResolver,
-                subtitleAssetStore = subtitleAssetStore,
+                timelineRevisionReader = timelineRevisionReader,
                 repository = repository,
             )
     }
@@ -296,8 +315,7 @@ internal fun VortexCueApp(
             loadSelectedTrack(
                 contentId = currentContentId,
                 track = selectedSecondaryTrack,
-                contentResolver = contentResolver,
-                subtitleAssetStore = subtitleAssetStore,
+                timelineRevisionReader = timelineRevisionReader,
                 repository = repository,
             )
     }
@@ -467,17 +485,19 @@ internal fun VortexCueApp(
             subtitlePickTarget = null
             if (uri != null && target != null) {
                 scope.launch {
-                    contentResolver.persistReadPermission(uri)
-                    repository.addManualTextTrack(
-                        contentId = target.contentId,
-                        slot = target.slot,
-                        source =
-                            SubtitleSourceRef(
-                                uri = uri,
-                                displayName = contentResolver.displayName(uri),
-                                mimeType = contentResolver.safeMimeType(uri),
-                            ),
-                    )
+                    runCatchingSuspend {
+                        contentResolver.persistReadPermission(uri)
+                        textImportCoordinator.importManual(
+                            contentId = target.contentId,
+                            slot = target.slot,
+                            source =
+                                SubtitleSourceRef(
+                                    uri = uri,
+                                    displayName = contentResolver.displayName(uri),
+                                    mimeType = contentResolver.safeMimeType(uri),
+                                ),
+                        )
+                    }
                 }
             }
         }
@@ -735,7 +755,20 @@ internal fun VortexCueApp(
                     },
                     onSelectTextTrack = { slot, trackId ->
                         currentContentId?.let { id ->
-                            scope.launch { repository.selectManualTextTrack(id, slot, trackId) }
+                            scope.launch {
+                                val candidate =
+                                    currentDetails?.discoveredTextCandidates
+                                        ?.firstOrNull { it.candidateId == trackId }
+                                if (candidate != null) {
+                                    container.textImportCoordinator.importCandidate(
+                                        candidateId = candidate.candidateId,
+                                        slot = slot,
+                                        selectionMode = TextSelectionMode.Manual,
+                                    )
+                                } else {
+                                    repository.selectManualTextTrack(id, slot, trackId)
+                                }
+                            }
                         }
                     },
                     onRestoreAutomaticTextTrack = { slot ->
@@ -830,30 +863,27 @@ internal fun VortexCueApp(
 private suspend fun loadSelectedTrack(
     contentId: String?,
     track: TimedTextTrack?,
-    contentResolver: ContentResolver,
-    subtitleAssetStore: SubtitleAssetStore,
+    timelineRevisionReader: TimelineRevisionReader,
     repository: io.github.zvensmoluya.vortexcue.data.ContentRepository,
 ): LoadedSubtitle? {
     val id = contentId ?: return null
-    val source = track?.toSubtitleSourceRef() ?: return null
+    val revisionId = track?.locator?.revisionId ?: return null
     return try {
-        val loaded = loadSubtitleSource(contentResolver, subtitleAssetStore, source)
+        val loaded = LoadedSubtitle(SubtitleTimeline(timelineRevisionReader.read(revisionId).toSubtitleCues()))
         repository.updateTextTrackReadiness(
             contentId = id,
             trackId = track.stableId,
-            readiness = loaded.readiness,
-            resolvedSource = loaded.source,
+            readiness = TimedTextReadiness.Ready,
         )
         loaded
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (error: Exception) {
-        val failure = subtitleFailure(error)
         repository.updateTextTrackReadiness(
             contentId = id,
             trackId = track.stableId,
-            readiness = failure.readiness,
-            failureMessage = failure.message,
+            readiness = TimedTextReadiness.MissingArtifact,
+            failureMessage = error.message ?: "内部同步文字资产不可用，请重新导入。",
         )
         null
     }
@@ -877,51 +907,6 @@ private suspend inline fun <T> runCatchingSuspend(
         throw cancelled
     } catch (error: Throwable) {
         Result.failure(error)
-    }
-
-private suspend fun loadSubtitleSource(
-    contentResolver: ContentResolver,
-    subtitleAssetStore: SubtitleAssetStore,
-    source: SubtitleSourceRef,
-): LoadedSubtitle =
-    withContext(Dispatchers.IO) {
-        val providerBytes = runCatching { contentResolver.readSubtitleBytes(source.uri) }
-        val bytes =
-            providerBytes.getOrElse { providerError ->
-                subtitleAssetStore.read(source.cachedFileName) ?: throw providerError
-            }
-        val parseName =
-            if (providerBytes.isSuccess) source.displayName else source.cachedFileName ?: source.displayName
-        val cues = SubtitleParser.parse(parseName, bytes)
-        require(cues.isNotEmpty()) { "字幕中没有可显示的同步文字" }
-        val cachedFileName =
-            if (providerBytes.isSuccess) {
-                runCatching { subtitleAssetStore.store(source.uri, cues) }.getOrNull()
-                    ?: source.cachedFileName
-            } else {
-                source.cachedFileName
-            }
-        LoadedSubtitle(
-            source = source.copy(cachedFileName = cachedFileName),
-            timeline = SubtitleTimeline(cues),
-            usedPrivateCopy = providerBytes.isFailure,
-        )
-    }
-
-private val LoadedSubtitle.readiness: TimedTextReadiness
-    get() = if (usedPrivateCopy) TimedTextReadiness.PrivateCopy else TimedTextReadiness.Ready
-
-private data class SubtitleFailure(
-    val readiness: TimedTextReadiness,
-    val message: String,
-)
-
-private fun subtitleFailure(error: Throwable): SubtitleFailure =
-    when (error) {
-        is SecurityException -> SubtitleFailure(TimedTextReadiness.Unreadable, "字幕授权已失效，请重新选择文件。")
-        is FileNotFoundException -> SubtitleFailure(TimedTextReadiness.Unreadable, "字幕文件已移动、删除或无法访问，请重新选择。")
-        is IOException -> SubtitleFailure(TimedTextReadiness.Unreadable, "无法读取字幕文件，请重新选择后重试。")
-        else -> SubtitleFailure(TimedTextReadiness.ParseFailed, error.message ?: "无法解析字幕，请选择其他文件。")
     }
 
 private suspend fun ensureMediaReadable(

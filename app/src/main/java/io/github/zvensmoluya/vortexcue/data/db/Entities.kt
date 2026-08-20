@@ -193,10 +193,18 @@ data class ActiveMediaLocatorEntity(
             onDelete = ForeignKey.CASCADE,
             onUpdate = ForeignKey.CASCADE,
         ),
+        ForeignKey(
+            entity = TimelineRevisionEntity::class,
+            parentColumns = ["revision_id"],
+            childColumns = ["revision_id"],
+            onDelete = ForeignKey.NO_ACTION,
+            onUpdate = ForeignKey.CASCADE,
+        ),
     ],
     indices = [
         Index("content_id"),
         Index("generated_slot_id"),
+        Index("revision_id"),
         Index(value = ["content_id", "generated_slot_id"]),
         Index(value = ["content_id", "track_id"], unique = true),
         Index(value = ["content_id", "origin", "locator_identity"], unique = true),
@@ -211,16 +219,14 @@ data class TimedTextTrackEntity(
     val origin: String,
     @ColumnInfo(name = "locator_identity")
     val locatorIdentity: String,
-    @ColumnInfo(name = "uri_value")
-    val uriValue: String?,
+    @ColumnInfo(name = "revision_id")
+    val revisionId: String?,
     @ColumnInfo(name = "embedded_track_id")
     val embeddedTrackId: String?,
     @ColumnInfo(name = "display_name")
     val displayName: String,
     @ColumnInfo(name = "mime_type")
     val mimeType: String?,
-    @ColumnInfo(name = "cached_file_name")
-    val cachedFileName: String?,
     val format: String?,
     val language: String?,
     val label: String?,

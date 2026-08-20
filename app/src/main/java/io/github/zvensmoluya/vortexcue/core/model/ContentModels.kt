@@ -39,6 +39,7 @@ enum class TimedTextReadiness {
     PrivateCopy,
     Unreadable,
     ParseFailed,
+    MissingArtifact,
 }
 
 enum class TextSelectionMode {
@@ -52,27 +53,27 @@ enum class TextTrackSlot {
 }
 
 sealed interface TimedTextLocator {
-    val uriValue: String?
+    val revisionId: String?
     val embeddedTrackId: String?
     val generatedSlotId: String?
+    val candidateId: String?
     val displayName: String
     val mimeType: String?
-    val cachedFileName: String?
     val stableIdentity: String
 
-    data class External(
-        override val uriValue: String,
+    data class Revision(
+        override val revisionId: String,
         override val displayName: String,
         override val mimeType: String? = null,
-        override val cachedFileName: String? = null,
     ) : TimedTextLocator {
         init {
-            require(uriValue.isNotBlank())
+            require(revisionId.isNotBlank())
         }
 
         override val embeddedTrackId: String? = null
         override val generatedSlotId: String? = null
-        override val stableIdentity: String = "uri:$uriValue"
+        override val candidateId: String? = null
+        override val stableIdentity: String = "revision:$revisionId"
     }
 
     data class Embedded(
@@ -84,9 +85,9 @@ sealed interface TimedTextLocator {
             require(embeddedTrackId.isNotBlank())
         }
 
-        override val uriValue: String? = null
+        override val revisionId: String? = null
         override val generatedSlotId: String? = null
-        override val cachedFileName: String? = null
+        override val candidateId: String? = null
         override val stableIdentity: String = "embedded:$embeddedTrackId"
     }
 
@@ -99,10 +100,25 @@ sealed interface TimedTextLocator {
             require(generatedSlotId.isNotBlank())
         }
 
-        override val uriValue: String? = null
+        override val revisionId: String? = null
         override val embeddedTrackId: String? = null
-        override val cachedFileName: String? = null
+        override val candidateId: String? = null
         override val stableIdentity: String = "generated:$generatedSlotId"
+    }
+
+    data class DiscoveredCandidate(
+        override val candidateId: String,
+        override val displayName: String,
+        override val mimeType: String? = null,
+    ) : TimedTextLocator {
+        init {
+            require(candidateId.isNotBlank())
+        }
+
+        override val revisionId: String? = null
+        override val embeddedTrackId: String? = null
+        override val generatedSlotId: String? = null
+        override val stableIdentity: String = "candidate:$candidateId"
     }
 }
 

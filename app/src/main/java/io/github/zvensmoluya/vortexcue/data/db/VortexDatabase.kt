@@ -37,10 +37,15 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
         GeneratedTextResultEntity::class,
         SyncTextRunnerLeaseEntity::class,
         SyncTextQueueControlEntity::class,
+        TextArtifactEntity::class,
+        TimelineRevisionEntity::class,
+        TimelineRevisionArtifactEntity::class,
+        DiscoveredTextCandidateEntity::class,
+        TextImportOperationEntity::class,
     ],
     // The new content model intentionally allows a destructive upgrade. Original
     // media remains in user storage; only app-owned indexes are rebuilt.
-    version = 5,
+    version = 6,
     autoMigrations = [AutoMigration(from = 2, to = 3), AutoMigration(from = 4, to = 5)],
     exportSchema = true,
 )
@@ -50,6 +55,8 @@ abstract class VortexDatabase : RoomDatabase() {
     abstract fun playbackDao(): PlaybackDao
 
     abstract fun syncTextDao(): SyncTextDao
+
+    abstract fun textStorageDao(): TextStorageDao
 
     companion object {
         const val DatabaseName = "vortexcue.db"

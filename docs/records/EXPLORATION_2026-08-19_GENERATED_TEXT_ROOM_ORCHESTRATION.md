@@ -1,8 +1,8 @@
 # 生成文字进入 Room 的编排探索（2026-08-19）
 
-> 状态：问题发现记录；目标架构已由 [`DECISION_2026-08-20_GENERATED_TEXT_ARTIFACT_STORAGE.md`](DECISION_2026-08-20_GENERATED_TEXT_ARTIFACT_STORAGE.md) 和 [`DESIGN_2026-08-20_GENERATED_TEXT_STORAGE_DETAILED.md`](DESIGN_2026-08-20_GENERATED_TEXT_STORAGE_DETAILED.md) 收敛，不改变当前实现契约。
+> 状态：历史问题发现记录；目标架构已由 [`DECISION_2026-08-20_GENERATED_TEXT_ARTIFACT_STORAGE.md`](DECISION_2026-08-20_GENERATED_TEXT_ARTIFACT_STORAGE.md) 和 [`DESIGN_2026-08-20_GENERATED_TEXT_STORAGE_DETAILED.md`](DESIGN_2026-08-20_GENERATED_TEXT_STORAGE_DETAILED.md) 收敛并在 Room v6 实施。
 >
-> 本记录保留一次架构复盘的原始方向，不替代 `GUIDE.md` 或现有 ASR / translation 规格。Room cue 子表、Room BLOB 和文件边界等选项已经由后续决策记录取舍；当前代码仍使用规范化 VTT。
+> 本记录保留实施前架构复盘的原始方向，不替代 `GUIDE.md` 或现有 ASR / translation 规格。Room cue 子表、Room BLOB 和文件边界等选项已经由后续决策记录取舍；其中对“当前 VTT 实现”的描述只代表当时状态。
 
 ## 背景
 

@@ -288,11 +288,19 @@ data class GenerationAttemptEntity(
             onDelete = ForeignKey.CASCADE,
             onUpdate = ForeignKey.CASCADE,
         ),
+        ForeignKey(
+            entity = TextArtifactEntity::class,
+            parentColumns = ["artifact_id"],
+            childColumns = ["transcript_artifact_id"],
+            onDelete = ForeignKey.NO_ACTION,
+            onUpdate = ForeignKey.CASCADE,
+        ),
     ],
     indices = [
         Index("attempt_id"),
         Index(value = ["attempt_id", "ordinal"], unique = true),
         Index("parent_window_id"),
+        Index("transcript_artifact_id"),
     ],
 )
 data class AsrWindowEntity(
@@ -323,8 +331,8 @@ data class AsrWindowEntity(
     val state: String,
     @ColumnInfo(name = "encoded_bytes")
     val encodedBytes: Long?,
-    @ColumnInfo(name = "transcript_asset_file_name")
-    val transcriptAssetFileName: String?,
+    @ColumnInfo(name = "transcript_artifact_id")
+    val transcriptArtifactId: String?,
     @ColumnInfo(name = "transcript_sha256")
     val transcriptSha256: String? = null,
     @ColumnInfo(name = "cue_count")
@@ -353,11 +361,19 @@ data class AsrWindowEntity(
             onDelete = ForeignKey.CASCADE,
             onUpdate = ForeignKey.CASCADE,
         ),
+        ForeignKey(
+            entity = TextArtifactEntity::class,
+            parentColumns = ["artifact_id"],
+            childColumns = ["result_artifact_id"],
+            onDelete = ForeignKey.NO_ACTION,
+            onUpdate = ForeignKey.CASCADE,
+        ),
     ],
     indices = [
         Index("attempt_id"),
         Index(value = ["attempt_id", "ordinal"], unique = true),
         Index("parent_batch_id"),
+        Index("result_artifact_id"),
     ],
 )
 data class TranslationBatchEntity(
@@ -378,8 +394,8 @@ data class TranslationBatchEntity(
     val formatRecoveryCount: Int,
     @ColumnInfo(name = "repair_count")
     val repairCount: Int,
-    @ColumnInfo(name = "result_asset_file_name")
-    val resultAssetFileName: String?,
+    @ColumnInfo(name = "result_artifact_id")
+    val resultArtifactId: String?,
     @ColumnInfo(name = "result_sha256")
     val resultSha256: String? = null,
     @ColumnInfo(name = "cue_count")
@@ -501,8 +517,29 @@ data class GeneratedTextSlotEntity(
             onDelete = ForeignKey.CASCADE,
             onUpdate = ForeignKey.CASCADE,
         ),
+        ForeignKey(
+            entity = TimelineRevisionEntity::class,
+            parentColumns = ["revision_id"],
+            childColumns = ["source_revision_id"],
+            onDelete = ForeignKey.NO_ACTION,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = TimelineRevisionEntity::class,
+            parentColumns = ["revision_id"],
+            childColumns = ["target_revision_id"],
+            onDelete = ForeignKey.NO_ACTION,
+            onUpdate = ForeignKey.CASCADE,
+        ),
     ],
-    indices = [Index("slot_id"), Index("content_id"), Index("task_id"), Index("attempt_id")],
+    indices = [
+        Index("slot_id"),
+        Index("content_id"),
+        Index("task_id"),
+        Index("attempt_id"),
+        Index("source_revision_id"),
+        Index("target_revision_id"),
+    ],
 )
 data class GeneratedTextResultEntity(
     @PrimaryKey
@@ -522,10 +559,10 @@ data class GeneratedTextResultEntity(
     val targetLanguage: String?,
     @ColumnInfo(name = "presentation_mode")
     val presentationMode: String,
-    @ColumnInfo(name = "source_asset_file_name")
-    val sourceAssetFileName: String,
-    @ColumnInfo(name = "target_asset_file_name")
-    val targetAssetFileName: String?,
+    @ColumnInfo(name = "source_revision_id")
+    val sourceRevisionId: String,
+    @ColumnInfo(name = "target_revision_id")
+    val targetRevisionId: String?,
     @ColumnInfo(name = "source_sha256")
     val sourceSha256: String,
     @ColumnInfo(name = "target_sha256")

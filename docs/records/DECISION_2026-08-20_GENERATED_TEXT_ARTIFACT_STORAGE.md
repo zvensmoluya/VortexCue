@@ -1,12 +1,12 @@
 # 生成文字的 Artifact / Revision 存储架构决策摘要（2026-08-20）
 
-> 状态：设计已确定，待实施；不改变当前实现契约。
+> 状态：已实施；当前实现契约。
 >
-> 本记录定义应用自生成 ASR / translation 文字的长期存储目标。当前代码仍按 `ASR_TRANSLATION_V1_SPEC.md` 使用应用私有 VTT 工件；在完整迁移实施前，旧实现继续有效。
+> Room v6 已将应用自生成 ASR / translation 文字和已消费的导入字幕统一迁移到 Artifact / Revision 存储。旧内部 VTT result/checkpoint、Ready Track URI fallback 和 `subtitle_assets` 不再是运行时契约。
 >
 > 统一的导入字幕拥有权、规范化规则、Room / Artifact 边界、恢复协议和 GC 细节见 [`DESIGN_2026-08-20_GENERATED_TEXT_STORAGE_DETAILED.md`](DESIGN_2026-08-20_GENERATED_TEXT_STORAGE_DETAILED.md)。本记录保留决策摘要和取舍，不重复详细设计。
 >
-> 本记录不替代 `GUIDE.md` 或当前 M4 / V1 规格。真正实施后，必须把已落地的行为和新的迁移约束同步回当前规格。
+> 本记录的已落地行为已同步到 `GUIDE.md` 与 `ASR_TRANSLATION_V1_SPEC.md`；详细实现状态见详细设计第 12 节。
 
 ## 1. 决策摘要
 
@@ -397,27 +397,27 @@ WorkUnit Artifact 在 Final 发布后不一定立即删除；只要 Partial revi
 - 不为旧开发数据建立长期 Room / VTT 双写；
 - 不因为采用 Artifact Store 就复制、移动或重命名用户原始媒体。
 
-## 13. 对当前实现的目标映射
+## 13. 已实施映射
 
-实施时应将现有字段和组件按以下方向收敛：
+v6 已将字段和组件按以下方向收敛：
 
-| 当前实现 | 目标职责 |
+| 已实施组件 | 当前职责 |
 | --- | --- |
 | `GenerationTaskEntity` / `GenerationAttemptEntity` | 保留为控制面任务与冻结执行上下文 |
 | `AsrWindowEntity` / `TranslationBatchEntity` | 收敛为 WorkUnit 状态与 Artifact 引用 |
-| `transcriptAssetFileName` / `resultAssetFileName` | 替换为 typed Artifact identity |
+| `AsrWindowEntity.transcriptArtifactId` / `TranslationBatchEntity.resultArtifactId` | typed WorkUnit Artifact identity |
 | `GeneratedTextResultEntity` | 引用 source / target TimelineRevision 和 provenance |
-| `GeneratedTextSlotEntity.currentResultId` | 继续作为稳定 publication pointer，必要时指向 revision |
-| `PrivateGeneratedTextAssetStore` | 演化为 content-addressed Artifact Store；VTT 编解码移出内部路径 |
+| `GeneratedTextSlotEntity.currentResultId` | 稳定 publication pointer；当前 result 固定 source / target revision |
+| `PrivateTextArtifactStore` | content-addressed Artifact Store；VTT 编解码移出内部路径 |
 | `AsrTimelineMerger` / `CueIdNormalizer` | 组合为可测试的 TimelineAssembler 领域逻辑 |
 | `SyncTextRepository.publishResult` | 拆分 Artifact 提交、revision 创建和 publication transaction |
 | `SubtitleTimeline` | 保持为播放运行时对象，不接触 Room |
 
-当前仍允许破坏性重建 schema，因此实施时不建立旧 VTT 与新 Artifact 的长期双写。旧生成工件可以按现有开发阶段策略重建或清理；用户原始媒体和外部 SAF 文件不受影响。
+当前采用 Room v6 破坏性重建，不建立旧 VTT 与新 Artifact 的长期双写。旧生成工件和字幕缓存由受控启动清理删除；用户原始媒体、外部 SAF 文件和 Settings 不受影响。
 
-## 14. 文档关系与实施门槛
+## 14. 文档关系与验证边界
 
-本记录是目标架构决策摘要，不是已完成实现的声明。详细设计另见 [`DESIGN_2026-08-20_GENERATED_TEXT_STORAGE_DETAILED.md`](DESIGN_2026-08-20_GENERATED_TEXT_STORAGE_DETAILED.md)。当前行为仍由：
+本记录是已实施架构的决策摘要。详细设计与实现状态另见 [`DESIGN_2026-08-20_GENERATED_TEXT_STORAGE_DETAILED.md`](DESIGN_2026-08-20_GENERATED_TEXT_STORAGE_DETAILED.md)。当前行为由：
 
 - [`GUIDE.md`](../GUIDE.md)；
 - [`ASR_TRANSLATION_V1_SPEC.md`](../ASR_TRANSLATION_V1_SPEC.md)；
@@ -425,6 +425,6 @@ WorkUnit Artifact 在 Final 发布后不一定立即删除；只要 Partial revi
 
 共同决定。
 
-实施前需要把本记录转化为一次完整的存储边界迁移：Artifact Store、WorkUnit 提交、TimelineAssembler、revision publication、reader、GC 和恢复路径应作为同一逻辑变更处理。验证属于该实现的自动化和真机验收组成部分，不把一次性试验或临时双写当作长期架构。
+Artifact Store、WorkUnit 提交、TimelineAssembler、revision publication、reader、GC 和恢复路径已作为同一逻辑变更落地。自动化验证覆盖核心纯逻辑、Room 与恢复不变量；SAF 权限撤销、原文件移动/删除、Folder 候选按需读取和进程强停仍按详细设计的真机矩阵执行。
 
 原 [生成文字进入 Room 的编排探索](EXPLORATION_2026-08-19_GENERATED_TEXT_ROOM_ORCHESTRATION.md) 保留为问题发现记录；其中“逐 CUE Room 表 / Room BLOB / 最小闭环试验”的未决选项由本记录收敛。

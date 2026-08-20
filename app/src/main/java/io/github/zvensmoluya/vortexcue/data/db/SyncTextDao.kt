@@ -176,11 +176,17 @@ interface SyncTextDao {
     @Query("SELECT * FROM generated_text_slot WHERE content_id = :contentId ORDER BY target_key")
     fun observeGeneratedSlots(contentId: String): Flow<List<GeneratedTextSlotEntity>>
 
+    @Query("SELECT * FROM generated_text_slot ORDER BY content_id, target_key")
+    suspend fun generatedSlots(): List<GeneratedTextSlotEntity>
+
     @Upsert
     suspend fun upsertGeneratedSlot(entity: GeneratedTextSlotEntity)
 
     @Query("SELECT * FROM generated_text_result WHERE result_id = :resultId")
     suspend fun generatedResult(resultId: String): GeneratedTextResultEntity?
+
+    @Query("SELECT * FROM generated_text_result ORDER BY created_at_ms, result_id")
+    suspend fun generatedResults(): List<GeneratedTextResultEntity>
 
     @Query("SELECT r.* FROM generated_text_result r INNER JOIN generated_text_slot s ON s.current_result_id = r.result_id WHERE s.slot_id = :slotId")
     suspend fun currentGeneratedResult(slotId: String): GeneratedTextResultEntity?
@@ -197,11 +203,40 @@ interface SyncTextDao {
     @Query("SELECT COUNT(*) FROM generation_task WHERE source_result_id = :resultId AND state NOT IN ('Completed', 'Deleted')")
     suspend fun activeSourceResultReferenceCount(resultId: String): Int
 
-    @Query("SELECT source_asset_file_name FROM generated_text_result UNION SELECT target_asset_file_name FROM generated_text_result WHERE target_asset_file_name IS NOT NULL")
-    suspend fun referencedGeneratedAssetFiles(): List<String>
+    @Query(
+        "SELECT w.transcript_artifact_id FROM asr_window w " +
+            "INNER JOIN generation_attempt a ON a.attempt_id = w.attempt_id " +
+            "INNER JOIN generation_task t ON t.task_id = a.task_id " +
+            "WHERE w.transcript_artifact_id IS NOT NULL AND t.state NOT IN ('Completed', 'Deleted') " +
+            "UNION SELECT b.result_artifact_id FROM translation_batch b " +
+            "INNER JOIN generation_attempt a ON a.attempt_id = b.attempt_id " +
+            "INNER JOIN generation_task t ON t.task_id = a.task_id " +
+            "WHERE b.result_artifact_id IS NOT NULL AND t.state NOT IN ('Completed', 'Deleted')",
+    )
+    suspend fun recoverableWorkArtifactIds(): List<String>
 
-    @Query("SELECT transcript_asset_file_name FROM asr_window WHERE transcript_asset_file_name IS NOT NULL UNION SELECT result_asset_file_name FROM translation_batch WHERE result_asset_file_name IS NOT NULL")
-    suspend fun referencedCheckpointAssetFiles(): List<String>
+    @Query(
+        "UPDATE asr_window SET transcript_artifact_id = NULL " +
+            "WHERE transcript_artifact_id = :artifactId AND attempt_id IN (" +
+            "SELECT a.attempt_id FROM generation_attempt a INNER JOIN generation_task t ON t.task_id = a.task_id " +
+            "WHERE t.state IN ('Completed', 'Deleted'))",
+    )
+    suspend fun clearTerminalAsrArtifactReference(artifactId: String): Int
+
+    @Query(
+        "UPDATE translation_batch SET result_artifact_id = NULL " +
+            "WHERE result_artifact_id = :artifactId AND attempt_id IN (" +
+            "SELECT a.attempt_id FROM generation_attempt a INNER JOIN generation_task t ON t.task_id = a.task_id " +
+            "WHERE t.state IN ('Completed', 'Deleted'))",
+    )
+    suspend fun clearTerminalTranslationArtifactReference(artifactId: String): Int
+
+    @Query(
+        "UPDATE generation_task SET state = 'NeedsAttention', needs_attention = 1, waiting_for_network = 0, " +
+            "error_category = 'Storage', error_message = :message, updated_at_ms = :updatedAtMs " +
+            "WHERE task_id = :taskId AND state != 'Deleted'",
+    )
+    suspend fun markTaskStorageNeedsAttention(taskId: String, message: String, updatedAtMs: Long): Int
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertRunnerLease(entity: SyncTextRunnerLeaseEntity): Long

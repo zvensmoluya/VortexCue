@@ -19,6 +19,18 @@ import io.github.zvensmoluya.vortexcue.data.db.TextSelectionEntity
 import io.github.zvensmoluya.vortexcue.data.db.TimedTextTrackEntity
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleCue
+import io.github.zvensmoluya.vortexcue.text.CanonicalTextCue
+import io.github.zvensmoluya.vortexcue.text.CanonicalTextNormalizer
+import io.github.zvensmoluya.vortexcue.text.RevisionArtifactRole
+import io.github.zvensmoluya.vortexcue.text.TextArtifactKind
+import io.github.zvensmoluya.vortexcue.text.TextStorageRepository
+import io.github.zvensmoluya.vortexcue.text.TimelineAssembler
+import io.github.zvensmoluya.vortexcue.text.TimelineCompleteness
+import io.github.zvensmoluya.vortexcue.text.TimelineRevisionReader
+import io.github.zvensmoluya.vortexcue.text.TimelineRole
+import io.github.zvensmoluya.vortexcue.text.TranslationDelta
+import io.github.zvensmoluya.vortexcue.text.TranslationDeltaEntry
+import io.github.zvensmoluya.vortexcue.text.canonicalContentHash
 import java.net.URI
 import java.security.MessageDigest
 import java.util.UUID
@@ -50,7 +62,8 @@ internal class TaskPublicationDeferredException :
 
 class SyncTextRepository(
     private val database: VortexDatabase,
-    private val assets: GeneratedTextAssetStore,
+    private val textStorage: TextStorageRepository,
+    private val revisionReader: TimelineRevisionReader,
     private val credentials: CredentialStore,
     private val policies: TranslationPolicyRegistry,
     scope: CoroutineScope,
@@ -689,8 +702,8 @@ class SyncTextRepository(
     suspend fun loadPresentation(slotId: String): GeneratedTextPresentation? {
         val slot = dao.generatedSlot(slotId) ?: return null
         val entity = dao.currentGeneratedResult(slotId) ?: return null
-        val source = assets.readTextAsset(entity.sourceAssetFileName)
-        val target = entity.targetAssetFileName?.let { assets.readTextAsset(it) }
+        val source = revisionReader.read(entity.sourceRevisionId).toSubtitleCues()
+        val target = entity.targetRevisionId?.let { revisionReader.read(it).toSubtitleCues() }
         return GeneratedTextPresentation(
             result = entity.toDomain(slot.presentationMode.enumValueOr(TextPresentationMode.TargetOnly)),
             sourceCues = source,
@@ -724,14 +737,75 @@ class SyncTextRepository(
         coveredEndMs: Long? = sourceCues.maxOfOrNull(SubtitleCue::endMs),
         completedWindowCount: Int? = null,
         totalWindowCount: Int? = null,
+        sourceRevisionId: String? = null,
+        partialArtifactIds: List<String> = emptyList(),
     ): GeneratedTextResult {
         val taskBeforeWrite = requireNotNull(dao.task(taskId)) { "Task no longer exists" }
         val attempt = requireNotNull(dao.attempt(taskBeforeWrite.currentAttemptId))
         val normalizedSourceLanguage = LanguageTags.normalizeOrNull(sourceLanguage)
         val normalizedTargetLanguage = LanguageTags.normalizeOrNull(targetLanguage)
         require((normalizedTargetLanguage == null) == (targetCues == null))
+        val sourceTimeline = TimelineAssembler.assembleFinal(sourceCues)
+        val resolvedSourceRevision =
+            sourceRevisionId?.let { revisionId ->
+                requireNotNull(textStorage.revision(revisionId)) { "Source revision is unavailable" }.also {
+                    require(it.contentId == taskBeforeWrite.contentId)
+                    require(it.contentHash == canonicalContentHash(sourceTimeline)) {
+                        "Source revision does not match the published cues"
+                    }
+                }
+            } ?: if (completeness == GeneratedResultCompleteness.Partial) {
+                require(partialArtifactIds.isNotEmpty()) { "Partial publication requires work-unit artifacts" }
+                textStorage.createRevision(
+                    contentId = taskBeforeWrite.contentId,
+                    role = TimelineRole.Source,
+                    completeness = TimelineCompleteness.Partial,
+                    artifacts =
+                        partialArtifactIds.map { artifactId ->
+                            RevisionArtifactRole.AsrWorkUnit to
+                                requireNotNull(textStorage.artifact(artifactId)) {
+                                    "ASR work-unit artifact is unavailable"
+                                }
+                        },
+                    contentHash = canonicalContentHash(sourceTimeline),
+                    cueCount = sourceTimeline.cues.size,
+                    coveredEndMs = coveredEndMs,
+                )
+            } else {
+                val artifact = textStorage.publishTimelineArtifact(TextArtifactKind.FinalTimeline, sourceTimeline)
+                textStorage.createRevision(
+                    contentId = taskBeforeWrite.contentId,
+                    role = TimelineRole.Source,
+                    completeness = TimelineCompleteness.Final,
+                    artifacts = listOf(RevisionArtifactRole.Timeline to artifact),
+                    contentHash = canonicalContentHash(sourceTimeline),
+                    cueCount = sourceTimeline.cues.size,
+                    coveredEndMs = coveredEndMs,
+                )
+            }
+        val targetRevision =
+            targetCues?.let { cues ->
+                val targetTimeline = CanonicalTextNormalizer.alignTranslation(sourceTimeline, cues)
+                val artifact =
+                    textStorage.publishTranslationDelta(
+                        TranslationDelta(
+                            sourceRevisionId = resolvedSourceRevision.revisionId,
+                            sourceRevisionHash = resolvedSourceRevision.contentHash,
+                            entries = targetTimeline.cues.map { TranslationDeltaEntry(it.cueId, it.text) },
+                        ),
+                    )
+                textStorage.createRevision(
+                    contentId = taskBeforeWrite.contentId,
+                    role = TimelineRole.Target,
+                    completeness = TimelineCompleteness.Final,
+                    artifacts = listOf(RevisionArtifactRole.TranslationDelta to artifact),
+                    contentHash = canonicalContentHash(targetTimeline),
+                    cueCount = targetTimeline.cues.size,
+                    coveredEndMs = targetTimeline.cues.maxOf(CanonicalTextCue::endMs),
+                    sourceRevision = resolvedSourceRevision,
+                )
+            }
         val resultId = newId()
-        val stored = assets.writeResult(resultId, sourceCues, targetCues)
         var replaced: GeneratedTextResultEntity? = null
         val published =
             runCatching {
@@ -772,11 +846,11 @@ class SyncTextRepository(
                             sourceLanguage = normalizedSourceLanguage,
                             targetLanguage = normalizedTargetLanguage,
                             presentationMode = presentationMode.name,
-                            sourceAssetFileName = stored.source.fileName,
-                            targetAssetFileName = stored.target?.fileName,
-                            sourceSha256 = stored.source.sha256,
-                            targetSha256 = stored.target?.sha256,
-                            cueCount = stored.cueCount,
+                            sourceRevisionId = resolvedSourceRevision.revisionId,
+                            targetRevisionId = targetRevision?.revisionId,
+                            sourceSha256 = resolvedSourceRevision.contentHash,
+                            targetSha256 = targetRevision?.contentHash,
+                            cueCount = sourceTimeline.cues.size,
                             completeness = completeness.name,
                             coveredEndMs = coveredEndMs,
                             completedWindowCount = completedWindowCount,
@@ -827,15 +901,7 @@ class SyncTextRepository(
                     )
                     entity
                 }
-            }.getOrElse { error ->
-                assets.delete(stored.source.fileName)
-                stored.target?.let { assets.delete(it.fileName) }
-                throw error
-            }
-        replaced?.let { old ->
-            assets.delete(old.sourceAssetFileName)
-            old.targetAssetFileName?.let { assets.delete(it) }
-        }
+            }.getOrThrow()
         scheduler.schedule()
         val slot = requireNotNull(dao.generatedSlot(published.slotId))
         return published.toDomain(slot.presentationMode.enumValueOr(presentationMode))
@@ -944,6 +1010,8 @@ class SyncTextRepository(
                         it.trackId == input.trackId && it.embeddedTrackId == input.embeddedTrackId
                     },
                 ) { "Embedded text track does not exist" }
+            is GenerationInput.DiscoveredCandidate ->
+                error("Discovered text candidate must be materialized before task submission")
             is GenerationInput.AudioTrack -> Unit
         }
     }
@@ -968,11 +1036,10 @@ class SyncTextRepository(
                 contentId = result.contentId,
                 origin = TimedTextOrigin.Generated.name,
                 locatorIdentity = "generated:${slot.slotId}",
-                uriValue = null,
+                revisionId = null,
                 embeddedTrackId = null,
                 displayName = "$displayLanguage.generated.vtt",
                 mimeType = "text/vtt",
-                cachedFileName = null,
                 format = "vtt",
                 language = language,
                 label =
@@ -1229,8 +1296,8 @@ private fun GeneratedTextResultEntity.toDomain(presentationMode: TextPresentatio
         contentId = contentId,
         sourceLanguage = sourceLanguage,
         targetLanguage = targetLanguage,
-        sourceAssetFileName = sourceAssetFileName,
-        targetAssetFileName = targetAssetFileName,
+        sourceRevisionId = sourceRevisionId,
+        targetRevisionId = targetRevisionId,
         sourceSha256 = sourceSha256,
         targetSha256 = targetSha256,
         cueCount = cueCount,

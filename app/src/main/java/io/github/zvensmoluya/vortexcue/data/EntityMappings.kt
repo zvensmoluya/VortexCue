@@ -178,11 +178,10 @@ internal fun TimedTextTrack.toEntity(
         contentId = contentId,
         origin = origin.name,
         locatorIdentity = locator.stableIdentity,
-        uriValue = locator.uriValue,
+        revisionId = locator.revisionId,
         embeddedTrackId = locator.embeddedTrackId,
         displayName = locator.displayName,
         mimeType = locator.mimeType,
-        cachedFileName = locator.cachedFileName,
         format = format,
         language = language,
         label = label,
@@ -214,14 +213,13 @@ private fun TimedTextTrackEntity.toDomainLocator(): TimedTextLocator =
                 displayName = displayName,
                 mimeType = mimeType,
             )
-        uriValue != null ->
-            TimedTextLocator.External(
-                uriValue = uriValue,
+        revisionId != null ->
+            TimedTextLocator.Revision(
+                revisionId = revisionId,
                 displayName = displayName,
                 mimeType = mimeType,
-                cachedFileName = cachedFileName,
             )
-        else -> error("Timed text entity has no locator")
+        else -> error("Timed text entity has no owned locator")
     }
 
 internal fun TimedTextTrack.roleEntities(): List<TimedTextTrackRoleEntity> =

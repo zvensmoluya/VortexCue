@@ -164,6 +164,7 @@ private data class OverlayState(
 class SyncTextUiController(
     private val repository: SyncTextRepository,
     private val audio: AudioWindowExtractor,
+    private val materializeCandidate: suspend (String) -> String,
     private val scope: CoroutineScope,
 ) {
     private val overlay = MutableStateFlow(OverlayState())
@@ -524,10 +525,16 @@ class SyncTextUiController(
         overlay.update { it.copy(busy = true, message = null) }
         scope.launch {
             runCatching {
+                val ownedInput =
+                    when (input) {
+                        is GenerationInput.DiscoveredCandidate ->
+                            GenerationInput.ExistingTrack(materializeCandidate(input.candidateId))
+                        else -> input
+                    }
                 repository.submit(
                     GenerationRequest(
                         contentId = content.contentId,
-                        input = input,
+                        input = ownedInput,
                         output = GenerationOutput.SourceOnly,
                         schemeId = config.configId,
                         allowAsrFallback = allowAsrFallback,

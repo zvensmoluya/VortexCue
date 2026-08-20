@@ -20,6 +20,7 @@ import io.github.zvensmoluya.vortexcue.core.model.stableTimedTextTrackId
 data class TimedTextTrackCandidate(
     val mediaUriValue: String,
     val track: TimedTextTrack,
+    val externalSource: SubtitleSourceRef? = null,
 )
 
 internal data class SidecarTrackMetadata(
@@ -70,10 +71,17 @@ internal fun buildSidecarTextTrackCandidate(
 ): TimedTextTrackCandidate? {
     val metadata = resolveSidecarTrackMetadata(media.displayName, subtitle.displayName) ?: return null
     val contentId = stableContentId(mediaIdentityKey(media.uri.toString()))
-    val locator = subtitle.toTimedTextLocator()
     val origin = if (metadata.format == "lrc") TimedTextOrigin.Lyrics else TimedTextOrigin.Sidecar
+    val candidateId = stableTimedTextTrackId(contentId, origin, "candidate:${subtitle.uri}")
+    val locator =
+        TimedTextLocator.DiscoveredCandidate(
+            candidateId = candidateId,
+            displayName = subtitle.displayName,
+            mimeType = subtitle.mimeType,
+        )
     return TimedTextTrackCandidate(
         mediaUriValue = media.uri.toString(),
+        externalSource = subtitle,
         track =
             TimedTextTrack(
                 stableId = stableTimedTextTrackId(contentId, origin, locator.stableIdentity),
@@ -88,31 +96,18 @@ internal fun buildSidecarTextTrackCandidate(
     )
 }
 
-internal fun manualTimedTextTrack(
-    contentId: String,
-    source: SubtitleSourceRef,
-): TimedTextTrack {
-    val locator = source.toTimedTextLocator()
-    val format = source.displayName.substringAfterLast('.', "").lowercase().takeIf(String::isNotBlank)
-    val origin = if (format == "lrc") TimedTextOrigin.Lyrics else TimedTextOrigin.Sidecar
-    return TimedTextTrack(
-        stableId = stableTimedTextTrackId(contentId, origin, locator.stableIdentity),
-        origin = origin,
-        locator = locator,
-        format = format,
-        roles = inferRolesFromDisplayName(source.displayName),
-        matchBasis = TimedTextMatchBasis.UserSelected,
-        readiness = TimedTextReadiness.Ready,
-    )
-}
-
 internal fun TextTrackCatalogState.mergeTracks(
     incoming: List<TimedTextTrack>,
 ): TextTrackCatalogState {
     val tracksById = LinkedHashMap<String, TimedTextTrack>()
     tracks.forEach { tracksById[it.stableId] = it }
     incoming.forEach { track ->
-        tracksById[track.stableId] = tracksById[track.stableId]?.mergeMetadata(track) ?: track
+        val existingId =
+            tracksById.values.firstOrNull {
+                it.origin == track.origin && it.locator.stableIdentity == track.locator.stableIdentity
+            }?.stableId
+        val retainedId = existingId ?: track.stableId
+        tracksById[retainedId] = tracksById[retainedId]?.mergeMetadata(track) ?: track
     }
     val merged = tracksById.values.toList()
     val validIds = merged.map(TimedTextTrack::stableId).toSet()
@@ -212,26 +207,22 @@ internal fun TextTrackCatalogState.withTrackReadiness(
     trackId: String,
     readiness: TimedTextReadiness,
     failureMessage: String? = null,
-    resolvedSource: SubtitleSourceRef? = null,
 ): TextTrackCatalogState {
     if (tracks.none { it.stableId == trackId }) return this
     val updatedTracks =
         tracks.map { track ->
             if (track.stableId != trackId) return@map track
             track.copy(
-                locator =
-                    resolvedSource?.let { source ->
-                        TimedTextLocator.External(
-                            uriValue = source.uri.toString(),
-                            displayName = source.displayName,
-                            mimeType = source.mimeType,
-                            cachedFileName = source.cachedFileName,
-                        )
-                    } ?: track.locator,
+                locator = track.locator,
                 readiness = readiness,
                 failureMessage =
                     failureMessage?.takeIf {
-                        readiness in setOf(TimedTextReadiness.Unreadable, TimedTextReadiness.ParseFailed)
+                        readiness in
+                            setOf(
+                                TimedTextReadiness.Unreadable,
+                                TimedTextReadiness.ParseFailed,
+                                TimedTextReadiness.MissingArtifact,
+                            )
                     },
             )
         }
@@ -239,7 +230,12 @@ internal fun TextTrackCatalogState.withTrackReadiness(
     if (
         selection.primaryTrackId == trackId &&
             selection.primaryMode == TextSelectionMode.Automatic &&
-            readiness in setOf(TimedTextReadiness.Unreadable, TimedTextReadiness.ParseFailed)
+            readiness in
+                setOf(
+                    TimedTextReadiness.Unreadable,
+                    TimedTextReadiness.ParseFailed,
+                    TimedTextReadiness.MissingArtifact,
+                )
     ) {
         selection = selection.copy(primaryTrackId = null)
         selection = selection.copy(primaryTrackId = chooseAutomaticPrimary(updatedTracks, selection))
@@ -300,34 +296,9 @@ internal fun TextTrackCatalogState.rekeyForContent(contentId: String): TextTrack
 private fun TimedTextTrack.rekeyForContent(contentId: String): TimedTextTrack =
     copy(stableId = stableTimedTextTrackId(contentId, origin, locator.stableIdentity))
 
-private fun SubtitleSourceRef.toTimedTextLocator(): TimedTextLocator =
-    TimedTextLocator.External(
-        uriValue = uri.toString(),
-        displayName = displayName,
-        mimeType = mimeType,
-        cachedFileName = cachedFileName,
-    )
-
-internal fun TimedTextTrack.toSubtitleSourceRef(): SubtitleSourceRef? =
-    locator.uriValue?.let { value ->
-        SubtitleSourceRef(
-            uri = Uri.parse(value),
-            displayName = locator.displayName,
-            mimeType = locator.mimeType,
-            cachedFileName = locator.cachedFileName,
-        )
-    }
-
 private fun TimedTextTrack.mergeMetadata(incoming: TimedTextTrack): TimedTextTrack =
     copy(
-        locator =
-            when (val incomingLocator = incoming.locator) {
-                is TimedTextLocator.External ->
-                    incomingLocator.copy(
-                        cachedFileName = incomingLocator.cachedFileName ?: locator.cachedFileName,
-                    )
-                else -> incomingLocator
-            },
+        locator = incoming.locator,
         format = incoming.format ?: format,
         language = incoming.language ?: language,
         label = incoming.label ?: label,
