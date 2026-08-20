@@ -18,7 +18,9 @@
 
 - [`records/DECISION_2026-08-13_TONIGHT_IS_CURRENT_QUEUE.md`](records/DECISION_2026-08-13_TONIGHT_IS_CURRENT_QUEUE.md)：Tonight 收敛为当前可恢复播放 Session / Queue，不维护平行未来计划。
 - [`records/DECISION_2026-08-14_USE_ROOM_FOR_DURABLE_DOMAIN_DATA.md`](records/DECISION_2026-08-14_USE_ROOM_FOR_DURABLE_DOMAIN_DATA.md)：关系型持久领域数据升级为 Room，DataStore 收缩为轻量设置，Queue 恢复改用稳定内容 ID。
-- [`records/EXPLORATION_2026-08-19_GENERATED_TEXT_ROOM_ORCHESTRATION.md`](records/EXPLORATION_2026-08-19_GENERATED_TEXT_ROOM_ORCHESTRATION.md)：探索将应用自生成的 cue / timeline 从私有 VTT 工件迁移为 Room 编排与持久化事实。
+- [`records/DECISION_2026-08-20_GENERATED_TEXT_ARTIFACT_STORAGE.md`](records/DECISION_2026-08-20_GENERATED_TEXT_ARTIFACT_STORAGE.md)：生成文字 Artifact / Revision 存储的决策摘要；确定 Room 控制面、content-addressed 不可变 Artifact、Timeline Revision 和内存播放，默认不使用逐 CUE Room 表或 Room BLOB chunk。
+- [`records/DESIGN_2026-08-20_GENERATED_TEXT_STORAGE_DETAILED.md`](records/DESIGN_2026-08-20_GENERATED_TEXT_STORAGE_DETAILED.md)：生成文字与用户导入字幕的统一详细设计，规定导入即拥有、格式规范化、任务恢复、发布、播放读取、导出和 Artifact GC。
+- [`records/EXPLORATION_2026-08-19_GENERATED_TEXT_ROOM_ORCHESTRATION.md`](records/EXPLORATION_2026-08-19_GENERATED_TEXT_ROOM_ORCHESTRATION.md)：保留问题发现和早期选项，目标架构已由 2026-08-20 决策记录收敛。
 
 决策记录保留变化原因和取舍，当前实施要求仍须同步进入 `GUIDE.md`；两者冲突时以 `GUIDE.md` 为准。
 

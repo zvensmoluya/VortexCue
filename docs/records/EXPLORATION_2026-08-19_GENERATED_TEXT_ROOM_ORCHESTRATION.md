@@ -1,8 +1,8 @@
 # 生成文字进入 Room 的编排探索（2026-08-19）
 
-> 状态：探索中，不改变当前实现契约。
+> 状态：问题发现记录；目标架构已由 [`DECISION_2026-08-20_GENERATED_TEXT_ARTIFACT_STORAGE.md`](DECISION_2026-08-20_GENERATED_TEXT_ARTIFACT_STORAGE.md) 和 [`DESIGN_2026-08-20_GENERATED_TEXT_STORAGE_DETAILED.md`](DESIGN_2026-08-20_GENERATED_TEXT_STORAGE_DETAILED.md) 收敛，不改变当前实现契约。
 >
-> 本记录只保存一次架构复盘的方向，不替代 `GUIDE.md` 或现有 ASR / translation 规格。真正实施前，需要先验证 schema、恢复和播放性能。
+> 本记录保留一次架构复盘的原始方向，不替代 `GUIDE.md` 或现有 ASR / translation 规格。Room cue 子表、Room BLOB 和文件边界等选项已经由后续决策记录取舍；当前代码仍使用规范化 VTT。
 
 ## 背景
 
@@ -93,4 +93,21 @@ checkpoint 最终采用 cue 子表还是版本化的结构化 payload，暂不�
 4. 再把 ASR window checkpoint 接入，验证 split、重试和进程终止；
 5. 通过后才决定是否移除内部 VTT result / checkpoint。
 
-在方向被验证前，当前规范化 VTT 存放继续有效；本记录不要求立即修改现有代码。
+## 后续收敛
+
+本记录提出的“将生成 cue / timeline 直接迁移为 Room 持久化正文”没有作为最终物理方案采用。后续设计确定：
+
+```text
+Room
+  -> task / attempt / work unit / artifact reference / revision / publication
+
+Private content-addressed Artifact Store
+  -> immutable structured work-unit output and timeline payload
+
+Memory
+  -> published revision -> SubtitleTimeline
+```
+
+最终时间轴默认是一个顺序可读的不可变 Artifact，不预先设计逐 CUE 表或 Room BLOB chunk。Partial result 仍是合法的已发布状态，但未完成 WorkUnit 不直接暴露给播放器。完整边界、提交协议、source revision pinning 和 GC 规则见后续决策记录。
+
+当前规范化 VTT 存放继续有效；本记录不要求立即修改现有代码。
