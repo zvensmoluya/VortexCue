@@ -19,6 +19,11 @@ enum class TimelineRole {
     Target,
 }
 
+class TextStorageIntegrityException(
+    message: String,
+    cause: Throwable? = null,
+) : IOException(message, cause)
+
 enum class TimelineCompleteness {
     Partial,
     Final,
@@ -216,11 +221,29 @@ class TimelineRevisionReader(
 
     suspend fun read(revisionId: String): CanonicalTimeline {
         synchronized(cache) { cache[revisionId] }?.let { return it }
-        val revisionRead = storage.revisionRead(revisionId) ?: throw IOException("Timeline revision is unavailable")
-        val timeline = readUncached(revisionRead)
-        require(timeline.cues.size == revisionRead.revision.cueCount) { "Timeline revision cue count does not match" }
-        require(canonicalContentHash(timeline) == revisionRead.revision.contentHash) {
-            "Timeline revision hash does not match"
+        val revisionRead =
+            try {
+                storage.revisionRead(revisionId)
+            } catch (error: IllegalArgumentException) {
+                throw TextStorageIntegrityException("Timeline revision metadata is invalid", error)
+            } ?: throw IOException("Timeline revision is unavailable")
+        val timeline =
+            try {
+                readUncached(revisionRead)
+            } catch (error: IllegalArgumentException) {
+                throw TextStorageIntegrityException("Timeline revision payload is invalid", error)
+            }
+        if (timeline.cues.size != revisionRead.revision.cueCount) {
+            throw TextStorageIntegrityException("Timeline revision cue count does not match")
+        }
+        val actualHash =
+            try {
+                canonicalContentHash(timeline)
+            } catch (error: IllegalArgumentException) {
+                throw TextStorageIntegrityException("Timeline revision payload is invalid", error)
+            }
+        if (actualHash != revisionRead.revision.contentHash) {
+            throw TextStorageIntegrityException("Timeline revision hash does not match")
         }
         synchronized(cache) { cache[revisionId] = timeline }
         return timeline

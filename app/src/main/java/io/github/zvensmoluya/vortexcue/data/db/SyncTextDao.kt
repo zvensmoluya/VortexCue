@@ -188,6 +188,16 @@ interface SyncTextDao {
     @Query("SELECT * FROM generated_text_result ORDER BY created_at_ms, result_id")
     suspend fun generatedResults(): List<GeneratedTextResultEntity>
 
+    @Query(
+        "DELETE FROM generated_text_result " +
+            "WHERE result_id NOT IN (" +
+            "SELECT current_result_id FROM generated_text_slot WHERE current_result_id IS NOT NULL) " +
+            "AND result_id NOT IN (" +
+            "SELECT source_result_id FROM generation_task " +
+            "WHERE source_result_id IS NOT NULL AND state NOT IN ('Completed', 'Deleted'))",
+    )
+    suspend fun pruneObsoleteGeneratedResults(): Int
+
     @Query("SELECT r.* FROM generated_text_result r INNER JOIN generated_text_slot s ON s.current_result_id = r.result_id WHERE s.slot_id = :slotId")
     suspend fun currentGeneratedResult(slotId: String): GeneratedTextResultEntity?
 

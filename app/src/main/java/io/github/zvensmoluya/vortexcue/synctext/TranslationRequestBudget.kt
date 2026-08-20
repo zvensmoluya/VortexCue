@@ -13,24 +13,28 @@ class TranslationRequestBudget(maxParallelRequests: Int = 4) {
     private var cooldownEpoch = 0L
 
     suspend fun acquire(): Permit {
-        cooldownMutex.withLock { }
-        while (true) {
-            var acquired = false
-            val waiter = CompletableDeferred<Unit>()
-            mutex.withLock {
-                if (inFlight < parallelLimit) {
-                    inFlight += 1
-                    acquired = true
-                } else {
-                    waiters += waiter
+        cooldownMutex.lock()
+        try {
+            while (true) {
+                var acquired = false
+                val waiter = CompletableDeferred<Unit>()
+                mutex.withLock {
+                    if (inFlight < parallelLimit) {
+                        inFlight += 1
+                        acquired = true
+                    } else {
+                        waiters += waiter
+                    }
+                }
+                if (acquired) return Permit(mutex.withLock { cooldownEpoch })
+                try {
+                    waiter.await()
+                } finally {
+                    mutex.withLock { waiters -= waiter }
                 }
             }
-            if (acquired) return Permit(mutex.withLock { cooldownEpoch })
-            try {
-                waiter.await()
-            } finally {
-                mutex.withLock { waiters -= waiter }
-            }
+        } finally {
+            cooldownMutex.unlock()
         }
     }
 

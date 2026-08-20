@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.room3.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import io.github.zvensmoluya.vortexcue.data.db.ContentEntity
+import io.github.zvensmoluya.vortexcue.data.db.GeneratedTextResultEntity
+import io.github.zvensmoluya.vortexcue.data.db.GeneratedTextSlotEntity
 import io.github.zvensmoluya.vortexcue.data.db.TimedTextTrackEntity
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase_Impl
@@ -119,5 +121,95 @@ class TextStorageMaintenanceTest {
         assertEquals("MissingArtifact", track.readiness)
         assertTrue(track.failureMessage?.contains("损坏") == true)
         assertNull(database.textStorageDao().artifact(artifact.artifactId)?.gcCandidateSinceMs)
+    }
+
+    @Test
+    fun `obsolete generated results stop retaining revisions after replacement`() = runBlocking {
+        database.contentDao().upsertContent(ContentEntity("content", 1L))
+        val oldTimeline = CanonicalTextNormalizer.normalizeGenerated(listOf(SubtitleCue(0L, 1_000L, "old")))
+        val oldArtifact = storage.publishTimelineArtifact(TextArtifactKind.FinalTimeline, oldTimeline)
+        val oldRevision =
+            storage.createRevision(
+                contentId = "content",
+                role = TimelineRole.Source,
+                completeness = TimelineCompleteness.Final,
+                artifacts = listOf(RevisionArtifactRole.Timeline to oldArtifact),
+                contentHash = canonicalContentHash(oldTimeline),
+                cueCount = 1,
+                coveredEndMs = 1_000L,
+            )
+        val currentTimeline = CanonicalTextNormalizer.normalizeGenerated(listOf(SubtitleCue(0L, 1_000L, "current")))
+        val currentArtifact = storage.publishTimelineArtifact(TextArtifactKind.FinalTimeline, currentTimeline)
+        val currentRevision =
+            storage.createRevision(
+                contentId = "content",
+                role = TimelineRole.Source,
+                completeness = TimelineCompleteness.Final,
+                artifacts = listOf(RevisionArtifactRole.Timeline to currentArtifact),
+                contentHash = canonicalContentHash(currentTimeline),
+                cueCount = 1,
+                coveredEndMs = 1_000L,
+            )
+        val slotId = "generated-slot"
+        database.syncTextDao().upsertGeneratedSlot(
+            GeneratedTextSlotEntity(
+                slotId = slotId,
+                contentId = "content",
+                targetKey = "source",
+                targetLanguage = null,
+                presentationMode = "SourceOnly",
+                currentResultId = "current-result",
+                createdAtMs = clock,
+                updatedAtMs = clock,
+            ),
+        )
+        fun result(resultId: String, revision: StoredTimelineRevision) =
+            GeneratedTextResultEntity(
+                resultId = resultId,
+                slotId = slotId,
+                contentId = "content",
+                taskId = null,
+                attemptId = null,
+                sourceLanguage = "en",
+                targetLanguage = null,
+                presentationMode = "SourceOnly",
+                sourceRevisionId = revision.revisionId,
+                targetRevisionId = null,
+                sourceSha256 = revision.contentHash,
+                targetSha256 = null,
+                cueCount = revision.cueCount,
+                completeness = "Final",
+                coveredEndMs = revision.coveredEndMs,
+                completedWindowCount = null,
+                totalWindowCount = null,
+                schemeId = "scheme",
+                model = null,
+                policyId = null,
+                policyVersion = null,
+                policyRevision = null,
+                systemPromptSha256 = null,
+                stylePromptSha256 = null,
+                inputTokens = null,
+                outputTokens = null,
+                totalTokens = null,
+                costUsd = null,
+                createdAtMs = clock,
+            )
+
+        database.syncTextDao().insertGeneratedResult(result("old-result", oldRevision))
+        database.syncTextDao().insertGeneratedResult(result("current-result", currentRevision))
+
+        maintenance.recoverAuditAndCollect()
+
+        assertNull(database.syncTextDao().generatedResult("old-result"))
+        assertNotNull(database.syncTextDao().generatedResult("current-result"))
+        assertEquals(clock, database.textStorageDao().artifact(oldArtifact.artifactId)?.gcCandidateSinceMs)
+
+        clock += TextStorageMaintenance.GcGraceMs
+        maintenance.recoverAuditAndCollect()
+
+        assertNull(database.textStorageDao().artifact(oldArtifact.artifactId))
+        assertNull(database.textStorageDao().revision(oldRevision.revisionId))
+        assertNotNull(database.textStorageDao().revision(currentRevision.revisionId))
     }
 }

@@ -88,6 +88,7 @@ class TextStorageMaintenance(
     }
 
     private suspend fun collectUnreachableArtifacts() {
+        syncDao.pruneObsoleteGeneratedResults()
         val graph = loadReachability()
         val timestamp = nowMs()
         graph.artifacts.forEach { entity ->
@@ -142,7 +143,12 @@ class TextStorageMaintenance(
         val relations = textDao.revisionArtifacts()
         val artifacts = textDao.artifacts()
         val tracks = contentDao.allTextTracks()
-        val results = syncDao.generatedResults()
+        val currentResultIds = syncDao.generatedSlots().mapNotNullTo(mutableSetOf()) { it.currentResultId }
+        val pinnedResultIds = syncDao.activeTasks().mapNotNullTo(mutableSetOf()) { it.sourceResultId }
+        val results =
+            syncDao.generatedResults().filter { result ->
+                result.resultId in currentResultIds || result.resultId in pinnedResultIds
+            }
         val reachableRevisionIds =
             buildSet {
                 tracks.mapNotNullTo(this) { it.revisionId }

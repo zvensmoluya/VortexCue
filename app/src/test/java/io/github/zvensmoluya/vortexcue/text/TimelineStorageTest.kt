@@ -147,6 +147,27 @@ class TimelineStorageTest {
         Unit
     }
 
+    @Test
+    fun `revision integrity mismatches are reported as storage errors`() = runBlocking {
+        val timeline = CanonicalTextNormalizer.normalizeGenerated(listOf(SubtitleCue(0L, 1_000L, "source")))
+        val artifact = storage.publishTimelineArtifact(TextArtifactKind.FinalTimeline, timeline)
+        val revision =
+            storage.createRevision(
+                contentId = ContentId,
+                role = TimelineRole.Source,
+                completeness = TimelineCompleteness.Final,
+                artifacts = listOf(RevisionArtifactRole.Timeline to artifact),
+                contentHash = canonicalContentHash(timeline),
+                cueCount = 2,
+                coveredEndMs = 1_000L,
+            )
+
+        assertThrows(TextStorageIntegrityException::class.java) {
+            runBlocking { reader.read(revision.revisionId) }
+        }
+        Unit
+    }
+
     private companion object {
         const val ContentId = "content"
     }

@@ -61,6 +61,40 @@ class AsrPlanningTest {
     }
 
     @Test
+    fun `owned segments are clipped to the checkpoint ownership range`() {
+        val windows = FixedAsrWindowPlanner().plan(597_000L)
+        val firstBoundary = windows[0].ownedEndMs
+        val firstCrossing =
+            AsrTimelineMerger.ownedSegments(
+                windows[0],
+                listOf(
+                    AsrTimestampedToken(
+                        startMs = firstBoundary - windows[0].uploadStartMs - 1_000L,
+                        endMs = firstBoundary - windows[0].uploadStartMs + 500L,
+                        text = "first",
+                    ),
+                ),
+            ).single()
+        val secondBoundary = windows[1].ownedStartMs
+        val secondCrossing =
+            AsrTimelineMerger.ownedSegments(
+                windows[1],
+                listOf(
+                    AsrTimestampedToken(
+                        startMs = secondBoundary - windows[1].uploadStartMs - 500L,
+                        endMs = secondBoundary - windows[1].uploadStartMs + 1_000L,
+                        text = "second",
+                    ),
+                ),
+            ).single()
+
+        assertEquals(firstBoundary - 1_000L, firstCrossing.startMs)
+        assertEquals(firstBoundary, firstCrossing.endMs)
+        assertEquals(secondBoundary, secondCrossing.startMs)
+        assertEquals(secondBoundary + 1_000L, secondCrossing.endMs)
+    }
+
+    @Test
     fun `encoded budget enforces byte and request concurrency then degrades to serial`() = runBlocking {
         val budget = EncodedAudioBudget(maxBytes = 32L, maxParallelRequests = 2)
         val first = budget.acquire(20L)

@@ -1,6 +1,9 @@
 package io.github.zvensmoluya.vortexcue.synctext
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import mockwebserver3.MockResponse
@@ -369,6 +372,29 @@ class TranslationProtocolAdaptersTest {
 
         assertEquals(listOf(12_000L), waits)
         assertEquals(1, budget.parallelLimit())
+    }
+
+    @Test
+    fun `new requests wait while shared backoff is active`() = runBlocking {
+        val budget = TranslationRequestBudget(maxParallelRequests = 4)
+        val backoffEntered = CompletableDeferred<Unit>()
+        val releaseBackoff = CompletableDeferred<Unit>()
+        val backoff =
+            async {
+                budget.awaitSharedBackoff(0L, 1L) {
+                    backoffEntered.complete(Unit)
+                    releaseBackoff.await()
+                }
+            }
+
+        backoffEntered.await()
+        val blocked = async { budget.acquire() }
+        yield()
+        assertFalse(blocked.isCompleted)
+
+        releaseBackoff.complete(Unit)
+        backoff.await()
+        blocked.await().release()
     }
 
     @Test

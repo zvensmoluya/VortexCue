@@ -144,7 +144,10 @@ object AsrTimelineMerger {
             val end = (window.uploadStartMs + segment.endMs).coerceAtMost(window.uploadEndMs)
             if (end <= start || segment.text.isBlank()) return@mapNotNull null
             val midpoint = start + (end - start) / 2L
-            AsrTimestampedToken(start, end, segment.text.trim()).takeIf { window.owns(midpoint) }
+            if (!window.owns(midpoint)) return@mapNotNull null
+            val ownedStart = maxOf(start, window.ownedStartMs)
+            val ownedEnd = minOf(end, window.ownedEndMs)
+            AsrTimestampedToken(ownedStart, ownedEnd, segment.text.trim())
         }
 
     fun mergeSegments(segments: List<AsrTimestampedToken>): List<SubtitleCue> {
