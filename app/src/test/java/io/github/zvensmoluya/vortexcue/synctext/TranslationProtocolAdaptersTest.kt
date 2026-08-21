@@ -311,13 +311,18 @@ class TranslationProtocolAdaptersTest {
     @Test
     fun `gateway retries temporary failures at most three times`() = runBlocking {
         var calls = 0
+        var wallClockMs = 1_000L
+        var elapsedClockMs = 500L
         val waits = mutableListOf<Long>()
+        val attempts = mutableListOf<TranslationNetworkAttempt>()
         val adapter =
             object : TranslationProtocolAdapter {
                 override val protocol = TranslationProtocol.Responses
 
                 override suspend fun translate(request: TranslationProviderRequest): TranslationProviderResponse {
                     calls += 1
+                    wallClockMs += 20L
+                    elapsedClockMs += 15L
                     if (calls < 3) {
                         throw TranslationProtocolException(
                             category = GenerationErrorCategory.TemporaryNetwork,
@@ -329,13 +334,31 @@ class TranslationProtocolAdaptersTest {
                     return TranslationProviderResponse("ok", UsageRecord(), byteArrayOf(), 200, 1L, 1L, null, request.endpoint)
                 }
             }
-        val gateway = TranslationNetworkGateway(TranslationAdapterRegistry(listOf(adapter))) { waits += it }
+        val gateway =
+            TranslationNetworkGateway(
+                registry = TranslationAdapterRegistry(listOf(adapter)),
+                nowMs = { wallClockMs },
+                elapsedRealtimeMs = { elapsedClockMs },
+                waitBeforeRetry = {
+                    waits += it
+                    wallClockMs += it
+                    elapsedClockMs += it
+                },
+            )
 
-        val response = gateway.translate(TranslationProtocol.Responses, request("https://example.test/v1/responses"))
+        val response =
+            gateway.translate(
+                TranslationProtocol.Responses,
+                request("https://example.test/v1/responses"),
+                onAttempt = attempts::add,
+            )
 
         assertEquals("ok", response.text)
         assertEquals(3, calls)
         assertEquals(listOf(500L, 1_500L), waits)
+        assertEquals(listOf(1, 2, 3), attempts.map(TranslationNetworkAttempt::attemptNumber))
+        assertEquals(listOf(15L, 15L, 15L), attempts.map(TranslationNetworkAttempt::durationMs))
+        assertTrue(attempts.all { requireNotNull(it.finishedAtMs) > requireNotNull(it.startedAtMs) })
     }
 
     @Test

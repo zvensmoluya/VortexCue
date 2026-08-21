@@ -245,6 +245,18 @@ interface SyncTextDao {
     @Upsert
     suspend fun upsertRequestAttempt(entity: RequestAttemptEntity)
 
+    @Query("SELECT * FROM sync_text_request_attempt WHERE attempt_id = :attemptId ORDER BY sequence")
+    suspend fun requestAttempts(attemptId: String): List<RequestAttemptEntity>
+
+    @Insert
+    suspend fun insertDiagnosticEvent(entity: SyncTextDiagnosticEventEntity)
+
+    @Query("SELECT * FROM sync_text_diagnostic_event WHERE task_id = :taskId ORDER BY created_at_ms, event_id")
+    suspend fun diagnosticEventsForTask(taskId: String): List<SyncTextDiagnosticEventEntity>
+
+    @Query("DELETE FROM sync_text_diagnostic_event WHERE created_at_ms < :beforeMs")
+    suspend fun pruneDiagnosticEvents(beforeMs: Long): Int
+
     @Query("DELETE FROM sync_text_request_attempt WHERE retain_until_ms IS NOT NULL AND retain_until_ms < :nowMs")
     suspend fun pruneExpiredRequestAttempts(nowMs: Long): Int
 

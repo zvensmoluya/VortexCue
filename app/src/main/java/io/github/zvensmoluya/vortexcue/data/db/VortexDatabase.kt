@@ -33,6 +33,7 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
         AsrWindowEntity::class,
         TranslationBatchEntity::class,
         RequestAttemptEntity::class,
+        SyncTextDiagnosticEventEntity::class,
         GeneratedTextSlotEntity::class,
         GeneratedTextResultEntity::class,
         SyncTextRunnerLeaseEntity::class,
@@ -45,8 +46,12 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
     ],
     // The new content model intentionally allows a destructive upgrade. Original
     // media remains in user storage; only app-owned indexes are rebuilt.
-    version = 7,
-    autoMigrations = [AutoMigration(from = 2, to = 3), AutoMigration(from = 4, to = 5)],
+    version = 8,
+    autoMigrations = [
+        AutoMigration(from = 2, to = 3),
+        AutoMigration(from = 4, to = 5),
+        AutoMigration(from = 7, to = 8),
+    ],
     exportSchema = true,
 )
 abstract class VortexDatabase : RoomDatabase() {

@@ -35,7 +35,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
-class AndroidSyncTextScheduler(context: Context) : SyncTextScheduler {
+class AndroidSyncTextScheduler(
+    context: Context,
+    private val diagnostics: SyncTextDiagnosticRecorder = NoOpSyncTextDiagnosticRecorder,
+) : SyncTextScheduler {
     private val appContext = context.applicationContext
     private val uidtScheduleGate by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -52,7 +55,13 @@ class AndroidSyncTextScheduler(context: Context) : SyncTextScheduler {
 
     override fun schedule() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            uidtScheduleGate?.schedule()
+            val outcome = uidtScheduleGate?.schedule() ?: UidtScheduleOutcome.DeferredUntilForeground
+            diagnostics.recordAsync(
+                SyncTextDiagnosticEventType.ScheduleOutcome,
+                stage = "UIDT",
+                outcome = outcome.name,
+                reason = "ScheduleRequested",
+            )
         } else {
             val request =
                 OneTimeWorkRequestBuilder<SyncTextQueueWorker>()
@@ -60,12 +69,25 @@ class AndroidSyncTextScheduler(context: Context) : SyncTextScheduler {
                     .build()
             WorkManager.getInstance(appContext)
                 .enqueueUniqueWork(WorkName, ExistingWorkPolicy.KEEP, request)
+            diagnostics.recordAsync(
+                SyncTextDiagnosticEventType.ScheduleOutcome,
+                stage = "WorkManager",
+                outcome = "Enqueued",
+                reason = "ScheduleRequested",
+            )
         }
     }
 
     fun onAppForeground() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            uidtScheduleGate?.retryDeferred()
+            uidtScheduleGate?.retryDeferred()?.let { outcome ->
+                diagnostics.recordAsync(
+                    SyncTextDiagnosticEventType.ScheduleOutcome,
+                    stage = "UIDT",
+                    outcome = outcome.name,
+                    reason = "ForegroundRetry",
+                )
+            }
         }
     }
 
@@ -127,8 +149,19 @@ class SyncTextQueueWorker(
     override suspend fun doWork(): Result {
         setForeground(notificationInfo())
         val container = applicationContext.appContainer
+        container.syncTextDiagnostics.record(
+            SyncTextDiagnosticEventType.RunnerLifecycle,
+            stage = "WorkManager",
+            outcome = "Started",
+        )
         container.syncTextTaskRunner.runUntilIdle()
-        return if (container.syncTextRepository.hasRetryableNetworkWaitingTasks()) Result.retry() else Result.success()
+        val retry = container.syncTextRepository.hasRetryableNetworkWaitingTasks()
+        container.syncTextDiagnostics.record(
+            SyncTextDiagnosticEventType.RunnerLifecycle,
+            stage = "WorkManager",
+            outcome = if (retry) "Retry" else "Completed",
+        )
+        return if (retry) Result.retry() else Result.success()
     }
 
     override suspend fun getForegroundInfo(): ForegroundInfo = notificationInfo()
@@ -153,6 +186,11 @@ class SyncTextUidtJobService : JobService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onStartJob(params: JobParameters): Boolean {
+        applicationContext.appContainer.syncTextDiagnostics.recordAsync(
+            SyncTextDiagnosticEventType.RunnerLifecycle,
+            stage = "UIDT",
+            outcome = "Started",
+        )
         setNotification(
             params,
             SyncTextNotification.NotificationId,
@@ -164,7 +202,13 @@ class SyncTextUidtJobService : JobService() {
             scope.launch {
                 val container = applicationContext.appContainer
                 container.syncTextTaskRunner.runUntilIdle()
-                jobFinished(params, container.syncTextRepository.hasRetryableNetworkWaitingTasks())
+                val retry = container.syncTextRepository.hasRetryableNetworkWaitingTasks()
+                container.syncTextDiagnostics.record(
+                    SyncTextDiagnosticEventType.RunnerLifecycle,
+                    stage = "UIDT",
+                    outcome = if (retry) "Retry" else "Completed",
+                )
+                jobFinished(params, retry)
             }
         return true
     }
@@ -172,6 +216,11 @@ class SyncTextUidtJobService : JobService() {
     override fun onStopJob(params: JobParameters): Boolean {
         running?.cancel()
         running = null
+        applicationContext.appContainer.syncTextDiagnostics.recordAsync(
+            SyncTextDiagnosticEventType.RunnerLifecycle,
+            stage = "UIDT",
+            outcome = "StoppedBySystem",
+        )
         return true
     }
 

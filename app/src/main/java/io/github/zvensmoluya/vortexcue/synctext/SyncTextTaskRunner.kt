@@ -78,7 +78,9 @@ class SyncTextTaskRunner(
     private val asr: AsrEngine,
     private val translation: TranslationNetworkGateway,
     private val networkState: SyncTextNetworkState,
+    private val diagnostics: SyncTextDiagnosticRecorder = NoOpSyncTextDiagnosticRecorder,
     private val nowMs: () -> Long = System::currentTimeMillis,
+    private val elapsedRealtimeMs: () -> Long = { System.nanoTime() / 1_000_000L },
     private val newId: () -> String = { UUID.randomUUID().toString() },
 ) {
     private val dao = database.syncTextDao()
@@ -87,7 +89,17 @@ class SyncTextTaskRunner(
     suspend fun runUntilIdle(): Boolean {
         val ownerId = newId()
         val lease = RoomRunnerLease(dao, ownerId, nowMs)
-        if (!lease.acquire()) return false
+        if (!lease.acquire()) {
+            diagnostics.record(SyncTextDiagnosticEventType.RunnerLease, outcome = "Rejected")
+            return false
+        }
+        val startedElapsedMs = elapsedRealtimeMs()
+        diagnostics.record(SyncTextDiagnosticEventType.RunnerLease, outcome = "Acquired")
+        diagnostics.record(
+            SyncTextDiagnosticEventType.RunnerLifecycle,
+            outcome = "Started",
+            valueBytes = usedHeapBytes(),
+        )
         return try {
             dao.recoverInterruptedTasks()
             coroutineScope {
@@ -100,6 +112,11 @@ class SyncTextTaskRunner(
                                 parent.cancel(LeaseLostException())
                                 return@launch
                             }
+                            diagnostics.record(
+                                SyncTextDiagnosticEventType.RunnerLifecycle,
+                                outcome = "Heartbeat",
+                                valueBytes = usedHeapBytes(),
+                            )
                         }
                     }
                 try {
@@ -113,7 +130,16 @@ class SyncTextTaskRunner(
             }
             true
         } finally {
-            withContext(NonCancellable) { lease.release() }
+            withContext(NonCancellable) {
+                diagnostics.record(
+                    SyncTextDiagnosticEventType.RunnerLifecycle,
+                    outcome = "Finished",
+                    valueMs = (elapsedRealtimeMs() - startedElapsedMs).coerceAtLeast(0L),
+                    valueBytes = usedHeapBytes(),
+                )
+                lease.release()
+                diagnostics.record(SyncTextDiagnosticEventType.RunnerLease, outcome = "Released")
+            }
         }
     }
 
@@ -391,6 +417,15 @@ class SyncTextTaskRunner(
     ): List<WindowTranscript> {
         ensureRunnable(task.taskId)
         if (entity.state == CompletedState && entity.transcriptArtifactId != null) {
+            diagnostics.record(
+                SyncTextDiagnosticEventType.WorkUnitLifecycle,
+                taskId = task.taskId,
+                attemptId = attempt.attemptId,
+                workUnitKind = AsrWorkUnitKind,
+                workUnitId = entity.windowId,
+                stage = GenerationStage.RecognizingSpeech.name,
+                outcome = "Reused",
+            )
             return listOf(
                 WindowTranscript(
                     cues = readAsrCheckpoint(entity),
@@ -408,6 +443,17 @@ class SyncTextTaskRunner(
         }
 
         val plan = entity.toPlan(mediaDurationMs)
+        val workUnitStartedElapsedMs = elapsedRealtimeMs()
+        diagnostics.record(
+            SyncTextDiagnosticEventType.WorkUnitLifecycle,
+            taskId = task.taskId,
+            attemptId = attempt.attemptId,
+            workUnitKind = AsrWorkUnitKind,
+            workUnitId = entity.windowId,
+            stage = GenerationStage.RecognizingSpeech.name,
+            outcome = "Started",
+            valueMs = plan.uploadEndMs - plan.uploadStartMs,
+        )
         val wav = spool.reserve(task.taskId, plan.windowId)
         var finalFailure: AsrException? = null
         try {
@@ -416,6 +462,8 @@ class SyncTextTaskRunner(
             for (index in 0 until MaxAsrAttempts) {
                 ensureRunnable(task.taskId)
                 repository.markRunning(task.taskId, GenerationStage.RecognizingSpeech, 0.10f)
+                val startedAtMs = nowMs()
+                val startedElapsedMs = elapsedRealtimeMs()
                 try {
                     val result =
                         asr.transcribe(
@@ -428,7 +476,16 @@ class SyncTextTaskRunner(
                                 sourceLanguage = snapshot.sourceLanguage,
                             ),
                         )
-                    recordAsrAttempt(attempt, result, null)
+                    recordAsrAttempt(
+                        attempt = attempt,
+                        windowId = entity.windowId,
+                        retryOrdinal = index + 1,
+                        result = result,
+                        error = null,
+                        startedAtMs = startedAtMs,
+                        finishedAtMs = nowMs(),
+                        durationMs = (elapsedRealtimeMs() - startedElapsedMs).coerceAtLeast(0L),
+                    )
                     val cues =
                         when (AsrProfile.fromStoredValue(attempt.asrProfile).timelineStrategy) {
                             AsrTimelineStrategy.Segment -> AsrTimelineMerger.mergeSegments(result.segments)
@@ -454,6 +511,17 @@ class SyncTextTaskRunner(
                             ),
                         )
                     }
+                    diagnostics.record(
+                        SyncTextDiagnosticEventType.WorkUnitLifecycle,
+                        taskId = task.taskId,
+                        attemptId = attempt.attemptId,
+                        workUnitKind = AsrWorkUnitKind,
+                        workUnitId = entity.windowId,
+                        stage = GenerationStage.RecognizingSpeech.name,
+                        outcome = "Completed",
+                        valueMs = (elapsedRealtimeMs() - workUnitStartedElapsedMs).coerceAtLeast(0L),
+                        valueBytes = wav.length(),
+                    )
                     return listOf(
                         WindowTranscript(
                             timeline.toSubtitleCues(),
@@ -464,7 +532,16 @@ class SyncTextTaskRunner(
                     )
                 } catch (error: AsrException) {
                     finalFailure = error
-                    recordAsrAttempt(attempt, null, error)
+                    recordAsrAttempt(
+                        attempt = attempt,
+                        windowId = entity.windowId,
+                        retryOrdinal = index + 1,
+                        result = null,
+                        error = error,
+                        startedAtMs = startedAtMs,
+                        finishedAtMs = nowMs(),
+                        durationMs = (elapsedRealtimeMs() - startedElapsedMs).coerceAtLeast(0L),
+                    )
                     if (!error.retryable || index == MaxAsrAttempts - 1) break
                     val waitReason = networkState.waitReason(repository.meteredNetworkAllowed(task.taskId))
                     if (waitReason != null) {
@@ -488,12 +565,34 @@ class SyncTextTaskRunner(
                     dao.upsertAsrWindow(entity.copy(state = SplitState, errorMessage = failure.message?.take(600)))
                     dao.upsertAsrWindows(children)
                 }
+                diagnostics.record(
+                    SyncTextDiagnosticEventType.WorkUnitLifecycle,
+                    taskId = task.taskId,
+                    attemptId = attempt.attemptId,
+                    workUnitKind = AsrWorkUnitKind,
+                    workUnitId = entity.windowId,
+                    stage = GenerationStage.RecognizingSpeech.name,
+                    outcome = "Split",
+                    reason = failure.category.name,
+                    valueMs = (elapsedRealtimeMs() - workUnitStartedElapsedMs).coerceAtLeast(0L),
+                )
                 return children.flatMap { child ->
                     processAsrWindowTree(task, snapshot, attempt, mediaUri, mediaDurationMs, planner, child)
                 }
             }
         }
         dao.upsertAsrWindow(entity.copy(state = FailedState, errorMessage = failure.message?.take(600)))
+        diagnostics.record(
+            SyncTextDiagnosticEventType.WorkUnitLifecycle,
+            taskId = task.taskId,
+            attemptId = attempt.attemptId,
+            workUnitKind = AsrWorkUnitKind,
+            workUnitId = entity.windowId,
+            stage = GenerationStage.RecognizingSpeech.name,
+            outcome = "Failed",
+            reason = failure.category.name,
+            valueMs = (elapsedRealtimeMs() - workUnitStartedElapsedMs).coerceAtLeast(0L),
+        )
         throw failure
     }
 
@@ -602,6 +701,15 @@ class SyncTextTaskRunner(
     ): List<BatchWork> {
         ensureRunnable(task.taskId)
         if (entity.state == CompletedState && entity.resultArtifactId != null) {
+            diagnostics.record(
+                SyncTextDiagnosticEventType.WorkUnitLifecycle,
+                taskId = task.taskId,
+                attemptId = attempt.attemptId,
+                workUnitKind = TranslationWorkUnitKind,
+                workUnitId = entity.batchId,
+                stage = GenerationStage.Translating.name,
+                outcome = "Reused",
+            )
             return listOf(
                 BatchWork(
                     cues = readTranslationCheckpoint(entity, plan),
@@ -617,12 +725,24 @@ class SyncTextTaskRunner(
             }
         }
 
+        val workUnitStartedElapsedMs = elapsedRealtimeMs()
+        diagnostics.record(
+            SyncTextDiagnosticEventType.WorkUnitLifecycle,
+            taskId = task.taskId,
+            attemptId = attempt.attemptId,
+            workUnitKind = TranslationWorkUnitKind,
+            workUnitId = entity.batchId,
+            stage = GenerationStage.Translating.name,
+            outcome = "Started",
+        )
         val key = repository.credentialSecret(requireNotNull(attempt.translationCredentialId))
         val endpoint = requireNotNull(attempt.translationEndpoint) { "Translation endpoint is missing from the attempt" }
         val model = requireNotNull(attempt.translationModel) { "Translation model is missing from the attempt" }
         val protocol = attempt.translationProtocol.enumValueOr(TranslationProtocol.Responses)
+        val operationOrdinal = AtomicInteger(0)
         val batchExecutor =
             TranslationBatchExecutor { systemPrompt, userPrompt ->
+                val operation = operationOrdinal.incrementAndGet()
                 translation.translate(
                     protocol = protocol,
                     request =
@@ -634,7 +754,15 @@ class SyncTextTaskRunner(
                             userPrompt = userPrompt,
                             userAgent = attempt.translationUserAgent,
                         ),
-                    onAttempt = { networkAttempt -> recordTranslationAttempt(attempt, protocol, networkAttempt) },
+                    onAttempt = { networkAttempt ->
+                        recordTranslationAttempt(
+                            attempt = attempt,
+                            protocol = protocol,
+                            batchId = entity.batchId,
+                            operationOrdinal = operation,
+                            networkAttempt = networkAttempt,
+                        )
+                    },
                 )
             }
         try {
@@ -666,10 +794,31 @@ class SyncTextTaskRunner(
                     ),
                 )
             }
+            diagnostics.record(
+                SyncTextDiagnosticEventType.WorkUnitLifecycle,
+                taskId = task.taskId,
+                attemptId = attempt.attemptId,
+                workUnitKind = TranslationWorkUnitKind,
+                workUnitId = entity.batchId,
+                stage = GenerationStage.Translating.name,
+                outcome = "Completed",
+                valueMs = (elapsedRealtimeMs() - workUnitStartedElapsedMs).coerceAtLeast(0L),
+            )
             return listOf(BatchWork(output.targetCues, output.usage))
         } catch (error: TranslationProtocolException) {
             if (!error.capacityExceeded || plan.translateOnly.size <= 1) {
                 dao.upsertTranslationBatch(entity.copy(state = FailedState, errorMessage = error.message?.take(600)))
+                diagnostics.record(
+                    SyncTextDiagnosticEventType.WorkUnitLifecycle,
+                    taskId = task.taskId,
+                    attemptId = attempt.attemptId,
+                    workUnitKind = TranslationWorkUnitKind,
+                    workUnitId = entity.batchId,
+                    stage = GenerationStage.Translating.name,
+                    outcome = "Failed",
+                    reason = error.category.name,
+                    valueMs = (elapsedRealtimeMs() - workUnitStartedElapsedMs).coerceAtLeast(0L),
+                )
                 throw error
             }
             val (leftPlan, rightPlan) = TranslationBatchPlanner().split(plan)
@@ -682,6 +831,17 @@ class SyncTextTaskRunner(
                     dao.upsertTranslationBatches(listOf(left, right))
                     listOf(leftPlan to left, rightPlan to right)
                 }
+            diagnostics.record(
+                SyncTextDiagnosticEventType.WorkUnitLifecycle,
+                taskId = task.taskId,
+                attemptId = attempt.attemptId,
+                workUnitKind = TranslationWorkUnitKind,
+                workUnitId = entity.batchId,
+                stage = GenerationStage.Translating.name,
+                outcome = "Split",
+                reason = error.category.name,
+                valueMs = (elapsedRealtimeMs() - workUnitStartedElapsedMs).coerceAtLeast(0L),
+            )
             return children.flatMap { (childPlan, childEntity) ->
                 processTranslationBatch(task, snapshot, attempt, policy, sourceLanguage, allSource, childPlan, childEntity)
             }
@@ -718,6 +878,8 @@ class SyncTextTaskRunner(
     private suspend fun recordTranslationAttempt(
         attempt: GenerationAttemptEntity,
         protocol: TranslationProtocol,
+        batchId: String,
+        operationOrdinal: Int,
         networkAttempt: TranslationNetworkAttempt,
     ) {
         val response = networkAttempt.response
@@ -735,6 +897,11 @@ class SyncTextTaskRunner(
                     sequence = sequence,
                     stage = GenerationStage.Translating.name,
                     provider = protocol.name,
+                    providerRequestId = response?.requestId ?: error?.requestId,
+                    workUnitKind = TranslationWorkUnitKind,
+                    workUnitId = batchId,
+                    operationOrdinal = operationOrdinal,
+                    retryOrdinal = networkAttempt.attemptNumber,
                     requestBytes = response?.requestBytes,
                     responseBytes = response?.responseBytes ?: raw?.size?.toLong(),
                     httpStatus = response?.httpStatus ?: error?.httpStatus,
@@ -745,8 +912,9 @@ class SyncTextTaskRunner(
                     rawResponseFileName = rawFile,
                     errorCategory = error?.category?.name,
                     errorMessage = error?.message?.take(600),
-                    startedAtMs = timestamp,
-                    finishedAtMs = timestamp,
+                    startedAtMs = networkAttempt.startedAtMs ?: timestamp,
+                    finishedAtMs = networkAttempt.finishedAtMs ?: timestamp,
+                    durationMs = networkAttempt.durationMs,
                     retainUntilMs = timestamp + RawRetentionMs,
                 ),
             )
@@ -755,8 +923,13 @@ class SyncTextTaskRunner(
 
     private suspend fun recordAsrAttempt(
         attempt: GenerationAttemptEntity,
+        windowId: String,
+        retryOrdinal: Int,
         result: AsrWindowResult?,
         error: AsrException?,
+        startedAtMs: Long,
+        finishedAtMs: Long,
+        durationMs: Long,
     ) {
         val raw = result?.rawResponse ?: error?.rawResponse
         val requestAttemptId = newId()
@@ -771,6 +944,11 @@ class SyncTextTaskRunner(
                     sequence = sequence,
                     stage = GenerationStage.RecognizingSpeech.name,
                     provider = attempt.asrProfile,
+                    providerRequestId = result?.requestId ?: error?.requestId,
+                    workUnitKind = AsrWorkUnitKind,
+                    workUnitId = windowId,
+                    operationOrdinal = 1,
+                    retryOrdinal = retryOrdinal,
                     requestBytes = result?.requestBytes,
                     responseBytes = result?.responseBytes ?: raw?.size?.toLong(),
                     httpStatus = result?.httpStatus ?: error?.httpStatus,
@@ -781,8 +959,9 @@ class SyncTextTaskRunner(
                     rawResponseFileName = rawFile,
                     errorCategory = error?.category?.name,
                     errorMessage = error?.message?.take(600),
-                    startedAtMs = timestamp,
-                    finishedAtMs = timestamp,
+                    startedAtMs = startedAtMs,
+                    finishedAtMs = finishedAtMs,
+                    durationMs = durationMs,
                     retainUntilMs = timestamp + RawRetentionMs,
                 ),
             )
@@ -821,6 +1000,8 @@ class SyncTextTaskRunner(
             estimatedInputTokens = 0,
         )
 
+    private fun usedHeapBytes(): Long = Runtime.getRuntime().let { it.totalMemory() - it.freeMemory() }
+
     companion object {
         private const val AsrParallelism = 2
         private const val TranslationParallelism = 4
@@ -832,6 +1013,8 @@ class SyncTextTaskRunner(
         private const val CompletedState = "Completed"
         private const val FailedState = "Failed"
         private const val SplitState = "Split"
+        private const val AsrWorkUnitKind = "AsrWindow"
+        private const val TranslationWorkUnitKind = "TranslationBatch"
     }
 }
 

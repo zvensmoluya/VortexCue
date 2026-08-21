@@ -68,6 +68,7 @@ class SyncTextRepository(
     private val policies: TranslationPolicyRegistry,
     scope: CoroutineScope,
     private val scheduler: SyncTextScheduler = NoOpSyncTextScheduler,
+    private val diagnostics: SyncTextDiagnosticRecorder = NoOpSyncTextDiagnosticRecorder,
     private val modelCatalog: TranslationModelCatalog? = null,
     private val connectionTester: SyncTextConnectionTester? = null,
     private val nowMs: () -> Long = System::currentTimeMillis,
@@ -486,6 +487,13 @@ class SyncTextRepository(
             )
         }
         val submitted = requireNotNull(dao.activeTaskByDedupeKey(dedupeKey))
+        diagnostics.record(
+            SyncTextDiagnosticEventType.TaskSubmitted,
+            taskId = submitted.taskId,
+            attemptId = submitted.currentAttemptId,
+            stage = submitted.stage,
+            outcome = submitted.kind,
+        )
         scheduler.schedule()
         return submitted.toSummary(submitted.queuePosition, false)
     }
@@ -567,6 +575,13 @@ class SyncTextRepository(
                 scheme.toAttempt(taskId, attemptId, 0, policy, sourceResultId, timestamp),
             )
         }
+        diagnostics.record(
+            SyncTextDiagnosticEventType.TaskSubmitted,
+            taskId = taskId,
+            attemptId = attemptId,
+            stage = GenerationStage.SourcePublished.name,
+            outcome = GenerationTaskKind.TranslationDerivation.name,
+        )
         scheduler.schedule()
         return requireNotNull(dao.activeTaskByDedupeKey(dedupeKey)).toSummary(dao.task(taskId)?.queuePosition ?: 0, false)
     }
@@ -589,14 +604,24 @@ class SyncTextRepository(
     }
 
     suspend fun pauseTask(taskId: String) {
+        val attemptId = dao.task(taskId)?.currentAttemptId
         if (dao.pauseTask(taskId, nowMs()) > 0) {
+            diagnostics.record(
+                SyncTextDiagnosticEventType.TaskStateChanged,
+                taskId = taskId,
+                attemptId = attemptId,
+                outcome = GenerationTaskState.Paused.name,
+                reason = "User",
+            )
             scheduler.schedule()
         }
     }
 
     suspend fun resumeTask(taskId: String) {
+        var attemptId: String? = null
         database.withWriteTransaction {
             val task = dao.task(taskId)?.takeUnless(GenerationTaskEntity::isTerminal) ?: return@withWriteTransaction
+            attemptId = task.currentAttemptId
             val timestamp = nowMs()
             if (task.schemeBlocked) {
                 dao.resumeBlockedSchemeTasks(task.schemeId, timestamp)
@@ -604,6 +629,15 @@ class SyncTextRepository(
                 dao.resumeTask(taskId, timestamp)
             }
             Unit
+        }
+        if (attemptId != null) {
+            diagnostics.record(
+                SyncTextDiagnosticEventType.TaskStateChanged,
+                taskId = taskId,
+                attemptId = attemptId,
+                outcome = GenerationTaskState.Waiting.name,
+                reason = "UserResume",
+            )
         }
         scheduler.schedule()
     }
@@ -614,7 +648,16 @@ class SyncTextRepository(
     }
 
     suspend fun deleteTask(taskId: String) {
-        dao.markTaskDeleted(taskId, nowMs())
+        val attemptId = dao.task(taskId)?.currentAttemptId
+        if (dao.markTaskDeleted(taskId, nowMs()) > 0) {
+            diagnostics.record(
+                SyncTextDiagnosticEventType.TaskStateChanged,
+                taskId = taskId,
+                attemptId = attemptId,
+                outcome = GenerationTaskState.Deleted.name,
+                reason = "User",
+            )
+        }
         scheduler.schedule()
     }
 
@@ -627,11 +670,23 @@ class SyncTextRepository(
     }
 
     suspend fun allowMeteredNetworkForContent(contentId: String) {
-        if (dao.allowMeteredNetworkForContent(contentId, nowMs()) > 0) scheduler.schedule()
+        val waiting = dao.networkWaitingTasks().filter { it.contentId == contentId }
+        if (dao.allowMeteredNetworkForContent(contentId, nowMs()) > 0) {
+            waiting.forEach { task ->
+                diagnostics.record(
+                    SyncTextDiagnosticEventType.MeteredNetworkAllowed,
+                    taskId = task.taskId,
+                    attemptId = task.currentAttemptId,
+                    outcome = "AllowedForTask",
+                )
+            }
+            scheduler.schedule()
+        }
     }
 
     suspend fun changeScheme(taskId: String, schemeId: String) {
         val scheme = requireNotNull(dao.scheme(schemeId)) { "Sync text scheme does not exist" }
+        var changedAttemptId: String? = null
         database.withWriteTransaction {
             val task = dao.task(taskId)?.takeUnless(GenerationTaskEntity::isTerminal) ?: return@withWriteTransaction
             val snapshot = requireNotNull(dao.taskSnapshot(taskId))
@@ -640,6 +695,7 @@ class SyncTextRepository(
             val target = snapshot.targetLanguage
             val policy = target?.let(policies::resolve)
             val attemptId = newId()
+            changedAttemptId = attemptId
             val timestamp = nowMs()
             dao.insertAttempt(
                 scheme.toAttempt(
@@ -668,6 +724,15 @@ class SyncTextRepository(
                     errorMessage = null,
                     updatedAtMs = timestamp,
                 ),
+            )
+        }
+        changedAttemptId?.let { attemptId ->
+            diagnostics.record(
+                SyncTextDiagnosticEventType.TaskStateChanged,
+                taskId = taskId,
+                attemptId = attemptId,
+                outcome = GenerationTaskState.Waiting.name,
+                reason = "SchemeChanged",
             )
         }
         scheduler.schedule()
@@ -884,6 +949,16 @@ class SyncTextRepository(
             }.getOrThrow()
         scheduler.schedule()
         val slot = requireNotNull(dao.generatedSlot(published.slotId))
+        diagnostics.record(
+            SyncTextDiagnosticEventType.ResultPublished,
+            taskId = taskId,
+            attemptId = attempt.attemptId,
+            workUnitKind = "GeneratedResult",
+            workUnitId = published.resultId,
+            stage = if (completeTask) GenerationStage.Completed.name else GenerationStage.SourcePublished.name,
+            outcome = completeness.name,
+            reason = "cueCount=${published.cueCount}",
+        )
         return published.toDomain(slot.presentationMode.enumValueOr(presentationMode))
     }
 
@@ -893,14 +968,39 @@ class SyncTextRepository(
     }
 
     internal suspend fun markRunning(taskId: String, stage: GenerationStage, progress: Float) {
-        dao.markTaskRunning(taskId, stage.name, progress.coerceIn(0f, 1f), nowMs())
+        val task = dao.task(taskId)
+        val normalizedProgress = progress.coerceIn(0f, 1f)
+        if (dao.markTaskRunning(taskId, stage.name, normalizedProgress, nowMs()) > 0) {
+            diagnostics.record(
+                SyncTextDiagnosticEventType.TaskStateChanged,
+                taskId = taskId,
+                attemptId = task?.currentAttemptId,
+                stage = stage.name,
+                outcome = GenerationTaskState.Running.name,
+                reason = "progress=${(normalizedProgress * 1_000).toInt()}",
+            )
+        }
     }
 
     internal suspend fun markWaitingForNetwork(taskId: String, reason: GenerationNetworkWaitReason?) {
-        if (reason == null) {
-            dao.clearTaskNetworkWait(taskId, nowMs())
+        val task = dao.task(taskId)
+        val changed = if (reason == null) {
+            if (task?.waitingForNetwork == true) dao.clearTaskNetworkWait(taskId, nowMs()) else 0
         } else {
-            dao.markTaskWaitingForNetwork(taskId, reason.name, nowMs())
+            if (task?.networkWaitReason != reason.name) {
+                dao.markTaskWaitingForNetwork(taskId, reason.name, nowMs())
+            } else {
+                0
+            }
+        }
+        if (changed > 0) {
+            diagnostics.record(
+                SyncTextDiagnosticEventType.NetworkWaitChanged,
+                taskId = taskId,
+                attemptId = task?.currentAttemptId,
+                outcome = if (reason == null) "Cleared" else "Waiting",
+                reason = reason?.name,
+            )
         }
     }
 
@@ -910,10 +1010,11 @@ class SyncTextRepository(
         message: String,
         blockScheme: Boolean,
     ) {
+        var changedAttemptId: String? = null
         database.withWriteTransaction {
-            val task = dao.task(taskId) ?: return@withWriteTransaction
+            val task = dao.task(taskId)?.takeUnless(GenerationTaskEntity::isTerminal) ?: return@withWriteTransaction
             val timestamp = nowMs()
-            if (blockScheme) {
+            val changed = if (blockScheme) {
                 dao.markSchemeTasksNeedsAttention(
                     schemeId = task.schemeId,
                     category = category.name,
@@ -929,7 +1030,17 @@ class SyncTextRepository(
                     updatedAtMs = timestamp,
                 )
             }
+            if (changed > 0) changedAttemptId = task.currentAttemptId
             Unit
+        }
+        changedAttemptId?.let { attemptId ->
+            diagnostics.record(
+                SyncTextDiagnosticEventType.TaskStateChanged,
+                taskId = taskId,
+                attemptId = attemptId,
+                outcome = GenerationTaskState.NeedsAttention.name,
+                reason = category.name,
+            )
         }
         scheduler.schedule()
     }
@@ -957,9 +1068,24 @@ class SyncTextRepository(
             dao.networkWaitingTasks().forEach { task ->
                 val reason = networkState.waitReason(task.meteredNetworkAllowed)
                 if (reason == null) {
-                    dao.clearTaskNetworkWait(task.taskId, nowMs())
+                    if (dao.clearTaskNetworkWait(task.taskId, nowMs()) > 0) {
+                        diagnostics.record(
+                            SyncTextDiagnosticEventType.NetworkWaitChanged,
+                            taskId = task.taskId,
+                            attemptId = task.currentAttemptId,
+                            outcome = "Cleared",
+                        )
+                    }
                 } else if (task.networkWaitReason != reason.name) {
-                    dao.markTaskWaitingForNetwork(task.taskId, reason.name, nowMs())
+                    if (dao.markTaskWaitingForNetwork(task.taskId, reason.name, nowMs()) > 0) {
+                        diagnostics.record(
+                            SyncTextDiagnosticEventType.NetworkWaitChanged,
+                            taskId = task.taskId,
+                            attemptId = task.currentAttemptId,
+                            outcome = "Waiting",
+                            reason = reason.name,
+                        )
+                    }
                 }
             }
         }

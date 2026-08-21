@@ -55,6 +55,7 @@ class OpenAiAsrEngine(
                     retryable = error.retryable,
                     shouldSplit = false,
                     httpStatus = error.httpStatus,
+                    requestId = error.requestId,
                     rawResponse = error.rawResponse,
                     message = error.message ?: "OpenAI ASR protocol failed",
                     cause = error,
@@ -97,6 +98,7 @@ class OpenAiAsrEngine(
             shouldSplit = exchange.status == 413,
             retryAfterMs = if (temporary) parseRetryAfterMs(exchange.headers["Retry-After"]) else null,
             httpStatus = exchange.status,
+            requestId = exchange.requestId,
             rawResponse = exchange.body,
             message = message,
         )
@@ -133,6 +135,7 @@ class OpenAiAsrEngine(
                 retryable = false,
                 shouldSplit = false,
                 httpStatus = exchange.status,
+                requestId = exchange.requestId,
                 rawResponse = exchange.body,
                 message = "OpenAI ASR response was not a JSON object",
                 cause = error,

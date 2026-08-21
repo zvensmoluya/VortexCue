@@ -677,8 +677,16 @@ class SyncTextTaskRunnerRecoveryTest {
 
         repository.allowMeteredNetworkForContent(RunnerContentId)
         assertTrue(runner.runUntilIdle())
-        assertEquals(GenerationTaskState.Completed.name, database.syncTextDao().task(task.taskId)?.state)
+        val completedTask = requireNotNull(database.syncTextDao().task(task.taskId))
+        assertEquals(GenerationTaskState.Completed.name, completedTask.state)
         assertEquals(1, engine.calls(0))
+        val request = database.syncTextDao().requestAttempts(completedTask.currentAttemptId).single()
+        assertEquals("AsrWindow", request.workUnitKind)
+        assertTrue(request.workUnitId?.isNotBlank() == true)
+        assertEquals(1, request.operationOrdinal)
+        assertEquals(1, request.retryOrdinal)
+        assertTrue(requireNotNull(request.finishedAtMs) > request.startedAtMs)
+        assertTrue(requireNotNull(request.durationMs) >= 0L)
     }
 
     private fun runner(

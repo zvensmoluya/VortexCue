@@ -18,6 +18,9 @@ import io.github.zvensmoluya.vortexcue.synctext.AsrException
 import io.github.zvensmoluya.vortexcue.synctext.CredentialUnavailableException
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocolException
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextConfig
+import io.github.zvensmoluya.vortexcue.synctext.NoOpSyncTextDiagnosticRecorder
+import io.github.zvensmoluya.vortexcue.synctext.SyncTextDiagnosticEventType
+import io.github.zvensmoluya.vortexcue.synctext.SyncTextDiagnosticRecorder
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextRepository
 import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocol
@@ -168,6 +171,7 @@ class SyncTextUiController(
     private val audio: AudioWindowExtractor,
     private val materializeCandidate: suspend (String) -> String,
     private val scope: CoroutineScope,
+    private val diagnostics: SyncTextDiagnosticRecorder = NoOpSyncTextDiagnosticRecorder,
 ) {
     private val overlay = MutableStateFlow(OverlayState())
     private val configSaveMutex = Mutex()
@@ -274,6 +278,12 @@ class SyncTextUiController(
     }
 
     private fun saveCredential(action: SyncTextAction.SaveCredential) {
+        diagnostics.recordAsync(
+            SyncTextDiagnosticEventType.UiAction,
+            stage = "Credential",
+            outcome = "SaveStarted",
+            reason = action.purpose.name,
+        )
         val requestId = ++credentialSaveRequestId
         overlay.update {
             it.copy(
@@ -304,8 +314,20 @@ class SyncTextUiController(
                             ),
                     )
                 }
+                diagnostics.record(
+                    SyncTextDiagnosticEventType.UiAction,
+                    stage = "Credential",
+                    outcome = "SaveCompleted",
+                    reason = action.purpose.name,
+                )
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
+                diagnostics.record(
+                    SyncTextDiagnosticEventType.UiAction,
+                    stage = "Credential",
+                    outcome = "SaveFailed",
+                    reason = error::class.simpleName,
+                )
                 overlay.update {
                     it.copy(
                         busy = false,
@@ -451,6 +473,13 @@ class SyncTextUiController(
     }
 
     private fun openGeneration(content: ContentDetails) {
+        diagnostics.recordAsync(
+            SyncTextDiagnosticEventType.UiAction,
+            workUnitKind = "Content",
+            workUnitId = content.contentId,
+            stage = "Generation",
+            outcome = "Opened",
+        )
         val config = repository.config.value ?: return showConfigurationRequired()
         when (val plan = planAutomaticGeneration(content)) {
             is GenerationLaunchPlan.Submit ->
@@ -472,6 +501,13 @@ class SyncTextUiController(
     }
 
     private fun inspectAudio(content: ContentDetails, config: SyncTextConfig) {
+        diagnostics.recordAsync(
+            SyncTextDiagnosticEventType.UiAction,
+            workUnitKind = "Content",
+            workUnitId = content.contentId,
+            stage = "AudioInspection",
+            outcome = "Started",
+        )
         overlay.update {
             it.copy(
                 generationContent = content,
@@ -484,6 +520,14 @@ class SyncTextUiController(
         scope.launch {
             runCatching { audio.inspect(content.activeMedia.uri) }
                 .onSuccess { tracks ->
+                    diagnostics.recordAsync(
+                        SyncTextDiagnosticEventType.UiAction,
+                        workUnitKind = "Content",
+                        workUnitId = content.contentId,
+                        stage = "AudioInspection",
+                        outcome = "Completed",
+                        reason = "trackCount=${tracks.size}",
+                    )
                     if (overlay.value.generationContent?.contentId != content.contentId) return@onSuccess
                     when (tracks.size) {
                         0 ->
@@ -507,6 +551,14 @@ class SyncTextUiController(
                     }
                 }.onFailure { error ->
                     if (error is CancellationException) throw error
+                    diagnostics.recordAsync(
+                        SyncTextDiagnosticEventType.UiAction,
+                        workUnitKind = "Content",
+                        workUnitId = content.contentId,
+                        stage = "AudioInspection",
+                        outcome = "Failed",
+                        reason = error::class.simpleName,
+                    )
                     overlay.update { current ->
                         if (current.generationContent?.contentId != content.contentId) {
                             current
@@ -528,6 +580,13 @@ class SyncTextUiController(
         config: SyncTextConfig,
         allowAsrFallback: Boolean,
     ) {
+        diagnostics.recordAsync(
+            SyncTextDiagnosticEventType.UiAction,
+            workUnitKind = "Content",
+            workUnitId = content.contentId,
+            stage = "Generation",
+            outcome = "SubmitStarted",
+        )
         overlay.update { it.copy(busy = true, message = null) }
         scope.launch {
             runCatching {
@@ -546,7 +605,13 @@ class SyncTextUiController(
                         allowAsrFallback = allowAsrFallback,
                     ),
                 )
-            }.onSuccess {
+            }.onSuccess { task ->
+                diagnostics.recordAsync(
+                    SyncTextDiagnosticEventType.UiAction,
+                    taskId = task.taskId,
+                    stage = "Generation",
+                    outcome = "SubmitCompleted",
+                )
                 overlay.update {
                     it.copy(
                         generationContent = null,
@@ -557,7 +622,17 @@ class SyncTextUiController(
                         message = "同步文字已开始",
                     )
                 }
-            }.onFailure(::handleFailure)
+            }.onFailure { error ->
+                diagnostics.recordAsync(
+                    SyncTextDiagnosticEventType.UiAction,
+                    workUnitKind = "Content",
+                    workUnitId = content.contentId,
+                    stage = "Generation",
+                    outcome = "SubmitFailed",
+                    reason = error::class.simpleName,
+                )
+                handleFailure(error)
+            }
         }
     }
 
@@ -594,6 +669,11 @@ class SyncTextUiController(
     }
 
     private fun saveConfig(action: SyncTextAction.SaveConfig) {
+        diagnostics.recordAsync(
+            SyncTextDiagnosticEventType.UiAction,
+            stage = "Configuration",
+            outcome = "SaveStarted",
+        )
         synchronized(configSaveCounterLock) { configSaveCounter++ }
         overlay.update { it.copy(configSaving = true, configError = null, message = null) }
         scope.launch {
@@ -605,9 +685,20 @@ class SyncTextUiController(
                         translationSecret = action.draft.translationSecret,
                     )
                 }
+                diagnostics.record(
+                    SyncTextDiagnosticEventType.UiAction,
+                    stage = "Configuration",
+                    outcome = "SaveCompleted",
+                )
                 overlay.update { it.copy(configError = null) }
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
+                diagnostics.record(
+                    SyncTextDiagnosticEventType.UiAction,
+                    stage = "Configuration",
+                    outcome = "SaveFailed",
+                    reason = error::class.simpleName,
+                )
                 overlay.update {
                     it.copy(configError = "配置未保存，请检查必填项")
                 }

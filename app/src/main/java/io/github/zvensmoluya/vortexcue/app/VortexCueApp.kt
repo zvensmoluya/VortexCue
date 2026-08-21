@@ -72,6 +72,7 @@ import io.github.zvensmoluya.vortexcue.subtitle.SubtitleTimeline
 import io.github.zvensmoluya.vortexcue.text.TextImportCoordinator
 import io.github.zvensmoluya.vortexcue.text.TimelineRevisionReader
 import io.github.zvensmoluya.vortexcue.synctext.GeneratedTextPresentation
+import io.github.zvensmoluya.vortexcue.synctext.SyncTextDiagnosticEventType
 import io.github.zvensmoluya.vortexcue.ui.player.PlayerScreen
 import io.github.zvensmoluya.vortexcue.ui.player.GlowCalibrationScreen
 import io.github.zvensmoluya.vortexcue.ui.player.rememberPlaybackSnapshot
@@ -151,6 +152,7 @@ internal fun VortexCueApp(
     val settingsStore = container.settingsStore
     val timelineRevisionReader = container.timelineRevisionReader
     val textImportCoordinator = container.textImportCoordinator
+    val diagnostics = container.syncTextDiagnostics
     val contentResolver = context.contentResolver
     val gateway = remember(player) { PlaybackGateway(player) }
     val coordinator =
@@ -443,6 +445,13 @@ internal fun VortexCueApp(
     }
 
     suspend fun handleMediaUri(uri: Uri, target: MediaPickTarget, playImmediately: Boolean) {
+        diagnostics.record(
+            SyncTextDiagnosticEventType.UiAction,
+            workUnitKind = "ContentImport",
+            stage = "Import",
+            outcome = "Started",
+            reason = target.name,
+        )
         runCatchingSuspend { inspectOpenedMedia(uri) }
             .onSuccess { replacement ->
                 when (target) {
@@ -452,16 +461,38 @@ internal fun VortexCueApp(
                         val contentId = repository.resolveOrCreate(replacement)
                         if (target.collectsIntoContent) repository.collect(contentId)
                         if (playImmediately) openContentNow(listOf(contentId), 0)
+                        diagnostics.record(
+                            SyncTextDiagnosticEventType.UiAction,
+                            workUnitKind = "ContentImport",
+                            workUnitId = contentId,
+                            stage = "Import",
+                            outcome = "Completed",
+                            reason = target.name,
+                        )
                     }
                     MediaPickTarget.Relink -> {
                         val targetId = relinkContentId ?: return@onSuccess
                         gateway.relink(targetId, replacement)
                         relinkContentId = null
+                        diagnostics.record(
+                            SyncTextDiagnosticEventType.UiAction,
+                            workUnitKind = "ContentImport",
+                            workUnitId = targetId,
+                            stage = "Relink",
+                            outcome = "Completed",
+                        )
                     }
                 }
             }.onFailure { error ->
                 if (target == MediaPickTarget.Relink) relinkContentId = null
                 if (error is CancellationException) throw error
+                diagnostics.record(
+                    SyncTextDiagnosticEventType.UiAction,
+                    workUnitKind = "ContentImport",
+                    stage = "Import",
+                    outcome = "Failed",
+                    reason = error::class.simpleName,
+                )
             }
     }
 

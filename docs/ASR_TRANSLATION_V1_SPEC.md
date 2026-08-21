@@ -65,7 +65,7 @@ V1 不包含：
 
 ## 3. 持久化、Revision 与私有资产
 
-Room v7 使用关系表表达 credential metadata、scheme、task、不可变 task snapshot、attempt、ASR window、translation batch、request attempt、generated slot / result、runner lease、queue control、Artifact metadata、Timeline revision 和 revision-artifact manifest。任务表额外保存可变的计费网络许可和当前网络等待原因，不通过改写 immutable snapshot 表达运行期授权。不得重新引入聚合 JSON 快照或把完整 cue 正文存入 Room。
+Room v8 使用关系表表达 credential metadata、scheme、task、不可变 task snapshot、attempt、ASR window、translation batch、request attempt、generated slot / result、runner lease、queue control、diagnostic event、Artifact metadata、Timeline revision 和 revision-artifact manifest。任务表额外保存可变的计费网络许可和当前网络等待原因，不通过改写 immutable snapshot 表达运行期授权。不得重新引入聚合 JSON 快照或把完整 cue 正文存入 Room。
 
 正文统一保存到 `noBackupFilesDir/text_artifacts/<kind>/<prefix>/<artifactId>.bin`。Artifact ID 是完整确定性 envelope 的 SHA-256；envelope 包含 magic、schema / codec / canonicalizer version、kind 和长度前缀 payload。decoder 必须拒绝未知版本、损坏、截断和 metadata/hash 不一致。SRT / VTT / ASS / LRC 仅是导入边界格式，不再作为内部 checkpoint 或 result 协议。
 
@@ -151,6 +151,8 @@ Whisper 是主线 profile，Grok 使用相同窗口策略并明确标记实验�
 ## 7. 后台执行与阻塞
 
 API 34+ 使用一个覆盖整条队列的 UIDT Job；API 26-33 使用唯一前台 `CoroutineWorker`。两条路径通过 Room lease 保证全进程只有一个 runner，不复用 `PlaybackService`。UIDT 提交必须检查 `JobScheduler` 返回值；后台条件不允许提交时保留进程内 deferred 状态，并在 Activity 真正进入前台后重试。
+
+Debug 诊断以本地结构化事件记录调度、runner、任务、work-unit 和发布边界。Request attempt 必须关联具体 window / batch，分别保存操作序号、网络重试序号、真实起止时间和 monotonic duration。诊断默认不得写入 Key、认证头、请求 prompt、媒体路径或 cue 正文；原始响应仍按 7 天 TTL 独立保存，只有显式采集时才进入诊断包。
 
 队列规则：
 

@@ -58,6 +58,9 @@ data class TranslationNetworkAttempt(
     val attemptNumber: Int,
     val response: TranslationProviderResponse? = null,
     val error: TranslationProtocolException? = null,
+    val startedAtMs: Long? = null,
+    val finishedAtMs: Long? = null,
+    val durationMs: Long? = null,
 )
 
 class TranslationProtocolException(
@@ -96,6 +99,8 @@ class TranslationNetworkGateway(
     private val registry: TranslationAdapterRegistry,
     private val streamResponses: Boolean = true,
     private val requestBudget: TranslationRequestBudget = TranslationRequestBudget(),
+    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val elapsedRealtimeMs: () -> Long = { System.nanoTime() / 1_000_000L },
     private val waitBeforeRetry: suspend (Long) -> Unit = { delay(it) },
 ) {
     suspend fun translate(
@@ -106,6 +111,8 @@ class TranslationNetworkGateway(
         var lastFailure: TranslationProtocolException? = null
         var attemptEpoch = 0L
         repeat(MaxNetworkAttempts) { index ->
+            val startedAtMs = nowMs()
+            val startedElapsedMs = elapsedRealtimeMs()
             try {
                 val adapter = registry.adapter(protocol)
                 val permit = requestBudget.acquire()
@@ -115,14 +122,30 @@ class TranslationNetworkGateway(
                 } finally {
                     permit.release()
                 }
-                onAttempt(TranslationNetworkAttempt(index + 1, response = response))
+                onAttempt(
+                    TranslationNetworkAttempt(
+                        attemptNumber = index + 1,
+                        response = response,
+                        startedAtMs = startedAtMs,
+                        finishedAtMs = nowMs(),
+                        durationMs = (elapsedRealtimeMs() - startedElapsedMs).coerceAtLeast(0L),
+                    ),
+                )
                 return response
             } catch (error: CancellationException) {
                 throw error
             } catch (error: TranslationProtocolException) {
                 lastFailure = error
                 if (error.category == GenerationErrorCategory.RateLimited) requestBudget.degradeToSerial()
-                onAttempt(TranslationNetworkAttempt(index + 1, error = error))
+                onAttempt(
+                    TranslationNetworkAttempt(
+                        attemptNumber = index + 1,
+                        error = error,
+                        startedAtMs = startedAtMs,
+                        finishedAtMs = nowMs(),
+                        durationMs = (elapsedRealtimeMs() - startedElapsedMs).coerceAtLeast(0L),
+                    ),
+                )
                 if (!error.retryable || index == MaxNetworkAttempts - 1) throw error
                 val retryDelay = error.retryAfterMs ?: RetryDelaysMs[index]
                 if (error.category == GenerationErrorCategory.RateLimited) {

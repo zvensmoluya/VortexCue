@@ -94,7 +94,7 @@ Normal Player 的主体固定为“上一句弱化 / 当前句主视觉 / 下一
 
 ## 8. 数据与迁移
 
-Room 当前 schema 为 v7，并允许从 v6 及其他不兼容版本破坏性重建。重建清理应用私有旧字幕缓存、旧 result/checkpoint VTT、孤立凭据文件和旧的命名 Playlist/Home shortcut 数据；保留 Settings、用户原始媒体和 SAF 外部字幕文件。数据库不再把 `lastSurface` 当作启动入口；`PlayerSurface` 只管理运行期 Normal/Calibration/Glow 层级。
+Room 当前 schema 为 v8；v7→v8 通过自动迁移保留任务、结果和手测诊断数据，v6 及其他不兼容版本仍允许破坏性重建。重建清理应用私有旧字幕缓存、旧 result/checkpoint VTT、孤立凭据文件和旧的命名 Playlist/Home shortcut 数据；保留 Settings、用户原始媒体和 SAF 外部字幕文件。数据库不再把 `lastSurface` 当作启动入口；`PlayerSurface` 只管理运行期 Normal/Calibration/Glow 层级。
 
 导入与生成文字统一使用 `CanonicalTimeline`、`TimelineRevision` 和 content-addressed `TextArtifactStore`。Artifact 位于 `noBackupFilesDir/text_artifacts/<kind>/<prefix>/<id>.bin`，ID 是包含 kind、schema、codec 与 canonicalizer version 的完整二进制 envelope SHA-256。Room 只保存 Artifact metadata、不可变 revision、manifest 和 publication pointer，不保存逐 cue 正文。`TimelineRevisionReader` 一次解码当前 publication 为内存 `SubtitleTimeline`；播放进度解析不访问 Room、Artifact 文件或 SAF。
 
@@ -106,7 +106,7 @@ ASR window 与 translation batch 先发布 typed Artifact，再在同一 Room tr
 
 ## 9. 验收
 
-自动化覆盖：虚拟文件夹单归属、删除回根目录、搜索排序、移出/恢复、Queue 唯一与重排、外部打开不收录、单套配置校验、生成状态归并；四种字幕格式 canonicalization、稳定 cue ID、版本化 binary codec、partial/final assembly、translation source pin、Artifact 审计与 24 小时 GC；Room 首次创建与 v6→v7 破坏性重建；Settings DataStore 与用户媒体不受影响。
+自动化覆盖：虚拟文件夹单归属、删除回根目录、搜索排序、移出/恢复、Queue 唯一与重排、外部打开不收录、单套配置校验、生成状态归并；四种字幕格式 canonicalization、稳定 cue ID、版本化 binary codec、partial/final assembly、translation source pin、Artifact 审计与 24 小时 GC；Room 首次创建、v7→v8 保留迁移与 v6→v8 破坏性重建；Settings DataStore 与用户媒体不受影响。
 
 Compose UI 覆盖四 Tab、中央 Import Hub、Mini Player、空态、文件夹导航、长按菜单、Queue、配置校验和 Back Stack。默认验证命令：
 

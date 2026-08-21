@@ -438,6 +438,16 @@ data class RequestAttemptEntity(
     val sequence: Int,
     val stage: String,
     val provider: String,
+    @ColumnInfo(name = "provider_request_id")
+    val providerRequestId: String? = null,
+    @ColumnInfo(name = "work_unit_kind")
+    val workUnitKind: String? = null,
+    @ColumnInfo(name = "work_unit_id")
+    val workUnitId: String? = null,
+    @ColumnInfo(name = "operation_ordinal")
+    val operationOrdinal: Int? = null,
+    @ColumnInfo(name = "retry_ordinal")
+    val retryOrdinal: Int? = null,
     @ColumnInfo(name = "request_bytes")
     val requestBytes: Long?,
     @ColumnInfo(name = "response_bytes")
@@ -462,8 +472,43 @@ data class RequestAttemptEntity(
     val startedAtMs: Long,
     @ColumnInfo(name = "finished_at_ms")
     val finishedAtMs: Long?,
+    @ColumnInfo(name = "duration_ms")
+    val durationMs: Long? = null,
     @ColumnInfo(name = "retain_until_ms")
     val retainUntilMs: Long?,
+)
+
+@Entity(
+    tableName = "sync_text_diagnostic_event",
+    indices = [Index("task_id"), Index("attempt_id"), Index("created_at_ms")],
+)
+data class SyncTextDiagnosticEventEntity(
+    @PrimaryKey
+    @ColumnInfo(name = "event_id")
+    val eventId: String,
+    @ColumnInfo(name = "process_session_id")
+    val processSessionId: String,
+    @ColumnInfo(name = "event_type")
+    val eventType: String,
+    @ColumnInfo(name = "task_id")
+    val taskId: String?,
+    @ColumnInfo(name = "attempt_id")
+    val attemptId: String?,
+    @ColumnInfo(name = "work_unit_kind")
+    val workUnitKind: String?,
+    @ColumnInfo(name = "work_unit_id")
+    val workUnitId: String?,
+    val stage: String?,
+    val outcome: String?,
+    val reason: String?,
+    @ColumnInfo(name = "value_ms")
+    val valueMs: Long?,
+    @ColumnInfo(name = "value_bytes")
+    val valueBytes: Long?,
+    @ColumnInfo(name = "created_at_ms")
+    val createdAtMs: Long,
+    @ColumnInfo(name = "elapsed_realtime_ms")
+    val elapsedRealtimeMs: Long,
 )
 
 @Entity(

@@ -325,8 +325,37 @@ class VortexDatabaseTest {
     }
 
     @Test
-    fun versionSixIsDestructivelyRebuiltAsVersionSeven() = runBlocking {
-        val path = temporaryFolder.root.resolve("migration-v6-v7.db").toPath()
+    fun versionSevenMigrationPreservesDataInVersionEight() = runBlocking {
+        val helper =
+            MigrationTestHelper(
+                databasePath = temporaryFolder.root.resolve("migration-v7-v8.db").toPath(),
+                schemaDirectoryPath = File("schemas").toPath(),
+                driver = BundledSQLiteDriver(),
+                databaseClass = VortexDatabase::class,
+                databaseFactory = { VortexDatabase_Impl() },
+                autoMigrationSpecs = emptyList(),
+            )
+        helper.createDatabase(7).use { connection ->
+            connection.prepare(
+                "INSERT INTO content (content_id, created_at_ms, subtitle_offset_ms) VALUES ('preserved-content', 1, 0)",
+            ).use { it.step() }
+        }
+
+        helper.runMigrationsAndValidate(8).use { connection ->
+            connection.prepare("SELECT content_id FROM content WHERE content_id = 'preserved-content'").use { statement ->
+                assertTrue(statement.step())
+                assertEquals("preserved-content", statement.getText(0))
+            }
+            connection.prepare("SELECT COUNT(*) FROM sync_text_diagnostic_event").use { statement ->
+                assertTrue(statement.step())
+                assertEquals(0L, statement.getLong(0))
+            }
+        }
+    }
+
+    @Test
+    fun versionSixIsDestructivelyRebuiltAsVersionEight() = runBlocking {
+        val path = temporaryFolder.root.resolve("migration-v6-v8.db").toPath()
         val helper =
             MigrationTestHelper(
                 databasePath = path,

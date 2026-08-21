@@ -2,6 +2,7 @@ package io.github.zvensmoluya.vortexcue.app
 
 import android.app.Application
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import androidx.work.Configuration
 import io.github.zvensmoluya.vortexcue.R
 import io.github.zvensmoluya.vortexcue.core.model.TextSelectionMode
@@ -21,9 +22,12 @@ import io.github.zvensmoluya.vortexcue.synctext.EncodedAudioBudget
 import io.github.zvensmoluya.vortexcue.synctext.AsrProvider
 import io.github.zvensmoluya.vortexcue.synctext.OpenAiAsrEngine
 import io.github.zvensmoluya.vortexcue.synctext.OpenRouterAsrEngine
+import io.github.zvensmoluya.vortexcue.synctext.NoOpSyncTextDiagnosticRecorder
 import io.github.zvensmoluya.vortexcue.synctext.PlatformAudioWindowExtractor
 import io.github.zvensmoluya.vortexcue.synctext.PrivateRawResponseStore
+import io.github.zvensmoluya.vortexcue.synctext.RoomSyncTextDiagnosticRecorder
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextHttpClient
+import io.github.zvensmoluya.vortexcue.synctext.SyncTextDiagnosticRecorder
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextNetworkMonitor
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextRepository
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextTaskRunner
@@ -70,6 +74,12 @@ class AppContainer(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     val database: VortexDatabase = VortexDatabase.create(appContext)
+    val syncTextDiagnostics: SyncTextDiagnosticRecorder =
+        if (appContext.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            RoomSyncTextDiagnosticRecorder(database, scope)
+        } else {
+            NoOpSyncTextDiagnosticRecorder
+        }
     val contentRepository = ContentRepository(database)
     val playbackStateRepository = PlaybackStateRepository(database, contentRepository)
     val settingsStore = SettingsStore(appContext)
@@ -82,7 +92,7 @@ class AppContainer(context: Context) {
         TextStorageMaintenance(appContext, database, textStorageRepository, textArtifactStore)
     val credentialStore = AndroidKeystoreCredentialStore(appContext)
     val translationPolicyRegistry = TranslationPolicyRegistry.fromContext(appContext)
-    val syncTextScheduler = AndroidSyncTextScheduler(appContext)
+    val syncTextScheduler = AndroidSyncTextScheduler(appContext, syncTextDiagnostics)
     val syncTextNetworkState = AndroidSyncTextNetworkState(appContext)
     private val syncTextHttpClient = SyncTextHttpClient(appContext.appVersionName())
     private val translationEndpointResolver = TranslationEndpointResolver()
@@ -119,6 +129,7 @@ class AppContainer(context: Context) {
             policies = translationPolicyRegistry,
             scope = scope,
             scheduler = syncTextScheduler,
+            diagnostics = syncTextDiagnostics,
             modelCatalog = translationModelCatalog,
             connectionTester = connectionTester,
         )
@@ -134,6 +145,7 @@ class AppContainer(context: Context) {
                 ).trackId
             },
             scope = scope,
+            diagnostics = syncTextDiagnostics,
         )
     val syncTextTaskRunner =
         SyncTextTaskRunner(
@@ -155,6 +167,7 @@ class AppContainer(context: Context) {
             asr = asrEngine,
             translation = translationNetworkGateway,
             networkState = syncTextNetworkState,
+            diagnostics = syncTextDiagnostics,
         )
     private val syncTextNetworkMonitor =
         SyncTextNetworkMonitor(
@@ -189,6 +202,7 @@ class AppContainer(context: Context) {
             credentialStore.pruneExcept(retainedCredentials)
             val nowMs = System.currentTimeMillis()
             database.syncTextDao().pruneExpiredRequestAttempts(nowMs)
+            database.syncTextDao().pruneDiagnosticEvents(nowMs - SyncTextDiagnosticRetentionMs)
             database.syncTextDao().pruneTerminalTasks(nowMs - SyncTextTerminalRetentionMs)
             val generatedRetained = database.syncTextDao().referencedRawResponseFiles().toSet()
             rawResponseStore.pruneExcept(generatedRetained)
@@ -206,3 +220,4 @@ val Context.appContainer: AppContainer
     get() = (applicationContext as VortexCueApplication).container
 
 private const val SyncTextTerminalRetentionMs = 7L * 24L * 60L * 60L * 1_000L
+private const val SyncTextDiagnosticRetentionMs = 7L * 24L * 60L * 60L * 1_000L
