@@ -33,7 +33,13 @@ class LiveProviderSmokeTest {
                         ),
                     streamResponses = true,
                 )
-            val asr = OpenRouterAsrEngine(executor, EncodedAudioBudget())
+            val asr =
+                AsrEngineRouter(
+                    mapOf(
+                        AsrProvider.OpenRouter to OpenRouterAsrEngine(executor, EncodedAudioBudget()),
+                        AsrProvider.OpenAi to OpenAiAsrEngine(executor),
+                    ),
+                )
             val tester =
                 SyncTextConnectionTester(
                     translation = translation,

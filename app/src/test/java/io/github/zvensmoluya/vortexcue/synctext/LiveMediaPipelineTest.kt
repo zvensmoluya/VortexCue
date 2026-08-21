@@ -31,7 +31,13 @@ class LiveMediaPipelineTest {
         val normalizedWavs = mutableListOf<File>()
         try {
             val executor = BoundedHttpExecutor(httpClient)
-            val asr = OpenRouterAsrEngine(executor, EncodedAudioBudget())
+            val asr =
+                AsrEngineRouter(
+                    mapOf(
+                        AsrProvider.OpenRouter to OpenRouterAsrEngine(executor, EncodedAudioBudget()),
+                        AsrProvider.OpenAi to OpenAiAsrEngine(executor),
+                    ),
+                )
             val durationMs = (config.mediaDurationSeconds * 1_000.0).toLong()
             val windows = FixedAsrWindowPlanner().plan(durationMs)
             val asrResults = windows.map { window ->
@@ -79,9 +85,9 @@ class LiveMediaPipelineTest {
     ): List<SubtitleCue> {
         val windowCues =
             results.flatMap { result ->
-                when (profile) {
-                    AsrProfile.OpenRouterWhisperV1 -> AsrTimelineMerger.mergeSegments(result.segments)
-                    AsrProfile.OpenRouterGrokV1 -> AsrTimelineMerger.wordsToCues(result.segments)
+                when (profile.timelineStrategy) {
+                    AsrTimelineStrategy.Segment -> AsrTimelineMerger.mergeSegments(result.segments)
+                    AsrTimelineStrategy.Word -> AsrTimelineMerger.wordsToCues(result.segments)
                 }
             }
         return AsrTimelineMerger.mergeSegments(

@@ -310,7 +310,7 @@ class SyncTextTaskRunner(
                                                 sourceCues = prefixCues,
                                                 targetCues = null,
                                                 usage = prefixWork.map(WindowTranscript::usage).sumRealUsage(),
-                                                sourceModel = attempt.asrProfile.enumValueOr(AsrProfile.OpenRouterWhisperV1).modelId,
+                                                sourceModel = AsrProfile.fromStoredValue(attempt.asrProfile).modelId,
                                                 completeTask = prefix.size == roots.size,
                                                 completeness =
                                                     if (prefix.size == roots.size) {
@@ -341,7 +341,14 @@ class SyncTextTaskRunner(
                 }.awaitAll().flatten()
             }
         val merged = mergeWindowTranscripts(transcripts)
-        if (merged.isEmpty()) throw AsrException(GenerationErrorCategory.Timeline, false, false, message = "ASR produced no owned cues")
+        if (merged.isEmpty()) {
+            throw AsrException(
+                category = GenerationErrorCategory.Timeline,
+                retryable = false,
+                shouldSplit = false,
+                message = "未检测到可转写语音",
+            )
+        }
         val language = resolveAsrLanguage(snapshot, transcripts)
         val usage = transcripts.map(WindowTranscript::usage).sumRealUsage()
         val result = dao.task(task.taskId)?.sourceResultId?.let { dao.generatedResult(it) }
@@ -402,7 +409,7 @@ class SyncTextTaskRunner(
                     val result =
                         asr.transcribe(
                             AsrRequest(
-                                profile = attempt.asrProfile.enumValueOr(AsrProfile.OpenRouterWhisperV1),
+                                profile = AsrProfile.fromStoredValue(attempt.asrProfile),
                                 endpoint = attempt.asrEndpoint,
                                 apiKey = key,
                                 wavFile = wav,
@@ -412,10 +419,9 @@ class SyncTextTaskRunner(
                         )
                     recordAsrAttempt(attempt, result, null)
                     val cues =
-                        if (attempt.asrProfile == AsrProfile.OpenRouterGrokV1.name) {
-                            AsrTimelineMerger.wordsToCues(result.segments)
-                        } else {
-                            AsrTimelineMerger.mergeSegments(result.segments)
+                        when (AsrProfile.fromStoredValue(attempt.asrProfile).timelineStrategy) {
+                            AsrTimelineStrategy.Segment -> AsrTimelineMerger.mergeSegments(result.segments)
+                            AsrTimelineStrategy.Word -> AsrTimelineMerger.wordsToCues(result.segments)
                         }
                     val timeline = CanonicalTextNormalizer.normalizeAsrWorkUnit(cues)
                     val checkpoint = textStorage.publishTimelineArtifact(TextArtifactKind.AsrWorkUnitOutput, timeline)

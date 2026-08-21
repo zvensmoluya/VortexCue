@@ -14,9 +14,12 @@ import io.github.zvensmoluya.vortexcue.synctext.AndroidKeystoreCredentialStore
 import io.github.zvensmoluya.vortexcue.synctext.AndroidSourceTextMaterializer
 import io.github.zvensmoluya.vortexcue.synctext.AndroidSyncTextNetworkState
 import io.github.zvensmoluya.vortexcue.synctext.AndroidSyncTextScheduler
+import io.github.zvensmoluya.vortexcue.synctext.AsrEngineRouter
 import io.github.zvensmoluya.vortexcue.synctext.BoundedHttpExecutor
 import io.github.zvensmoluya.vortexcue.synctext.BoundedPcmSpool
 import io.github.zvensmoluya.vortexcue.synctext.EncodedAudioBudget
+import io.github.zvensmoluya.vortexcue.synctext.AsrProvider
+import io.github.zvensmoluya.vortexcue.synctext.OpenAiAsrEngine
 import io.github.zvensmoluya.vortexcue.synctext.OpenRouterAsrEngine
 import io.github.zvensmoluya.vortexcue.synctext.PlatformAudioWindowExtractor
 import io.github.zvensmoluya.vortexcue.synctext.PrivateRawResponseStore
@@ -88,11 +91,18 @@ class AppContainer(context: Context) {
             TranslationAdapterRegistry(defaultTranslationAdapters(syncTextHttpClient, translationEndpointResolver)),
             streamResponses = true,
         )
-    private val openRouterAsrEngine = OpenRouterAsrEngine(BoundedHttpExecutor(syncTextHttpClient.client), EncodedAudioBudget())
+    private val asrEngine =
+        AsrEngineRouter(
+            mapOf(
+                AsrProvider.OpenRouter to
+                    OpenRouterAsrEngine(BoundedHttpExecutor(syncTextHttpClient.client), EncodedAudioBudget()),
+                AsrProvider.OpenAi to OpenAiAsrEngine(BoundedHttpExecutor(syncTextHttpClient.client)),
+            ),
+        )
     private val connectionTester =
         SyncTextConnectionTester(
             translation = translationNetworkGateway,
-            asr = openRouterAsrEngine,
+            asr = asrEngine,
             policies = translationPolicyRegistry,
             createAsrProbeFile = ::createAsrProbeFile,
         )
@@ -142,7 +152,7 @@ class AppContainer(context: Context) {
                 ),
             audio = audioWindowExtractor,
             spool = pcmSpool,
-            asr = openRouterAsrEngine,
+            asr = asrEngine,
             translation = translationNetworkGateway,
             networkState = syncTextNetworkState,
         )

@@ -64,6 +64,9 @@ class OpenRouterAsrEngine(
     private val json = Json { ignoreUnknownKeys = true; isLenient = false }
 
     override suspend fun transcribe(request: AsrRequest): AsrWindowResult {
+        require(request.profile.provider == AsrProvider.OpenRouter) {
+            "OpenRouter ASR engine cannot handle ${request.profile.provider} profiles"
+        }
         require(request.wavFile.isFile) { "ASR WAV file is unavailable" }
         val body = StreamingAsrJsonRequestBody(request)
         if (body.contentLength() > MaxEncodedRequestBytes) {
@@ -105,14 +108,18 @@ class OpenRouterAsrEngine(
             if (exchange.status !in 200..299) throw classifyFailure(exchange, request.apiKey)
             val root = parseRoot(exchange)
             val relative =
-                when (request.profile) {
-                    AsrProfile.OpenRouterWhisperV1 -> parseWhisperSegments(root)
-                    AsrProfile.OpenRouterGrokV1 -> parseGrokWords(root)
+                when (request.profile.timelineStrategy) {
+                    AsrTimelineStrategy.Segment -> parseSegmentTimeline(root)
+                    AsrTimelineStrategy.Word -> parseGrokWords(root)
                 }
             val owned = AsrTimelineMerger.ownedSegments(request.window, relative)
             return AsrWindowResult(
                 segments = owned,
-                detectedLanguage = normalizeDetectedLanguage(root.string("language"), request.sourceLanguage),
+                detectedLanguage =
+                    normalizeDetectedLanguage(
+                        root.string("language") ?: root.firstDetectedLanguage(),
+                        request.sourceLanguage,
+                    ),
                 usage = root.objectValue("usage").usage(),
                 rawResponse = exchange.body,
                 httpStatus = exchange.status,
@@ -162,17 +169,19 @@ class OpenRouterAsrEngine(
             )
         }
 
-    private fun parseWhisperSegments(root: JsonObject): List<AsrTimestampedToken> {
+    internal fun parseSegmentTimeline(root: JsonObject): List<AsrTimestampedToken> {
         val values = root["segments"] as? JsonArray
-            ?: throw timelineFailure("Whisper response omitted segment timestamps")
+            ?: throw timelineFailure("ASR response omitted segment timestamps")
+        if (values.isEmpty()) return emptyList()
         val parsed = values.mapNotNull(::parseTimestampedText)
-        if (parsed.isEmpty()) throw timelineFailure("Whisper response contained no valid segments")
+        if (parsed.isEmpty()) throw timelineFailure("ASR response contained no valid segments")
         return parsed
     }
 
-    private fun parseGrokWords(root: JsonObject): List<AsrTimestampedToken> {
+    internal fun parseGrokWords(root: JsonObject): List<AsrTimestampedToken> {
         val values = root["words"] as? JsonArray
             ?: throw timelineFailure("Grok response omitted word timestamps")
+        if (values.isEmpty()) return emptyList()
         val parsed = values.mapNotNull { element ->
             val value = element as? JsonObject ?: return@mapNotNull null
             parseTimestampedText(value, value.string("word") ?: value.string("text"))
@@ -288,7 +297,7 @@ private class StreamingAsrJsonRequestBody(request: AsrRequest) : RequestBody() {
     init {
         val language = request.sourceLanguage?.let { LanguageTags.normalize(it).substringBefore('-') }
         val timestampGranularity =
-            if (request.profile == AsrProfile.OpenRouterWhisperV1) "segment" else "word"
+            if (request.profile.timelineStrategy == AsrTimelineStrategy.Word) "word" else "segment"
         prefix =
             buildString {
                 append("{\"model\":")
@@ -337,6 +346,12 @@ private class StreamingAsrJsonRequestBody(request: AsrRequest) : RequestBody() {
 
 private fun JsonObject.string(name: String): String? =
     (get(name) as? JsonPrimitive)?.contentOrNull
+
+private fun JsonObject.firstDetectedLanguage(): String? =
+    (get("languages") as? JsonArray)
+        ?.firstNotNullOfOrNull { element ->
+            (element as? JsonObject)?.string("code")
+        }
 
 private fun JsonObject.objectValue(name: String): JsonObject =
     get(name) as? JsonObject ?: JsonObject(emptyMap())

@@ -26,15 +26,16 @@ internal data class LiveProviderProbeConfig(
             fun value(name: String): String? =
                 (System.getenv(name) ?: localValues[name])?.trim()?.takeIf(String::isNotEmpty)
 
+            val asrProfile =
+                value("VORTEX_LIVE_ASR_PROFILE")?.let { AsrProfile.fromStoredValue(it) }
+                    ?: AsrProfile.OpenRouterWhisperV1
             return LiveProviderProbeConfig(
                 enabled = value("VORTEX_LIVE_TEST") == "1",
                 asrApiKey = value("VORTEX_LIVE_ASR_API_KEY"),
                 asrEndpoint =
                     value("VORTEX_LIVE_ASR_ENDPOINT")
-                        ?: OpenRouterAsrEngine.OpenRouterTranscriptionUrl,
-                asrProfile =
-                    value("VORTEX_LIVE_ASR_PROFILE")?.let { enumValueOrNull<AsrProfile>(it) }
-                        ?: AsrProfile.OpenRouterWhisperV1,
+                        ?: asrProfile.provider.defaultEndpoint,
+                asrProfile = asrProfile,
                 translationApiKey = value("VORTEX_LIVE_TRANSLATION_API_KEY"),
                 translationEndpoint = value("VORTEX_LIVE_TRANSLATION_ENDPOINT"),
                 translationModel = value("VORTEX_LIVE_TRANSLATION_MODEL"),

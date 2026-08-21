@@ -73,12 +73,12 @@ import io.github.zvensmoluya.vortexcue.core.model.TimedTextOrigin
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextReadiness
 import io.github.zvensmoluya.vortexcue.data.ContentDetails
 import io.github.zvensmoluya.vortexcue.synctext.AsrProfile
+import io.github.zvensmoluya.vortexcue.synctext.AsrProvider
 import io.github.zvensmoluya.vortexcue.synctext.AudioTrackInfo
 import io.github.zvensmoluya.vortexcue.synctext.CredentialMetadata
 import io.github.zvensmoluya.vortexcue.synctext.CredentialPurpose
 import io.github.zvensmoluya.vortexcue.synctext.GenerationInput
 import io.github.zvensmoluya.vortexcue.synctext.LanguageTags
-import io.github.zvensmoluya.vortexcue.synctext.OpenRouterAsrEngine
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextConfig
 import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocol
@@ -170,7 +170,7 @@ internal fun SyncTextConfigPage(
         mutableStateOf(
             AsrPageDraft(
                 profile = existing?.asrProfile ?: AsrProfile.OpenRouterWhisperV1,
-                endpoint = existing?.asrEndpoint ?: DefaultAsrEndpoint,
+                endpoint = existing?.asrEndpoint ?: AsrProfile.OpenRouterWhisperV1.provider.defaultEndpoint,
                 credentialId = existing?.asrCredentialId,
                 secret = "",
             ),
@@ -245,7 +245,7 @@ internal fun SyncTextConfigPage(
         onAction(
             SyncTextAction.SaveCredential(
                 credentialId = credentialId,
-                name = if (purpose == CredentialPurpose.Asr) "OpenRouter" else "翻译服务",
+                name = if (purpose == CredentialPurpose.Asr) asrDraft.profile.provider.displayName else "翻译服务",
                 purpose = purpose,
                 secret = secret,
             ),
@@ -572,8 +572,25 @@ private fun AsrPage(
         verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
         item {
+            AsrProviderPicker(
+                value = draft.profile.provider,
+                onValueChange = { provider ->
+                    val next =
+                        draft.copy(
+                            profile = AsrProfile.defaultFor(provider),
+                            endpoint = provider.defaultEndpoint,
+                            credentialId = null,
+                            secret = "",
+                        )
+                    onDraftChanged(next)
+                    onCommit(next)
+                },
+            )
+        }
+        item {
             AsrModelPicker(
                 value = draft.profile,
+                options = AsrProfile.forProvider(draft.profile.provider),
                 onValueChange = {
                     val next = draft.copy(profile = it)
                     onDraftChanged(next)
@@ -581,13 +598,15 @@ private fun AsrPage(
                 },
             )
         }
-        item {
-            BaseUrlField(
-                value = draft.endpoint,
-                placeholder = DefaultAsrEndpoint,
-                onValueChange = { onDraftChanged(draft.copy(endpoint = it)) },
-                onCommit = { value -> onCommit(draft.copy(endpoint = value)) },
-            )
+        if (draft.profile.provider.endpointEditable) {
+            item {
+                BaseUrlField(
+                    value = draft.endpoint,
+                    placeholder = draft.profile.provider.defaultEndpoint,
+                    onValueChange = { onDraftChanged(draft.copy(endpoint = it)) },
+                    onCommit = { value -> onCommit(draft.copy(endpoint = value)) },
+                )
+            }
         }
         item {
             ApiKeyField(
@@ -953,43 +972,55 @@ private fun ConfigFieldLabel(label: String) {
     Text(label, color = AppSecondaryText, fontSize = 12.sp)
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AsrProviderPicker(
+    value: AsrProvider,
+    onValueChange: (AsrProvider) -> Unit,
+) {
+    var visible by remember { mutableStateOf(false) }
+    ConfigChoiceRow(label = "识别服务", value = value.displayName, onClick = { visible = true })
+    if (visible) {
+        ModalBottomSheet(onDismissRequest = { visible = false }, containerColor = AppSurfaceRaised) {
+            SheetTitle("识别服务")
+            AsrProvider.entries.forEach { provider ->
+                SheetChoiceRow(
+                    title = provider.displayName,
+                    selected = provider == value,
+                    onClick = {
+                        onValueChange(provider)
+                        visible = false
+                    },
+                )
+            }
+            Spacer(Modifier.navigationBarsPadding())
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AsrModelPicker(
     value: AsrProfile,
+    options: List<AsrProfile>,
     onValueChange: (AsrProfile) -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        ConfigFieldLabel("识别模型")
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = ConfigControlHeight)
-                .background(AppSurfaceRaised, ConfigControlShape)
-                .border(1.dp, AppHairline, ConfigControlShape)
-                .padding(4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            AsrProfile.entries.forEach { profile ->
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(ConfigControlHeight - 8.dp)
-                        .background(
-                            if (profile == value) AppSurfaceSelected else Color.Transparent,
-                            RoundedCornerShape(6.dp),
-                        )
-                        .clickable { onValueChange(profile) },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        profile.displayLabel(),
-                        color = if (profile == value) AppPrimaryText else AppSecondaryText,
-                        fontSize = 13.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+    var visible by remember { mutableStateOf(false) }
+    ConfigChoiceRow(label = "识别模型", value = value.displayLabel(), onClick = { visible = true })
+    if (visible) {
+        ModalBottomSheet(onDismissRequest = { visible = false }, containerColor = AppSurfaceRaised) {
+            SheetTitle("识别模型")
+            options.forEach { profile ->
+                SheetChoiceRow(
+                    title = profile.displayModelLabel(),
+                    selected = profile == value,
+                    onClick = {
+                        onValueChange(profile)
+                        visible = false
+                    },
+                )
             }
+            Spacer(Modifier.navigationBarsPadding())
         }
     }
 }
@@ -1255,12 +1286,14 @@ private fun AsrProfile.displayLabel(): String =
     when (this) {
         AsrProfile.OpenRouterWhisperV1 -> "Whisper large-v3"
         AsrProfile.OpenRouterGrokV1 -> "Grok STT"
+        AsrProfile.OpenAiWhisperV1 -> "Whisper-1"
     }
 
 private fun AsrProfile.displayModelLabel(): String =
     when (this) {
-        AsrProfile.OpenRouterWhisperV1 -> "OpenAI Whisper large-v3"
+        AsrProfile.OpenRouterWhisperV1 -> "Whisper large-v3"
         AsrProfile.OpenRouterGrokV1 -> "xAI Grok STT 1.0"
+        AsrProfile.OpenAiWhisperV1 -> "Whisper-1"
     }
 
 private fun TranslationProtocol.defaultBaseUrl(): String =
@@ -1282,5 +1315,3 @@ private fun String.toBaseUrl(): String {
         else -> value
     }
 }
-
-private const val DefaultAsrEndpoint = OpenRouterAsrEngine.OpenRouterBaseUrl

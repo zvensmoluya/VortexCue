@@ -64,9 +64,9 @@ class SyncTextConnectionTester(
                 )
             ensureUsableAsrProbe(result, result.segments.isNotEmpty())
             val cues =
-                when (profile) {
-                    AsrProfile.OpenRouterWhisperV1 -> AsrTimelineMerger.mergeSegments(result.segments)
-                    AsrProfile.OpenRouterGrokV1 -> AsrTimelineMerger.wordsToCues(result.segments)
+                when (profile.timelineStrategy) {
+                    AsrTimelineStrategy.Segment -> AsrTimelineMerger.mergeSegments(result.segments)
+                    AsrTimelineStrategy.Word -> AsrTimelineMerger.wordsToCues(result.segments)
                 }
             ensureUsableAsrProbe(result, cues.isNotEmpty())
         } finally {

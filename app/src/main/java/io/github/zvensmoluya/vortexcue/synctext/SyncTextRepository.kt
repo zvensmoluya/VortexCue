@@ -174,7 +174,7 @@ class SyncTextRepository(
                         updateInlineCredential(
                             existingId = sharedCredentialId,
                             secret = secret,
-                            fallbackName = "OpenRouter",
+                            fallbackName = config.asrProfile.provider.displayName,
                             purpose = CredentialPurpose.Shared,
                         )
                         sharedCredentialId to sharedCredentialId
@@ -184,7 +184,7 @@ class SyncTextRepository(
                             saveInlineCredential(
                                 existingId = "",
                                 secret = normalizedAsrSecret,
-                                name = "OpenRouter",
+                                name = config.asrProfile.provider.displayName,
                                 purpose = CredentialPurpose.Asr,
                             )
                         val translation =
@@ -201,7 +201,7 @@ class SyncTextRepository(
                 saveInlineCredential(
                     existingId = config.asrCredentialId,
                     secret = normalizedAsrSecret,
-                    name = "OpenRouter",
+                    name = config.asrProfile.provider.displayName,
                     purpose = CredentialPurpose.Asr,
                 ) to saveOptionalInlineCredential(
                     existingId = config.translationCredentialId,
@@ -387,7 +387,7 @@ class SyncTextRepository(
     suspend fun createScheme(
         name: String,
         asrProfile: AsrProfile,
-        asrEndpoint: String = OpenRouterAsrEngine.OpenRouterBaseUrl,
+        asrEndpoint: String = asrProfile.provider.defaultEndpoint,
         asrCredentialId: String,
         translationProtocol: TranslationProtocol = TranslationProtocol.Responses,
         translationEndpoint: String? = null,
@@ -1141,7 +1141,7 @@ class SyncTextRepository(
         )
 
     private fun SyncTextScheme.normalizedAndValidated(): SyncTextScheme {
-        val normalizedAsrEndpoint = normalizeHttpsEndpoint(asrEndpoint, "ASR endpoint")
+        val normalizedAsrEndpoint = asrProfile.normalizedAsrEndpoint(asrEndpoint)
         val endpoint = translationEndpoint?.trim()?.removeSuffix("/")?.takeIf(String::isNotBlank)
         val model = translationModel?.trim()?.takeIf(String::isNotBlank)
         val credentialId = translationCredentialId?.trim()?.takeIf(String::isNotBlank)
@@ -1197,7 +1197,7 @@ private fun SyncTextSchemeEntity.toDomain() =
     SyncTextScheme(
         schemeId = schemeId,
         name = name,
-        asrProfile = asrProfile.enumValueOr(AsrProfile.OpenRouterWhisperV1),
+        asrProfile = AsrProfile.fromStoredValue(asrProfile),
         asrEndpoint = asrEndpoint,
         asrCredentialId = asrCredentialId,
         translationProtocol = translationProtocol.enumValueOr(TranslationProtocol.Responses),
@@ -1237,6 +1237,18 @@ private fun normalizeHttpsEndpoint(value: String, label: String): String {
             uri.fragment == null,
     ) {
         "$label must be HTTPS"
+    }
+    return endpoint
+}
+
+private fun AsrProfile.normalizedAsrEndpoint(value: String): String {
+    val endpoint = normalizeHttpsEndpoint(value, "ASR endpoint")
+    if (provider != AsrProvider.OpenAi) return endpoint
+    require(
+        endpoint == OpenAiAsrEngine.OpenAiBaseUrl ||
+            endpoint == OpenAiAsrEngine.OpenAiTranscriptionUrl,
+    ) {
+        "OpenAI ASR endpoint must use https://api.openai.com/v1"
     }
     return endpoint
 }

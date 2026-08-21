@@ -2,12 +2,71 @@ package io.github.zvensmoluya.vortexcue.synctext
 
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleCue
 
+enum class AsrProvider(
+    val displayName: String,
+    val defaultEndpoint: String,
+    val endpointEditable: Boolean,
+) {
+    OpenRouter(
+        displayName = "OpenRouter",
+        defaultEndpoint = "https://openrouter.ai/api/v1",
+        endpointEditable = true,
+    ),
+    OpenAi(
+        displayName = "OpenAI",
+        defaultEndpoint = "https://api.openai.com/v1",
+        endpointEditable = false,
+    ),
+}
+
+enum class AsrTimelineStrategy {
+    Segment,
+    Word,
+}
+
 enum class AsrProfile(
+    val provider: AsrProvider,
     val modelId: String,
     val experimental: Boolean,
+    val timelineStrategy: AsrTimelineStrategy,
 ) {
-    OpenRouterWhisperV1("openai/whisper-large-v3", false),
-    OpenRouterGrokV1("x-ai/grok-stt-1.0", true),
+    OpenRouterWhisperV1(
+        provider = AsrProvider.OpenRouter,
+        modelId = "openai/whisper-large-v3",
+        experimental = false,
+        timelineStrategy = AsrTimelineStrategy.Segment,
+    ),
+    OpenRouterGrokV1(
+        provider = AsrProvider.OpenRouter,
+        modelId = "x-ai/grok-stt-1.0",
+        experimental = true,
+        timelineStrategy = AsrTimelineStrategy.Word,
+    ),
+    OpenAiWhisperV1(
+        provider = AsrProvider.OpenAi,
+        modelId = "whisper-1",
+        experimental = false,
+        timelineStrategy = AsrTimelineStrategy.Segment,
+    ),
+    ;
+
+    companion object {
+        fun fromStoredValue(value: String): AsrProfile =
+            when (value) {
+                // This short-lived profile used OpenRouter's incompatible response normalization.
+                // Fall back to the established OpenRouter model instead of reusing an unusable setup.
+                "OpenRouterGptTranscribeV1" -> OpenRouterWhisperV1
+                // GPT Transcribe does not return the timestamped timeline required by VortexCue.
+                "OpenAiGptTranscribeV1" -> OpenAiWhisperV1
+                else -> entries.firstOrNull { it.name == value } ?: OpenRouterWhisperV1
+            }
+
+        fun forProvider(provider: AsrProvider): List<AsrProfile> =
+            entries.filter { it.provider == provider }
+
+        fun defaultFor(provider: AsrProvider): AsrProfile =
+            requireNotNull(forProvider(provider).firstOrNull()) { "No ASR profile is registered for $provider" }
+    }
 }
 
 enum class TranslationProtocol {
