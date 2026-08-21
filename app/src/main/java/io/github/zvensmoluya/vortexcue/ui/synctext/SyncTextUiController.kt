@@ -70,6 +70,16 @@ data class CredentialSaveUiState(
     val message: String? = null,
 )
 
+enum class SyncTextLaunchKind {
+    Generation,
+    Translation,
+}
+
+data class SyncTextLaunchUiState(
+    val contentId: String,
+    val kind: SyncTextLaunchKind,
+)
+
 data class SyncTextUiState(
     val config: SyncTextConfig? = null,
     val credentials: List<CredentialMetadata> = emptyList(),
@@ -85,6 +95,7 @@ data class SyncTextUiState(
     val configSaving: Boolean = false,
     val configError: String? = null,
     val credentialSave: CredentialSaveUiState? = null,
+    val taskLaunch: SyncTextLaunchUiState? = null,
     val busy: Boolean = false,
     val message: String? = null,
 )
@@ -162,6 +173,7 @@ private data class OverlayState(
     val configSaving: Boolean = false,
     val configError: String? = null,
     val credentialSave: CredentialSaveUiState? = null,
+    val taskLaunch: SyncTextLaunchUiState? = null,
     val busy: Boolean = false,
     val message: String? = null,
 )
@@ -203,6 +215,7 @@ class SyncTextUiController(
                 configSaving = local.configSaving,
                 configError = local.configError,
                 credentialSave = local.credentialSave,
+                taskLaunch = local.taskLaunch,
                 busy = local.busy,
                 message = local.message,
             )
@@ -264,14 +277,16 @@ class SyncTextUiController(
                 repository.allowMeteredNetworkForContent(action.contentId)
                 "已允许本次任务使用计费网络"
             }
-            is SyncTextAction.TranslateForContent -> runAction {
+            is SyncTextAction.TranslateForContent -> runAction(
+                taskLaunch = SyncTextLaunchUiState(action.contentId, SyncTextLaunchKind.Translation),
+            ) {
                 val source = requireNotNull(repository.currentSourceResult(action.contentId)) { "没有可翻译的源文字" }
                 val target = repository.config.value?.targetLanguage?.let(LanguageTags::normalizeOrNull)
                 if (target == null || LanguageTags.normalizeOrNull(source.sourceLanguage) == target) {
                     "源语言与目标语言相同，无需翻译"
                 } else {
                     repository.submitTranslation(source.resultId, targetLanguage = target)
-                    "同步翻译已开始"
+                    null
                 }
             }
         }
@@ -587,7 +602,13 @@ class SyncTextUiController(
             stage = "Generation",
             outcome = "SubmitStarted",
         )
-        overlay.update { it.copy(busy = true, message = null) }
+        overlay.update {
+            it.copy(
+                taskLaunch = SyncTextLaunchUiState(content.contentId, SyncTextLaunchKind.Generation),
+                busy = true,
+                message = null,
+            )
+        }
         scope.launch {
             runCatching {
                 val ownedInput =
@@ -618,8 +639,9 @@ class SyncTextUiController(
                         audioTracks = emptyList(),
                         inspectingAudioTracks = false,
                         audioInspectionError = null,
+                        taskLaunch = null,
                         busy = false,
-                        message = "同步文字已开始",
+                        message = null,
                     )
                 }
             }.onFailure { error ->
@@ -643,6 +665,7 @@ class SyncTextUiController(
                 audioTracks = emptyList(),
                 inspectingAudioTracks = false,
                 audioInspectionError = null,
+                taskLaunch = null,
                 busy = false,
                 message = null,
             )
@@ -659,11 +682,16 @@ class SyncTextUiController(
         }
     }
 
-    private fun runAction(block: suspend () -> String?) {
-        overlay.update { it.copy(busy = true, message = null) }
+    private fun runAction(
+        taskLaunch: SyncTextLaunchUiState? = null,
+        block: suspend () -> String?,
+    ) {
+        overlay.update { it.copy(taskLaunch = taskLaunch, busy = true, message = null) }
         scope.launch {
             runCatching { block() }
-                .onSuccess { message -> overlay.update { it.copy(busy = false, message = message) } }
+                .onSuccess { message ->
+                    overlay.update { it.copy(taskLaunch = null, busy = false, message = message) }
+                }
                 .onFailure(::handleFailure)
         }
     }
@@ -719,6 +747,7 @@ class SyncTextUiController(
             it.copy(
                 busy = false,
                 inspectingAudioTracks = false,
+                taskLaunch = null,
                 message = error.message?.takeIf(String::isNotBlank) ?: "操作失败",
             )
         }

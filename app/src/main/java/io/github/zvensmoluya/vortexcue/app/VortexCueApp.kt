@@ -762,10 +762,6 @@ internal fun VortexCueApp(
                             }
                         }
                     },
-                    onOpenQueue = {
-                        mainTab = MainTab.Queue
-                        destination = AppDestination.Main
-                    },
                     onQueueSelect = { index ->
                         if (index in playback.queue.indices) {
                             player.seekToDefaultPosition(index)
@@ -814,6 +810,7 @@ internal fun VortexCueApp(
                         }
                     },
                     syncTextTask = syncTextUiState.tasks.firstOrNull { it.contentId == currentContentId },
+                    syncTextLaunch = syncTextUiState.taskLaunch?.takeIf { it.contentId == currentContentId },
                     onGenerateSyncText = {
                         currentDetails?.let { details ->
                             dispatchSyncTextAction(SyncTextAction.OpenGeneration(details))

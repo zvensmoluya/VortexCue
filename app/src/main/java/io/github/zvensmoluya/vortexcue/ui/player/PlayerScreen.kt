@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,8 +27,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.QueueMusic
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Forward10
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
@@ -40,8 +43,12 @@ import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.SkipPrevious
 import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -64,6 +71,7 @@ import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
@@ -76,6 +84,7 @@ import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import java.util.Locale
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import io.github.zvensmoluya.vortexcue.core.model.*
@@ -83,11 +92,14 @@ import io.github.zvensmoluya.vortexcue.playback.*
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleCue
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleTimeline
 import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
+import io.github.zvensmoluya.vortexcue.synctext.GeneratedResultCompleteness
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskState
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskSummary
 import io.github.zvensmoluya.vortexcue.synctext.GenerationNetworkWaitReason
 import io.github.zvensmoluya.vortexcue.ui.queue.QueueItemRow
+import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextLaunchUiState
 import io.github.zvensmoluya.vortexcue.ui.synctext.generationProductStatus
+import io.github.zvensmoluya.vortexcue.ui.synctext.syncTextProgressPresentation
 import io.github.zvensmoluya.vortexcue.ui.theme.*
 
 private val GlowTrackColor = Color(0xFF242424)
@@ -112,7 +124,6 @@ internal fun PlayerScreen(
     onOpenSources: () -> Unit,
     onRelinkMedia: () -> Unit,
     onToggleCollected: () -> Unit,
-    onOpenQueue: () -> Unit,
     onQueueSelect: (Int) -> Unit,
     onQueueMove: (Int, Int) -> Unit,
     onQueueRemove: (Int) -> Unit,
@@ -120,6 +131,7 @@ internal fun PlayerScreen(
     onRestoreAutomaticTextTrack: (TextTrackSlot) -> Unit,
     onAddTextTrack: (TextTrackSlot) -> Unit,
     syncTextTask: GenerationTaskSummary?,
+    syncTextLaunch: SyncTextLaunchUiState?,
     onGenerateSyncText: () -> Unit,
     onTranslateSyncText: () -> Unit,
     onCancelSyncText: () -> Unit,
@@ -207,6 +219,9 @@ internal fun PlayerScreen(
                 secondaryText = secondaryText,
                 hasPrimaryText = hasPrimaryText,
                 hasSecondaryText = hasSecondaryText,
+                generatedText = session.generatedText,
+                syncTextTask = syncTextTask,
+                syncTextLaunch = syncTextLaunch,
                 sleepTimer = sleepTimer,
                 isCollected = isCollected,
                 onPlayPause = onPlayPause,
@@ -214,15 +229,16 @@ internal fun PlayerScreen(
                 onOpenSources = onOpenSources,
                 onRelinkMedia = onRelinkMedia,
                 onToggleCollected = onToggleCollected,
-                onOpenQueue = onOpenQueue,
                 onQueueSelect = onQueueSelect,
                 onQueueMove = onQueueMove,
                 onQueueRemove = onQueueRemove,
                 onManageTextTracks = { textTracksVisible = true },
-                syncTextStatus = generationProductStatus(syncTextTask, session.generatedText != null),
+                onGenerateSyncText = onGenerateSyncText,
+                onTranslateSyncText = onTranslateSyncText,
+                onCancelSyncText = onCancelSyncText,
+                onRetrySyncText = onRetrySyncText,
+                onAllowMeteredSyncText = onAllowMeteredSyncText,
                 onEnterGlow = { onSurfaceChanged(PlayerSurface.Glow) },
-                onEnterCalibration = { onSurfaceChanged(PlayerSurface.Calibration) },
-                onSubtitleOffsetChanged = onSubtitleOffsetChanged,
                 onShowTimer = { timerVisible = true },
                 modifier = modifier,
             )
@@ -250,7 +266,6 @@ internal fun PlayerScreen(
                 onExitGlow = { onSurfaceChanged(PlayerSurface.Normal) },
                 onRelinkMedia = onRelinkMedia,
                 onManageTextTracks = { textTracksVisible = true },
-                onSubtitleOffsetChanged = onSubtitleOffsetChanged,
                 onGestureHintSeen = onGestureHintSeen,
                 onShowTimer = { timerVisible = true },
                 modifier = modifier,
@@ -268,12 +283,8 @@ internal fun PlayerScreen(
                 onAddTextTrack(slot)
             },
             generatedText = session.generatedText,
-            syncTextTask = syncTextTask,
-            onGenerateSyncText = onGenerateSyncText,
-            onTranslateSyncText = onTranslateSyncText,
-            onCancelSyncText = onCancelSyncText,
-            onRetrySyncText = onRetrySyncText,
-            onAllowMeteredSyncText = onAllowMeteredSyncText,
+            subtitleOffsetMs = session.subtitleOffsetMs,
+            onSubtitleOffsetChanged = onSubtitleOffsetChanged,
             onPresentationModeChanged = onGeneratedPresentationModeChanged,
         )
     }
@@ -452,6 +463,9 @@ private fun NormalPlayer(
     secondaryText: String?,
     hasPrimaryText: Boolean,
     hasSecondaryText: Boolean,
+    generatedText: LoadedGeneratedText?,
+    syncTextTask: GenerationTaskSummary?,
+    syncTextLaunch: SyncTextLaunchUiState?,
     sleepTimer: SleepTimerState,
     isCollected: Boolean,
     onPlayPause: () -> Unit,
@@ -459,20 +473,24 @@ private fun NormalPlayer(
     onOpenSources: () -> Unit,
     onRelinkMedia: () -> Unit,
     onToggleCollected: () -> Unit,
-    onOpenQueue: () -> Unit,
     onQueueSelect: (Int) -> Unit,
     onQueueMove: (Int, Int) -> Unit,
     onQueueRemove: (Int) -> Unit,
     onManageTextTracks: () -> Unit,
-    syncTextStatus: String?,
+    onGenerateSyncText: () -> Unit,
+    onTranslateSyncText: () -> Unit,
+    onCancelSyncText: () -> Unit,
+    onRetrySyncText: () -> Unit,
+    onAllowMeteredSyncText: () -> Unit,
     onEnterGlow: () -> Unit,
-    onEnterCalibration: () -> Unit,
-    onSubtitleOffsetChanged: (Long) -> Unit,
     onShowTimer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = subtitleContext(primaryTimeline, cuePositionMs, currentCue)
     var queueVisible by rememberSaveable { mutableStateOf(false) }
+    val canTranslate =
+        generatedText?.targetTimeline == null &&
+            generatedText?.completeness == GeneratedResultCompleteness.Final
 
     Column(
         modifier =
@@ -481,74 +499,18 @@ private fun NormalPlayer(
                 .background(AppBackground)
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(horizontal = 20.dp, vertical = 8.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBackToLibrary) {
-                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回", tint = AppSecondaryText)
-            }
-            Text(
-                text = session.media.displayTitle,
-                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                color = AppPrimaryText,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            IconButton(onClick = onOpenSources) {
-                Icon(Icons.Outlined.Add, contentDescription = "添加内容", tint = AppSecondaryText)
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onToggleCollected) {
-                Text(
-                    text = if (isCollected) "移出内容" else "加入内容",
-                    color = if (isCollected) AppMutedText else AppSecondaryText,
-                    fontSize = 12.sp,
-                )
-            }
-            TextButton(onClick = onManageTextTracks) {
-                Text(
-                    text =
-                        when {
-                            hasPrimaryText && hasSecondaryText ->
-                                "字幕 · 主 / 次"
-                            hasPrimaryText || hasSecondaryText ->
-                                "字幕 · 1 轨"
-                            else -> "字幕"
-                        },
-                    color = AppSecondaryText,
-                    fontSize = 12.sp,
-                )
-            }
-            TextButton(onClick = onOpenQueue) {
-                Text(
-                    text = "播放列表",
-                    color = AppMutedText,
-                    fontSize = 12.sp,
-                )
-            }
-        }
-
-        if (syncTextStatus != null) {
-            Text(
-                "同步文字 · $syncTextStatus",
-                color = if (syncTextStatus == "失败") AppError else AppAccent,
-                fontSize = 11.sp,
-                modifier = Modifier.align(Alignment.CenterHorizontally).padding(vertical = 8.dp),
-            )
-        }
+        PlayerHeader(
+            title = session.media.displayTitle,
+            artist = session.media.displayArtist,
+            isCollected = isCollected,
+            onBack = onBackToLibrary,
+            onOpenSyncText = onManageTextTracks,
+            onToggleCollected = onToggleCollected,
+            onAddContent = onOpenSources,
+            onRelinkMedia = onRelinkMedia,
+        )
 
         if (playback.playbackState == Player.STATE_BUFFERING) {
             LinearProgressIndicator(
@@ -560,68 +522,25 @@ private fun NormalPlayer(
             Spacer(modifier = Modifier.height(4.dp))
         }
 
-        Column(
-            modifier =
-                Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            if (!hasPrimaryText && !hasSecondaryText) {
-                Text(
-                    text = "当前会话没有字幕",
-                    color = AppSecondaryText,
-                    fontSize = 15.sp,
-                )
-                Text(
-                    text = "仍可进入纯黑微光",
-                    color = AppMutedText,
-                    fontSize = 12.sp,
-                )
-                TextButton(onClick = onManageTextTracks) {
-                    Text("添加或选择字幕", color = AppSecondaryText)
-                }
-            } else if (hasPrimaryText) {
-                CueText(
-                    text = context.previous?.text.orEmpty(),
-                    color = AppMutedText,
-                    fontSize = 15,
-                    maxLines = 3,
-                )
-                Spacer(modifier = Modifier.height(24.dp))
-                CueText(
-                    text = primaryText.orEmpty(),
-                    color = AppPrimaryText,
-                    fontSize = 26,
-                    maxLines = 6,
-                )
-                if (hasSecondaryText) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    CueText(
-                        text = secondaryText.orEmpty(),
-                        color = AppSecondaryText,
-                        fontSize = 17,
-                        maxLines = 4,
-                    )
-                }
-                Spacer(modifier = Modifier.height(24.dp))
-                CueText(
-                    text = context.next?.text.orEmpty(),
-                    color = AppMutedText,
-                    fontSize = 15,
-                    maxLines = 3,
-                )
-            } else {
-                CueText(
-                    text = secondaryText.orEmpty(),
-                    color = AppPrimaryText,
-                    fontSize = 24,
-                    maxLines = 6,
-                )
-            }
-        }
+        SubtitleStage(
+            previousText = context.previous?.text,
+            primaryText = primaryText,
+            secondaryText = secondaryText,
+            nextText = context.next?.text,
+            hasPrimaryText = hasPrimaryText,
+            hasSecondaryText = hasSecondaryText,
+            hasGeneratedText = generatedText != null,
+            hasPartialGeneratedText = generatedText?.completeness == GeneratedResultCompleteness.Partial,
+            canTranslate = canTranslate,
+            task = syncTextTask,
+            launch = syncTextLaunch,
+            onGenerate = onGenerateSyncText,
+            onTranslate = onTranslateSyncText,
+            onCancel = onCancelSyncText,
+            onRetry = onRetrySyncText,
+            onAllowMetered = onAllowMeteredSyncText,
+            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
+        )
 
         playback.errorMessage?.let { message ->
             Column(
@@ -643,15 +562,11 @@ private fun NormalPlayer(
         PlaybackControls(
             player = player,
             playback = playback,
-            subtitleOffsetMs = session.subtitleOffsetMs,
-            subtitleControlsEnabled =
-                session.generatedText != null || session.subtitle != null || session.secondarySubtitle != null,
             contentColor = AppPrimaryText,
             secondaryColor = AppSecondaryText,
             accentColor = AppAccent,
             trackColor = AppSurfaceRaised,
             onPlayPause = onPlayPause,
-            onSubtitleOffsetChanged = onSubtitleOffsetChanged,
         )
 
         PlayerOptions(
@@ -663,13 +578,11 @@ private fun NormalPlayer(
         )
 
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
         ) {
             OutlinedButton(
                 onClick = onEnterGlow,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                 border = BorderStroke(1.dp, AppAccent),
                 colors =
                     ButtonDefaults.outlinedButtonColors(
@@ -677,24 +590,16 @@ private fun NormalPlayer(
                         contentColor = AppAccent,
                     ),
             ) {
-                Text(
-                    text =
-                        if (!hasPrimaryText && !hasSecondaryText) {
-                            "无字幕 · 进入微光"
-                        } else {
-                            "进入微光"
-                        },
-                    color = AppAccent,
-                )
-            }
-            TextButton(onClick = onEnterCalibration) {
-                Text("校准", color = AppMutedText)
+                Icon(Icons.Outlined.DarkMode, contentDescription = null, tint = AppAccent)
+                Spacer(Modifier.size(8.dp))
+                Text("进入微光", color = AppAccent)
             }
         }
     }
 
     if (queueVisible) {
         QueueDialog(
+            player = player,
             playback = playback,
             onSelect = onQueueSelect,
             onMove = onQueueMove,
@@ -712,82 +617,20 @@ private fun TextTrackDialog(
     onRestoreAutomatic: (TextTrackSlot) -> Unit,
     onAddTrack: (TextTrackSlot) -> Unit,
     generatedText: LoadedGeneratedText?,
-    syncTextTask: GenerationTaskSummary?,
-    onGenerateSyncText: () -> Unit,
-    onTranslateSyncText: () -> Unit,
-    onCancelSyncText: () -> Unit,
-    onRetrySyncText: () -> Unit,
-    onAllowMeteredSyncText: () -> Unit,
+    subtitleOffsetMs: Long,
+    onSubtitleOffsetChanged: (Long) -> Unit,
     onPresentationModeChanged: (String, TextPresentationMode) -> Unit,
 ) {
     val tracks = contentUnit?.timedTextTracks.orEmpty()
     val selection = contentUnit?.activeText ?: ActiveTextSelection()
     val primary = tracks.firstOrNull { it.stableId == selection.primaryTrackId }
     val secondary = tracks.firstOrNull { it.stableId == selection.secondaryTrackId }
+    var timingVisible by rememberSaveable { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("同步文字", color = AppPrimaryText) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                val productStatus =
-                    generationProductStatus(
-                        syncTextTask,
-                        hasGeneratedText = generatedText != null,
-                        hasPartialText =
-                            generatedText?.completeness ==
-                                io.github.zvensmoluya.vortexcue.synctext.GeneratedResultCompleteness.Partial,
-                    )
-                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    TextButton(
-                        onClick = onGenerateSyncText,
-                        enabled = syncTextTask == null || syncTextTask.state == GenerationTaskState.Completed,
-                    ) {
-                        Text("生成", color = AppAccent, fontSize = 12.sp)
-                    }
-                    if (
-                        generatedText?.targetTimeline == null &&
-                        generatedText?.completeness == io.github.zvensmoluya.vortexcue.synctext.GeneratedResultCompleteness.Final
-                    ) {
-                        TextButton(
-                            onClick = onTranslateSyncText,
-                            enabled = syncTextTask == null || syncTextTask.state == GenerationTaskState.Completed,
-                        ) {
-                            Text("翻译", color = AppAccent, fontSize = 12.sp)
-                        }
-                    }
-                    if (productStatus != null) {
-                        val failed = productStatus.contains("失败")
-                        val paused = productStatus.contains("已暂停")
-                        val waitingForMeteredPermission =
-                            syncTextTask?.networkWaitReason == GenerationNetworkWaitReason.MeteredPermissionRequired
-                        Text(
-                            productStatus,
-                            color = if (failed) AppError else AppAccent,
-                            fontSize = 12.sp,
-                            modifier = Modifier.align(Alignment.CenterVertically),
-                        )
-                        if (productStatus != "完成") {
-                            val action =
-                                when {
-                                    waitingForMeteredPermission -> onAllowMeteredSyncText
-                                    failed || paused -> onRetrySyncText
-                                    else -> onCancelSyncText
-                                }
-                            TextButton(onClick = action) {
-                                Text(
-                                    when {
-                                        waitingForMeteredPermission -> "允许本次"
-                                        failed -> "重试"
-                                        paused -> "继续"
-                                        else -> "暂停"
-                                    },
-                                    color = AppSecondaryText,
-                                    fontSize = 12.sp,
-                                )
-                            }
-                        }
-                    }
-                }
                 if (generatedText?.targetTimeline != null) {
                     Text("生成结果展示", color = AppMutedText, fontSize = 11.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -873,6 +716,36 @@ private fun TextTrackDialog(
                         }
                     }
                 }
+                TextButton(onClick = { timingVisible = !timingVisible }) {
+                    Text(
+                        if (subtitleOffsetMs == 0L) "时间偏移" else "时间偏移 ${formatOffset(subtitleOffsetMs)}",
+                        color = AppMutedText,
+                        fontSize = 11.sp,
+                    )
+                }
+                if (timingVisible) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(
+                            onClick = {
+                                onSubtitleOffsetChanged((subtitleOffsetMs - 500L).coerceAtLeast(-60_000L))
+                            },
+                        ) {
+                            Icon(Icons.Outlined.Remove, contentDescription = "字幕提前 0.5 秒", tint = AppSecondaryText)
+                        }
+                        Text(formatOffset(subtitleOffsetMs), color = AppSecondaryText, fontSize = 12.sp)
+                        IconButton(
+                            onClick = {
+                                onSubtitleOffsetChanged((subtitleOffsetMs + 500L).coerceAtMost(60_000L))
+                            },
+                        ) {
+                            Icon(Icons.Outlined.Add, contentDescription = "字幕延后 0.5 秒", tint = AppSecondaryText)
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
@@ -880,6 +753,284 @@ private fun TextTrackDialog(
         },
         containerColor = AppSurfaceRaised,
     )
+}
+
+@Composable
+internal fun SyncTextProgressStatus(
+    task: GenerationTaskSummary?,
+    launch: SyncTextLaunchUiState?,
+    modifier: Modifier = Modifier,
+) {
+    val presentation = syncTextProgressPresentation(task, launch) ?: return
+    Row(
+        modifier = modifier.heightIn(min = 52.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+    ) {
+        Box(modifier = Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+            val progress = presentation.progress
+            if (progress == null) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(36.dp),
+                    color = AppAccent,
+                    strokeWidth = 3.dp,
+                )
+            } else {
+                CircularProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.size(40.dp),
+                    color = AppAccent,
+                    strokeWidth = 3.dp,
+                    trackColor = AppHairline,
+                )
+                Text(
+                    "${(progress * 100).roundToInt()}%",
+                    color = AppPrimaryText,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+        Text(
+            presentation.label,
+            color = AppPrimaryText,
+            fontSize = 13.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun PlayerHeader(
+    title: String,
+    artist: String?,
+    isCollected: Boolean,
+    onBack: () -> Unit,
+    onOpenSyncText: () -> Unit,
+    onToggleCollected: () -> Unit,
+    onAddContent: () -> Unit,
+    onRelinkMedia: () -> Unit,
+) {
+    var menuVisible by rememberSaveable { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onBack) {
+            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回", tint = AppSecondaryText)
+        }
+        Column(
+            modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = title,
+                color = AppPrimaryText,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            artist?.takeIf(String::isNotBlank)?.let {
+                Text(
+                    text = it,
+                    color = AppMutedText,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Box {
+            IconButton(onClick = { menuVisible = true }) {
+                Icon(Icons.Outlined.MoreVert, contentDescription = "更多操作", tint = AppSecondaryText)
+            }
+            DropdownMenu(expanded = menuVisible, onDismissRequest = { menuVisible = false }) {
+                DropdownMenuItem(
+                    text = { Text("同步文字") },
+                    leadingIcon = { Icon(Icons.Outlined.Subtitles, contentDescription = null) },
+                    onClick = {
+                        menuVisible = false
+                        onOpenSyncText()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(if (isCollected) "移出内容" else "加入内容") },
+                    onClick = {
+                        menuVisible = false
+                        onToggleCollected()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("添加其他内容") },
+                    leadingIcon = { Icon(Icons.Outlined.Add, contentDescription = null) },
+                    onClick = {
+                        menuVisible = false
+                        onAddContent()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("重新选择媒体") },
+                    onClick = {
+                        menuVisible = false
+                        onRelinkMedia()
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun SubtitleStage(
+    previousText: String?,
+    primaryText: String?,
+    secondaryText: String?,
+    nextText: String?,
+    hasPrimaryText: Boolean,
+    hasSecondaryText: Boolean,
+    hasGeneratedText: Boolean,
+    hasPartialGeneratedText: Boolean,
+    canTranslate: Boolean,
+    task: GenerationTaskSummary?,
+    launch: SyncTextLaunchUiState?,
+    onGenerate: () -> Unit,
+    onTranslate: () -> Unit,
+    onCancel: () -> Unit,
+    onRetry: () -> Unit,
+    onAllowMetered: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val hasText = hasPrimaryText || hasSecondaryText
+    val progress = syncTextProgressPresentation(task, launch)
+    val productStatus =
+        generationProductStatus(
+            task,
+            hasGeneratedText = hasGeneratedText,
+            hasPartialText = hasPartialGeneratedText,
+        )
+    val retryable = productStatus?.contains("失败") == true || productStatus?.contains("已暂停") == true
+    val taskFooterVisible = progress != null || retryable || canTranslate
+
+    BoxWithConstraints(modifier = modifier) {
+        val compactText = maxHeight < 380.dp || LocalDensity.current.fontScale > 1.3f
+        if (hasText) {
+            Column(
+                modifier = Modifier.align(Alignment.Center).fillMaxWidth().padding(bottom = if (taskFooterVisible) 56.dp else 0.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                if (hasPrimaryText) {
+                    if (!compactText) {
+                        CueText(previousText.orEmpty(), AppMutedText, fontSize = 15, maxLines = 3)
+                        Spacer(modifier = Modifier.height(24.dp))
+                    }
+                    CueText(primaryText.orEmpty(), AppPrimaryText, fontSize = 26, maxLines = if (compactText) 3 else 6)
+                    if (hasSecondaryText) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        CueText(
+                            secondaryText.orEmpty(),
+                            AppSecondaryText,
+                            fontSize = 17,
+                            maxLines = if (compactText) 2 else 4,
+                        )
+                    }
+                    if (!compactText) {
+                        Spacer(modifier = Modifier.height(24.dp))
+                        CueText(nextText.orEmpty(), AppMutedText, fontSize = 15, maxLines = 3)
+                    }
+                } else {
+                    CueText(
+                        secondaryText.orEmpty(),
+                        AppPrimaryText,
+                        fontSize = 24,
+                        maxLines = if (compactText) 3 else 6,
+                    )
+                }
+            }
+        }
+
+        val taskModifier =
+            if (hasText) {
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+            } else {
+                Modifier.align(Alignment.Center).fillMaxWidth()
+            }
+        when {
+            progress != null ->
+                SyncTextTaskIndicator(
+                    task = task,
+                    launch = launch,
+                    onCancel = onCancel,
+                    onAllowMetered = onAllowMetered,
+                    modifier = taskModifier,
+                )
+            retryable ->
+                SyncTextTerminalStatus(
+                    status = requireNotNull(productStatus),
+                    onRetry = onRetry,
+                    modifier = taskModifier,
+                )
+            !hasText ->
+                TextButton(onClick = onGenerate, modifier = Modifier.align(Alignment.Center)) {
+                    Icon(Icons.Outlined.Subtitles, contentDescription = null, tint = AppAccent)
+                    Spacer(Modifier.size(8.dp))
+                    Text("生成同步文字", color = AppAccent)
+                }
+            canTranslate && launch == null && (task == null || task.state == GenerationTaskState.Completed) ->
+                IconButton(
+                    onClick = onTranslate,
+                    modifier = Modifier.align(Alignment.BottomEnd).size(48.dp),
+                ) {
+                    Icon(Icons.Outlined.Translate, contentDescription = "翻译同步文字", tint = AppAccent)
+                }
+        }
+    }
+}
+
+@Composable
+private fun SyncTextTaskIndicator(
+    task: GenerationTaskSummary?,
+    launch: SyncTextLaunchUiState?,
+    onCancel: () -> Unit,
+    onAllowMetered: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        if (launch == null) Spacer(Modifier.size(48.dp))
+        SyncTextProgressStatus(task = task, launch = launch, modifier = Modifier.weight(1f))
+        if (launch == null) {
+            if (task?.networkWaitReason == GenerationNetworkWaitReason.MeteredPermissionRequired) {
+                TextButton(onClick = onAllowMetered) {
+                    Text("允许本次", color = AppSecondaryText, fontSize = 12.sp)
+                }
+            } else {
+                IconButton(onClick = onCancel) {
+                    Icon(Icons.Outlined.Pause, contentDescription = "暂停同步文字", tint = AppSecondaryText)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SyncTextTerminalStatus(
+    status: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.heightIn(min = 48.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(status, color = if (status.contains("失败")) AppError else AppSecondaryText, fontSize = 12.sp)
+        IconButton(onClick = onRetry) {
+            Icon(Icons.Outlined.Refresh, contentDescription = "继续同步文字", tint = AppSecondaryText)
+        }
+    }
 }
 
 @Composable
@@ -1046,7 +1197,6 @@ private fun GlowPlayer(
     onExitGlow: () -> Unit,
     onRelinkMedia: () -> Unit,
     onManageTextTracks: () -> Unit,
-    onSubtitleOffsetChanged: (Long) -> Unit,
     onGestureHintSeen: () -> Unit,
     onShowTimer: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1277,15 +1427,11 @@ private fun GlowPlayer(
                 PlaybackControls(
                     player = player,
                     playback = playback,
-                    subtitleOffsetMs = session.subtitleOffsetMs,
-                    subtitleControlsEnabled =
-                        session.generatedText != null || session.subtitle != null || session.secondarySubtitle != null,
                     contentColor = controlColor,
                     secondaryColor = controlColor.copy(alpha = 0.72f),
                     accentColor = controlColor,
                     trackColor = GlowTrackColor,
                     onPlayPause = onPlayPause,
-                    onSubtitleOffsetChanged = onSubtitleOffsetChanged,
                     onInteraction = ::showControls,
                 )
             }
@@ -1316,14 +1462,11 @@ private fun CueText(
 private fun PlaybackControls(
     player: Player,
     playback: PlaybackSnapshot,
-    subtitleOffsetMs: Long,
-    subtitleControlsEnabled: Boolean,
     contentColor: Color,
     secondaryColor: Color,
     accentColor: Color,
     trackColor: Color,
     onPlayPause: () -> Unit,
-    onSubtitleOffsetChanged: (Long) -> Unit,
     onInteraction: () -> Unit = {},
 ) {
     val sliderColors =
@@ -1384,6 +1527,14 @@ private fun PlaybackControls(
         IconButton(
             onClick = {
                 onInteraction()
+                player.seekWithinMedia(-10_000L)
+            },
+        ) {
+            Icon(Icons.Outlined.Replay10, contentDescription = "后退 10 秒", tint = contentColor)
+        }
+        IconButton(
+            onClick = {
+                onInteraction()
                 onPlayPause()
             },
             modifier = Modifier.size(56.dp),
@@ -1402,6 +1553,14 @@ private fun PlaybackControls(
         IconButton(
             onClick = {
                 onInteraction()
+                player.seekWithinMedia(10_000L)
+            },
+        ) {
+            Icon(Icons.Outlined.Forward10, contentDescription = "前进 10 秒", tint = contentColor)
+        }
+        IconButton(
+            onClick = {
+                onInteraction()
                 player.seekToNextMediaItem()
             },
             enabled = playback.hasNext,
@@ -1411,63 +1570,6 @@ private fun PlaybackControls(
                 contentDescription = "下一项",
                 tint = if (playback.hasNext) contentColor else trackColor,
             )
-        }
-    }
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(
-            onClick = {
-                onInteraction()
-                player.seekWithinMedia(-10_000L)
-            },
-        ) {
-            Icon(Icons.Outlined.Replay10, contentDescription = "后退 10 秒", tint = contentColor)
-        }
-        TextButton(
-            onClick = {
-                onInteraction()
-                player.setPlaybackSpeed(nextPlaybackSpeed(playback.speed))
-            },
-        ) {
-            Text(formatSpeed(playback.speed), color = contentColor)
-        }
-        IconButton(
-            onClick = {
-                onInteraction()
-                player.seekWithinMedia(10_000L)
-            },
-        ) {
-            Icon(Icons.Outlined.Forward10, contentDescription = "前进 10 秒", tint = contentColor)
-        }
-    }
-
-    if (subtitleControlsEnabled) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(
-                onClick = {
-                    onInteraction()
-                    onSubtitleOffsetChanged((subtitleOffsetMs - 500L).coerceAtLeast(-60_000L))
-                },
-            ) {
-                Icon(Icons.Outlined.Remove, contentDescription = "字幕偏移减少 0.5 秒", tint = contentColor)
-            }
-            Text("字幕 ${formatOffset(subtitleOffsetMs)}", color = secondaryColor, fontSize = 11.sp)
-            IconButton(
-                onClick = {
-                    onInteraction()
-                    onSubtitleOffsetChanged((subtitleOffsetMs + 500L).coerceAtMost(60_000L))
-                },
-            ) {
-                Icon(Icons.Outlined.Add, contentDescription = "字幕偏移增加 0.5 秒", tint = contentColor)
-            }
         }
     }
 }
@@ -1482,21 +1584,17 @@ private fun PlayerOptions(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = { player.shuffleModeEnabled = !playback.shuffleEnabled }) {
-            Icon(
-                Icons.Outlined.Shuffle,
-                contentDescription = if (playback.shuffleEnabled) "关闭随机播放" else "开启随机播放",
-                tint = if (playback.shuffleEnabled) AppAccent else AppMutedText,
-            )
+        TextButton(onClick = { player.setPlaybackSpeed(nextPlaybackSpeed(playback.speed)) }) {
+            Text(formatSpeed(playback.speed), color = AppSecondaryText)
         }
-        IconButton(onClick = { player.repeatMode = nextRepeatMode(playback.repeatMode) }) {
+        IconButton(onClick = onShowTimer) {
             Icon(
-                if (playback.repeatMode == Player.REPEAT_MODE_ONE) Icons.Outlined.RepeatOne else Icons.Outlined.Repeat,
-                contentDescription = repeatModeLabel(playback.repeatMode),
-                tint = if (playback.repeatMode == Player.REPEAT_MODE_OFF) AppMutedText else AppAccent,
+                Icons.Outlined.Timer,
+                contentDescription = "睡眠定时：${sleepTimerLabel(sleepTimer)}",
+                tint = if (sleepTimer.isActive) AppAccent else AppMutedText,
             )
         }
         IconButton(onClick = onShowQueue) {
@@ -1506,18 +1604,12 @@ private fun PlayerOptions(
                 tint = AppMutedText,
             )
         }
-        IconButton(onClick = onShowTimer) {
-            Icon(
-                Icons.Outlined.Timer,
-                contentDescription = "睡眠定时：${sleepTimerLabel(sleepTimer)}",
-                tint = if (sleepTimer.isActive) AppAccent else AppMutedText,
-            )
-        }
     }
 }
 
 @Composable
 private fun QueueDialog(
+    player: Player,
     playback: PlaybackSnapshot,
     onSelect: (Int) -> Unit,
     onMove: (Int, Int) -> Unit,
@@ -1528,22 +1620,48 @@ private fun QueueDialog(
         onDismissRequest = onDismiss,
         title = { Text("播放列表", color = AppPrimaryText) },
         text = {
-            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
-                itemsIndexed(
-                    items = playback.queue,
-                    key = { index, item -> "queue-$index-${item.mediaId}" },
-                ) { index, item ->
-                    QueueItemRow(
-                        itemKey = item.mediaId,
-                        index = index,
-                        itemCount = playback.queue.size,
-                        title = item.title,
-                        artist = item.artist,
-                        isCurrent = index == playback.currentIndex,
-                        onSelect = { onSelect(index) },
-                        onMove = onMove,
-                        onRemove = { onRemove(index) },
-                    )
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = { player.shuffleModeEnabled = !playback.shuffleEnabled }) {
+                        Icon(
+                            Icons.Outlined.Shuffle,
+                            contentDescription = if (playback.shuffleEnabled) "关闭随机播放" else "开启随机播放",
+                            tint = if (playback.shuffleEnabled) AppAccent else AppMutedText,
+                        )
+                    }
+                    IconButton(onClick = { player.repeatMode = nextRepeatMode(playback.repeatMode) }) {
+                        Icon(
+                            if (playback.repeatMode == Player.REPEAT_MODE_ONE) {
+                                Icons.Outlined.RepeatOne
+                            } else {
+                                Icons.Outlined.Repeat
+                            },
+                            contentDescription = repeatModeLabel(playback.repeatMode),
+                            tint = if (playback.repeatMode == Player.REPEAT_MODE_OFF) AppMutedText else AppAccent,
+                        )
+                    }
+                }
+                LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
+                    itemsIndexed(
+                        items = playback.queue,
+                        key = { index, item -> "queue-$index-${item.mediaId}" },
+                    ) { index, item ->
+                        QueueItemRow(
+                            itemKey = item.mediaId,
+                            index = index,
+                            itemCount = playback.queue.size,
+                            title = item.title,
+                            artist = item.artist,
+                            isCurrent = index == playback.currentIndex,
+                            onSelect = { onSelect(index) },
+                            onMove = onMove,
+                            onRemove = { onRemove(index) },
+                        )
+                    }
                 }
             }
         },

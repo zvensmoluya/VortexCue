@@ -40,9 +40,56 @@ class GenerationProductStatusTest {
         )
     }
 
+    @Test
+    fun presentsLaunchBeforeTaskProgressIsAvailable() {
+        assertEquals(
+            SyncTextProgressPresentation("正在启动语音识别", progress = null),
+            syncTextProgressPresentation(
+                task = null,
+                launch = SyncTextLaunchUiState("content", SyncTextLaunchKind.Generation),
+            ),
+        )
+        assertEquals(
+            SyncTextProgressPresentation("正在启动翻译", progress = null),
+            syncTextProgressPresentation(
+                task = task(GenerationTaskState.Completed),
+                launch = SyncTextLaunchUiState("content", SyncTextLaunchKind.Translation),
+            ),
+        )
+    }
+
+    @Test
+    fun presentsDeterminateTaskProgressAndWaitReason() {
+        assertEquals(
+            SyncTextProgressPresentation("正在语音识别", progress = 0.42f),
+            syncTextProgressPresentation(
+                task(
+                    state = GenerationTaskState.Running,
+                    stage = GenerationStage.RecognizingSpeech,
+                    progress = 0.42f,
+                ),
+                launch = null,
+            ),
+        )
+        assertEquals(
+            SyncTextProgressPresentation("等待网络", progress = 0.6f),
+            syncTextProgressPresentation(
+                task(
+                    state = GenerationTaskState.Waiting,
+                    networkWaitReason = GenerationNetworkWaitReason.Unavailable,
+                    progress = 0.6f,
+                ),
+                launch = null,
+            ),
+        )
+        assertNull(syncTextProgressPresentation(task(GenerationTaskState.Completed), launch = null))
+    }
+
     private fun task(
         state: GenerationTaskState,
         networkWaitReason: GenerationNetworkWaitReason? = null,
+        stage: GenerationStage = GenerationStage.Queued,
+        progress: Float = 0f,
     ) =
         GenerationTaskSummary(
             taskId = "task",
@@ -51,8 +98,8 @@ class GenerationProductStatusTest {
             kind = GenerationTaskKind.SourceGeneration,
             queuePosition = 0,
             state = state,
-            stage = GenerationStage.Queued,
-            progress = 0f,
+            stage = stage,
+            progress = progress,
             targetLanguage = "zh-CN",
             waitingForNetwork = networkWaitReason != null,
             networkWaitReason = networkWaitReason,

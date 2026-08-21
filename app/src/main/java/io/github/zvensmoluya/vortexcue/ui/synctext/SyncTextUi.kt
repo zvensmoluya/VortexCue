@@ -1154,12 +1154,22 @@ private fun GenerationInputDialog(
                     overflow = TextOverflow.Ellipsis,
                 )
                 if (state.inspectingAudioTracks || state.busy) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = AppAccent)
-                    Text(
-                        if (state.inspectingAudioTracks) "正在读取音轨" else "正在开始生成",
-                        color = AppSecondaryText,
-                        fontSize = 12.sp,
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = AppAccent,
+                            strokeWidth = 2.5.dp,
+                        )
+                        Text(
+                            if (state.inspectingAudioTracks) "正在读取音轨" else "正在启动语音识别",
+                            color = AppSecondaryText,
+                            fontSize = 12.sp,
+                        )
+                    }
                 }
                 state.audioInspectionError?.let { Text(it, color = AppError, fontSize = 12.sp) }
                 if (!state.inspectingAudioTracks) {
