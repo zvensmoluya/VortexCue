@@ -803,6 +803,11 @@ internal fun VortexCueApp(
                             dispatchSyncTextAction(SyncTextAction.RetryForContent(id))
                         }
                     },
+                    onAllowMeteredSyncText = {
+                        currentContentId?.let { id ->
+                            dispatchSyncTextAction(SyncTextAction.AllowMeteredNetworkForContent(id))
+                        }
+                    },
                     onGeneratedPresentationModeChanged = { slotId, mode ->
                         dispatchSyncTextAction(SyncTextAction.SetPresentationMode(slotId, mode))
                     },

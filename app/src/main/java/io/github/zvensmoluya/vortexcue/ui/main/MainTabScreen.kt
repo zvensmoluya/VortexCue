@@ -389,6 +389,10 @@ internal fun MainTabScreen(
                     selectedItem = null
                     onSyncTextAction(SyncTextAction.RetryForContent(item.contentId))
                 },
+                onAllowMeteredSync = {
+                    selectedItem = null
+                    onSyncTextAction(SyncTextAction.AllowMeteredNetworkForContent(item.contentId))
+                },
             )
         }
     }
@@ -827,6 +831,7 @@ private fun ItemActions(
     onIgnore: () -> Unit,
     onCancelSync: () -> Unit,
     onRetrySync: () -> Unit,
+    onAllowMeteredSync: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).navigationBarsPadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(item.media.displayTitle, color = AppPrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 12.dp))
@@ -835,10 +840,16 @@ private fun ItemActions(
         ActionButton("移动到文件夹", Icons.Outlined.Folder, onMove)
         ActionButton("同步文字", Icons.Outlined.Translate, onSync)
         task?.let {
-            if (it.needsAttention || it.state == io.github.zvensmoluya.vortexcue.synctext.GenerationTaskState.Paused) {
+            if (
+                it.networkWaitReason ==
+                io.github.zvensmoluya.vortexcue.synctext.GenerationNetworkWaitReason.MeteredPermissionRequired
+            ) {
+                ActionButton("允许本次使用计费网络", Icons.Outlined.Refresh, onAllowMeteredSync)
+            } else if (it.needsAttention || it.state == io.github.zvensmoluya.vortexcue.synctext.GenerationTaskState.Paused) {
                 ActionButton("继续同步文字", Icons.Outlined.Refresh, onRetrySync)
+            } else {
+                ActionButton("暂停同步文字", Icons.Outlined.Close, onCancelSync)
             }
-            else ActionButton("暂停同步文字", Icons.Outlined.Close, onCancelSync)
         }
         ActionButton("移出内容", Icons.Outlined.DeleteOutline, onIgnore)
         Spacer(Modifier.height(16.dp))

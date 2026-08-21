@@ -4,6 +4,7 @@ import io.github.zvensmoluya.vortexcue.synctext.GenerationStage
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskState
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskSummary
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskKind
+import io.github.zvensmoluya.vortexcue.synctext.GenerationNetworkWaitReason
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -24,7 +25,25 @@ class GenerationProductStatusTest {
         assertNull(generationProductStatus(task(GenerationTaskState.Deleted)))
     }
 
-    private fun task(state: GenerationTaskState) =
+    @Test
+    fun exposesNetworkWaitReason() {
+        assertEquals(
+            "等待计费网络许可",
+            generationProductStatus(
+                task(GenerationTaskState.Waiting, GenerationNetworkWaitReason.MeteredPermissionRequired),
+                hasGeneratedText = true,
+            ),
+        )
+        assertEquals(
+            "等待网络",
+            generationProductStatus(task(GenerationTaskState.Waiting, GenerationNetworkWaitReason.Unavailable)),
+        )
+    }
+
+    private fun task(
+        state: GenerationTaskState,
+        networkWaitReason: GenerationNetworkWaitReason? = null,
+    ) =
         GenerationTaskSummary(
             taskId = "task",
             contentId = "content",
@@ -35,7 +54,8 @@ class GenerationProductStatusTest {
             stage = GenerationStage.Queued,
             progress = 0f,
             targetLanguage = "zh-CN",
-            waitingForNetwork = false,
+            waitingForNetwork = networkWaitReason != null,
+            networkWaitReason = networkWaitReason,
             paused = state == GenerationTaskState.Paused,
             needsAttention = state == GenerationTaskState.NeedsAttention,
             blockedByScheme = false,

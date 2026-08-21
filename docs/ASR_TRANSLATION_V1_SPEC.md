@@ -65,7 +65,7 @@ V1 不包含：
 
 ## 3. 持久化、Revision 与私有资产
 
-Room v6 使用关系表表达 credential metadata、scheme、task、不可变 task snapshot、attempt、ASR window、translation batch、request attempt、generated slot / result、runner lease、queue control、Artifact metadata、Timeline revision 和 revision-artifact manifest。不得重新引入聚合 JSON 快照或把完整 cue 正文存入 Room。
+Room v7 使用关系表表达 credential metadata、scheme、task、不可变 task snapshot、attempt、ASR window、translation batch、request attempt、generated slot / result、runner lease、queue control、Artifact metadata、Timeline revision 和 revision-artifact manifest。任务表额外保存可变的计费网络许可和当前网络等待原因，不通过改写 immutable snapshot 表达运行期授权。不得重新引入聚合 JSON 快照或把完整 cue 正文存入 Room。
 
 正文统一保存到 `noBackupFilesDir/text_artifacts/<kind>/<prefix>/<artifactId>.bin`。Artifact ID 是完整确定性 envelope 的 SHA-256；envelope 包含 magic、schema / codec / canonicalizer version、kind 和长度前缀 payload。decoder 必须拒绝未知版本、损坏、截断和 metadata/hash 不一致。SRT / VTT / ASS / LRC 仅是导入边界格式，不再作为内部 checkpoint 或 result 协议。
 
@@ -129,7 +129,7 @@ Endpoint 可以使用界面模板或自定义 HTTPS 地址。Model 只允许手�
 - OpenRouter ASR 的 base64 由流式 `RequestBody` 写出，不构造完整 base64 字符串；
 - 只显示上游真实返回的 usage / cost，不根据模型名估造价格。
 
-每个任务单独保存计费网络许可。提交前显示预计线上字节数、实际 Endpoint、模型和费用提示；无许可时计费网络只让该项等待，不影响其他可运行任务。
+每个任务单独保存计费网络许可。任务默认只使用非计费网络；检测到计费网络时只让该项进入明确的许可等待状态，不影响其他可运行任务。用户允许本次任务后持久化许可、清除等待原因并立即重新调度。
 
 ## 6. ASR 与媒体
 
@@ -138,7 +138,8 @@ Whisper 是主线 profile，Grok 使用相同窗口策略并明确标记实验�
 - 300 秒上传窗口；
 - 相邻窗口 3 秒 overlap，上传区间与结果所有权区间分离；
 - 单请求 base64 编码上限 24 MiB；
-- 失败后按约 150 / 75 秒继续二分，最小所有权窗口 8 秒；
+- 容量失败只允许把原始窗口二分一次为约 150 秒；子窗口不递归切分，再次容量失败按模型或供应商不兼容终止；
+- 限流、超时、连接错误或 5xx 只重试同一窗口，不触发切分；
 - ASR 最多并发 2，实际编码音频总在途不超过 32 MiB；
 - 限流、超时、连接错误或 5xx 后，本次 runner 自动降为并发 1；
 - PCM spool 最多保留两路在途和一路前视，暂停时删除未上传块。
@@ -149,7 +150,7 @@ Whisper 是主线 profile，Grok 使用相同窗口策略并明确标记实验�
 
 ## 7. 后台执行与阻塞
 
-API 34+ 使用一个覆盖整条队列的 UIDT Job；API 26-33 使用唯一前台 `CoroutineWorker`。两条路径通过 Room lease 保证全进程只有一个 runner，不复用 `PlaybackService`。
+API 34+ 使用一个覆盖整条队列的 UIDT Job；API 26-33 使用唯一前台 `CoroutineWorker`。两条路径通过 Room lease 保证全进程只有一个 runner，不复用 `PlaybackService`。UIDT 提交必须检查 `JobScheduler` 返回值；后台条件不允许提交时保留进程内 deferred 状态，并在 Activity 真正进入前台后重试。
 
 队列规则：
 
@@ -182,8 +183,8 @@ V1 UI 只增加方案编辑器、生成确认页、Home / Player 共用任务抽
 
 自动化验证至少覆盖：
 
-- 窗口完整所有权、overlap 去重、失败二分、并发字节预算；
-- 队列 lease、暂停 / 恢复、全局暂停、同方案阻塞与原子结果替换；
+- 窗口完整所有权、overlap 去重、原始窗口单次二分、子窗口容量失败终止、并发字节预算；
+- 队列 lease、暂停 / 恢复、全局暂停、计费网络授权、同方案阻塞与原子结果替换；
 - prompt hash、80 / 40 只读上下文、严格 ID、格式恢复、repair、通用语言与简中 policy；
 - 四种协议的 URL、认证头、请求结构、响应解析、usage、错误分类、重试、跨源重定向和脱敏；
 - Room 的不可变方案 snapshot、任务恢复、slot 替换、凭据引用约束、TTL prune；

@@ -325,8 +325,8 @@ class VortexDatabaseTest {
     }
 
     @Test
-    fun versionFiveIsDestructivelyRebuiltAsVersionSix() = runBlocking {
-        val path = temporaryFolder.root.resolve("migration-v5-v6.db").toPath()
+    fun versionSixIsDestructivelyRebuiltAsVersionSeven() = runBlocking {
+        val path = temporaryFolder.root.resolve("migration-v6-v7.db").toPath()
         val helper =
             MigrationTestHelper(
                 databasePath = path,
@@ -336,7 +336,7 @@ class VortexDatabaseTest {
                 databaseFactory = { VortexDatabase_Impl() },
                 autoMigrationSpecs = emptyList(),
             )
-        helper.createDatabase(5).use { connection ->
+        helper.createDatabase(6).use { connection ->
             connection.prepare(
                 "INSERT INTO content (content_id, created_at_ms, subtitle_offset_ms) VALUES ('old-content', 1, 0)",
             ).use { it.step() }

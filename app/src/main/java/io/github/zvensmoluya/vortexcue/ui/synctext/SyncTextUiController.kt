@@ -142,6 +142,8 @@ sealed interface SyncTextAction {
 
     data class RetryForContent(val contentId: String) : SyncTextAction
 
+    data class AllowMeteredNetworkForContent(val contentId: String) : SyncTextAction
+
     data class TranslateForContent(val contentId: String) : SyncTextAction
 }
 
@@ -253,6 +255,10 @@ class SyncTextUiController(
             is SyncTextAction.RetryForContent -> runAction {
                 repository.retryForContent(action.contentId)
                 "同步文字已重试"
+            }
+            is SyncTextAction.AllowMeteredNetworkForContent -> runAction {
+                repository.allowMeteredNetworkForContent(action.contentId)
+                "已允许本次任务使用计费网络"
             }
             is SyncTextAction.TranslateForContent -> runAction {
                 val source = requireNotNull(repository.currentSourceResult(action.contentId)) { "没有可翻译的源文字" }

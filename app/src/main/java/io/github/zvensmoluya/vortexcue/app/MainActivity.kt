@@ -82,6 +82,11 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    override fun onPostResume() {
+        super.onPostResume()
+        appContainer.syncTextScheduler.onAppForeground()
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) applySystemBars()

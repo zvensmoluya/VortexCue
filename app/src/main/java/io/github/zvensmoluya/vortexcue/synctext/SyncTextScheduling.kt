@@ -37,10 +37,22 @@ import kotlinx.coroutines.launch
 
 class AndroidSyncTextScheduler(context: Context) : SyncTextScheduler {
     private val appContext = context.applicationContext
+    private val uidtScheduleGate by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val scheduler = appContext.getSystemService(JobScheduler::class.java)
+            UidtScheduleGate(
+                hasPendingJob = { scheduler.getPendingJob(UidtJobId) != null },
+                submit = { scheduler.schedule(uidtJobInfo()) },
+                successCode = JobScheduler.RESULT_SUCCESS,
+            )
+        } else {
+            null
+        }
+    }
 
     override fun schedule() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            scheduleUidt()
+            uidtScheduleGate?.schedule()
         } else {
             val request =
                 OneTimeWorkRequestBuilder<SyncTextQueueWorker>()
@@ -51,24 +63,61 @@ class AndroidSyncTextScheduler(context: Context) : SyncTextScheduler {
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-    private fun scheduleUidt() {
-        val scheduler = appContext.getSystemService(JobScheduler::class.java)
-        if (scheduler.getPendingJob(UidtJobId) != null) return
-        val info =
-            JobInfo.Builder(UidtJobId, ComponentName(appContext, SyncTextUidtJobService::class.java))
-                .setUserInitiated(true)
-                .setPersisted(true)
-                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-                .setBackoffCriteria(30_000L, JobInfo.BACKOFF_POLICY_EXPONENTIAL)
-                .build()
-        scheduler.schedule(info)
+    fun onAppForeground() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            uidtScheduleGate?.retryDeferred()
+        }
     }
+
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private fun uidtJobInfo(): JobInfo =
+        JobInfo.Builder(UidtJobId, ComponentName(appContext, SyncTextUidtJobService::class.java))
+            .setUserInitiated(true)
+            .setPersisted(true)
+            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+            .setBackoffCriteria(30_000L, JobInfo.BACKOFF_POLICY_EXPONENTIAL)
+            .build()
 
     companion object {
         internal const val WorkName = "sync-text-queue"
         internal const val UidtJobId = 0x56545854
     }
+}
+
+internal class UidtScheduleGate(
+    private val hasPendingJob: () -> Boolean,
+    private val submit: () -> Int,
+    private val successCode: Int,
+) {
+    private var deferredUntilForeground = false
+
+    @Synchronized
+    fun schedule(): UidtScheduleOutcome {
+        val outcome =
+            try {
+                if (hasPendingJob()) {
+                    UidtScheduleOutcome.AlreadyScheduled
+                } else if (submit() == successCode) {
+                    UidtScheduleOutcome.Scheduled
+                } else {
+                    UidtScheduleOutcome.DeferredUntilForeground
+                }
+            } catch (_: RuntimeException) {
+                UidtScheduleOutcome.DeferredUntilForeground
+            }
+        deferredUntilForeground = outcome == UidtScheduleOutcome.DeferredUntilForeground
+        return outcome
+    }
+
+    @Synchronized
+    fun retryDeferred(): UidtScheduleOutcome? =
+        if (deferredUntilForeground) schedule() else null
+}
+
+internal enum class UidtScheduleOutcome {
+    Scheduled,
+    AlreadyScheduled,
+    DeferredUntilForeground,
 }
 
 class SyncTextQueueWorker(
@@ -79,7 +128,7 @@ class SyncTextQueueWorker(
         setForeground(notificationInfo())
         val container = applicationContext.appContainer
         container.syncTextTaskRunner.runUntilIdle()
-        return if (container.syncTextRepository.hasNetworkWaitingTasks()) Result.retry() else Result.success()
+        return if (container.syncTextRepository.hasRetryableNetworkWaitingTasks()) Result.retry() else Result.success()
     }
 
     override suspend fun getForegroundInfo(): ForegroundInfo = notificationInfo()
@@ -115,7 +164,7 @@ class SyncTextUidtJobService : JobService() {
             scope.launch {
                 val container = applicationContext.appContainer
                 container.syncTextTaskRunner.runUntilIdle()
-                jobFinished(params, container.syncTextRepository.hasNetworkWaitingTasks())
+                jobFinished(params, container.syncTextRepository.hasRetryableNetworkWaitingTasks())
             }
         return true
     }

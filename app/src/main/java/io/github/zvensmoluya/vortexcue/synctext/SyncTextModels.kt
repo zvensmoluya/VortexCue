@@ -216,6 +216,11 @@ enum class GenerationErrorCategory {
     Storage,
 }
 
+enum class GenerationNetworkWaitReason {
+    Unavailable,
+    MeteredPermissionRequired,
+}
+
 data class GenerationTaskSummary(
     val taskId: String,
     val contentId: String,
@@ -227,6 +232,7 @@ data class GenerationTaskSummary(
     val progress: Float,
     val targetLanguage: String?,
     val waitingForNetwork: Boolean,
+    val networkWaitReason: GenerationNetworkWaitReason? = null,
     val paused: Boolean,
     val needsAttention: Boolean,
     val blockedByScheme: Boolean,

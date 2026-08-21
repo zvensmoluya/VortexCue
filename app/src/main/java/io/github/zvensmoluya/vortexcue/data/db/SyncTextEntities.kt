@@ -127,6 +127,10 @@ data class GenerationTaskEntity(
     val targetLanguage: String?,
     @ColumnInfo(name = "waiting_for_network")
     val waitingForNetwork: Boolean,
+    @ColumnInfo(name = "metered_network_allowed", defaultValue = "0")
+    val meteredNetworkAllowed: Boolean = false,
+    @ColumnInfo(name = "network_wait_reason")
+    val networkWaitReason: String? = null,
     val paused: Boolean,
     @ColumnInfo(name = "needs_attention")
     val needsAttention: Boolean,

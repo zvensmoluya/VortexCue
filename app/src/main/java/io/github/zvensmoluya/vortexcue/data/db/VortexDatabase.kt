@@ -45,7 +45,7 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
     ],
     // The new content model intentionally allows a destructive upgrade. Original
     // media remains in user storage; only app-owned indexes are rebuilt.
-    version = 6,
+    version = 7,
     autoMigrations = [AutoMigration(from = 2, to = 3), AutoMigration(from = 4, to = 5)],
     exportSchema = true,
 )

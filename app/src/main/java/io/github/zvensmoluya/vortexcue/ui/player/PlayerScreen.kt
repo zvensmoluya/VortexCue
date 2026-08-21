@@ -85,6 +85,7 @@ import io.github.zvensmoluya.vortexcue.subtitle.SubtitleTimeline
 import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskState
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskSummary
+import io.github.zvensmoluya.vortexcue.synctext.GenerationNetworkWaitReason
 import io.github.zvensmoluya.vortexcue.ui.queue.QueueItemRow
 import io.github.zvensmoluya.vortexcue.ui.synctext.generationProductStatus
 import io.github.zvensmoluya.vortexcue.ui.theme.*
@@ -123,6 +124,7 @@ internal fun PlayerScreen(
     onTranslateSyncText: () -> Unit,
     onCancelSyncText: () -> Unit,
     onRetrySyncText: () -> Unit,
+    onAllowMeteredSyncText: () -> Unit,
     onGeneratedPresentationModeChanged: (String, TextPresentationMode) -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
     onDisplayProfileChanged: (DisplayProfile) -> Unit,
@@ -271,6 +273,7 @@ internal fun PlayerScreen(
             onTranslateSyncText = onTranslateSyncText,
             onCancelSyncText = onCancelSyncText,
             onRetrySyncText = onRetrySyncText,
+            onAllowMeteredSyncText = onAllowMeteredSyncText,
             onPresentationModeChanged = onGeneratedPresentationModeChanged,
         )
     }
@@ -714,6 +717,7 @@ private fun TextTrackDialog(
     onTranslateSyncText: () -> Unit,
     onCancelSyncText: () -> Unit,
     onRetrySyncText: () -> Unit,
+    onAllowMeteredSyncText: () -> Unit,
     onPresentationModeChanged: (String, TextPresentationMode) -> Unit,
 ) {
     val tracks = contentUnit?.timedTextTracks.orEmpty()
@@ -754,6 +758,8 @@ private fun TextTrackDialog(
                     if (productStatus != null) {
                         val failed = productStatus.contains("失败")
                         val paused = productStatus.contains("已暂停")
+                        val waitingForMeteredPermission =
+                            syncTextTask?.networkWaitReason == GenerationNetworkWaitReason.MeteredPermissionRequired
                         Text(
                             productStatus,
                             color = if (failed) AppError else AppAccent,
@@ -761,8 +767,23 @@ private fun TextTrackDialog(
                             modifier = Modifier.align(Alignment.CenterVertically),
                         )
                         if (productStatus != "完成") {
-                            TextButton(onClick = if (failed || paused) onRetrySyncText else onCancelSyncText) {
-                                Text(if (failed) "重试" else if (paused) "继续" else "暂停", color = AppSecondaryText, fontSize = 12.sp)
+                            val action =
+                                when {
+                                    waitingForMeteredPermission -> onAllowMeteredSyncText
+                                    failed || paused -> onRetrySyncText
+                                    else -> onCancelSyncText
+                                }
+                            TextButton(onClick = action) {
+                                Text(
+                                    when {
+                                        waitingForMeteredPermission -> "允许本次"
+                                        failed -> "重试"
+                                        paused -> "继续"
+                                        else -> "暂停"
+                                    },
+                                    color = AppSecondaryText,
+                                    fontSize = 12.sp,
+                                )
                             }
                         }
                     }

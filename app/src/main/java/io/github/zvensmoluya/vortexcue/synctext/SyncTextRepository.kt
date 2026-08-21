@@ -433,6 +433,7 @@ class SyncTextRepository(
                 schemeId = normalized.schemeId,
                 targetLanguage = normalized.output.targetLanguage,
                 presentationMode = normalized.output.presentationMode,
+                allowMeteredNetwork = normalized.allowMeteredNetwork,
             )
         }
         val scheme = requireNotNull(dao.scheme(normalized.schemeId)) { "Sync text scheme does not exist" }
@@ -459,6 +460,7 @@ class SyncTextRepository(
                 progress = 0f,
                 targetLanguage = null,
                 waitingForNetwork = false,
+                meteredNetworkAllowed = normalized.allowMeteredNetwork,
                 paused = false,
                 needsAttention = false,
                 schemeBlocked = false,
@@ -493,6 +495,7 @@ class SyncTextRepository(
         schemeId: String? = null,
         targetLanguage: String? = null,
         presentationMode: TextPresentationMode? = null,
+        allowMeteredNetwork: Boolean = false,
     ): GenerationTaskSummary {
         val source = requireNotNull(dao.generatedResult(sourceResultId)) { "Source result does not exist" }
         require(source.targetLanguage == null) { "Translation input must be a source result" }
@@ -532,6 +535,7 @@ class SyncTextRepository(
                 progress = SourcePublishedProgress,
                 targetLanguage = normalizedTarget,
                 waitingForNetwork = false,
+                meteredNetworkAllowed = allowMeteredNetwork,
                 paused = false,
                 needsAttention = false,
                 schemeBlocked = false,
@@ -554,7 +558,7 @@ class SyncTextRepository(
                     sourceLanguage = source.sourceLanguage,
                     targetLanguage = normalizedTarget,
                     presentationMode = mode.name,
-                    allowMeteredNetwork = false,
+                    allowMeteredNetwork = allowMeteredNetwork,
                     allowAsrFallback = false,
                     submittedAtMs = timestamp,
                 ),
@@ -585,15 +589,7 @@ class SyncTextRepository(
     }
 
     suspend fun pauseTask(taskId: String) {
-        dao.task(taskId)?.takeUnless(GenerationTaskEntity::isTerminal)?.let { task ->
-            dao.upsertTask(
-                task.copy(
-                    state = GenerationTaskState.Paused.name,
-                    paused = true,
-                    waitingForNetwork = false,
-                    updatedAtMs = nowMs(),
-                ),
-            )
+        if (dao.pauseTask(taskId, nowMs()) > 0) {
             scheduler.schedule()
         }
     }
@@ -602,22 +598,12 @@ class SyncTextRepository(
         database.withWriteTransaction {
             val task = dao.task(taskId)?.takeUnless(GenerationTaskEntity::isTerminal) ?: return@withWriteTransaction
             val timestamp = nowMs()
-            val affected =
-                if (task.schemeBlocked) dao.activeTasksForScheme(task.schemeId) else listOf(task)
-            affected.forEach { blocked ->
-                dao.upsertTask(
-                    blocked.copy(
-                        state = GenerationTaskState.Waiting.name,
-                        paused = false,
-                        needsAttention = false,
-                        schemeBlocked = false,
-                        waitingForNetwork = false,
-                        errorCategory = null,
-                        errorMessage = null,
-                        updatedAtMs = timestamp,
-                    ),
-                )
+            if (task.schemeBlocked) {
+                dao.resumeBlockedSchemeTasks(task.schemeId, timestamp)
+            } else {
+                dao.resumeTask(taskId, timestamp)
             }
+            Unit
         }
         scheduler.schedule()
     }
@@ -628,19 +614,7 @@ class SyncTextRepository(
     }
 
     suspend fun deleteTask(taskId: String) {
-        dao.task(taskId)?.takeUnless(GenerationTaskEntity::isTerminal)?.let { task ->
-            dao.upsertTask(
-                task.copy(
-                    activeDedupeKey = null,
-                    state = GenerationTaskState.Deleted.name,
-                    paused = true,
-                    waitingForNetwork = false,
-                    needsAttention = false,
-                    schemeBlocked = false,
-                    updatedAtMs = nowMs(),
-                ),
-            )
-        }
+        dao.markTaskDeleted(taskId, nowMs())
         scheduler.schedule()
     }
 
@@ -650,6 +624,10 @@ class SyncTextRepository(
 
     suspend fun retryForContent(contentId: String) {
         dao.activeTasksForContent(contentId).forEach { resumeTask(it.taskId) }
+    }
+
+    suspend fun allowMeteredNetworkForContent(contentId: String) {
+        if (dao.allowMeteredNetworkForContent(contentId, nowMs()) > 0) scheduler.schedule()
     }
 
     suspend fun changeScheme(taskId: String, schemeId: String) {
@@ -685,6 +663,7 @@ class SyncTextRepository(
                     needsAttention = false,
                     schemeBlocked = false,
                     waitingForNetwork = false,
+                    networkWaitReason = null,
                     errorCategory = null,
                     errorMessage = null,
                     updatedAtMs = timestamp,
@@ -695,8 +674,7 @@ class SyncTextRepository(
     }
 
     suspend fun setPresentationMode(slotId: String, mode: TextPresentationMode) {
-        val slot = dao.generatedSlot(slotId) ?: return
-        dao.upsertGeneratedSlot(slot.copy(presentationMode = mode.name, updatedAtMs = nowMs()))
+        dao.updateGeneratedSlotPresentationMode(slotId, mode.name, nowMs())
     }
 
     suspend fun loadPresentation(slotId: String): GeneratedTextPresentation? {
@@ -815,6 +793,7 @@ class SyncTextRepository(
                         task.currentAttemptId != attempt.attemptId ||
                         task.paused ||
                         task.needsAttention ||
+                        task.waitingForNetwork ||
                         task.isTerminal() ||
                         dao.queueControl()?.pauseAll == true
                     ) {
@@ -894,6 +873,7 @@ class SyncTextRepository(
                             progress = if (completeTask) 1f else SourcePublishedProgress,
                             sourceResultId = sourceResultId,
                             waitingForNetwork = false,
+                            networkWaitReason = null,
                             errorCategory = null,
                             errorMessage = null,
                             updatedAtMs = timestamp,
@@ -913,24 +893,14 @@ class SyncTextRepository(
     }
 
     internal suspend fun markRunning(taskId: String, stage: GenerationStage, progress: Float) {
-        dao.task(taskId)?.let { task ->
-            if (!task.paused && !task.needsAttention && !task.isTerminal()) {
-                dao.upsertTask(
-                    task.copy(
-                        state = GenerationTaskState.Running.name,
-                        stage = stage.name,
-                        progress = progress.coerceIn(0f, 1f),
-                        waitingForNetwork = false,
-                        updatedAtMs = nowMs(),
-                    ),
-                )
-            }
-        }
+        dao.markTaskRunning(taskId, stage.name, progress.coerceIn(0f, 1f), nowMs())
     }
 
-    internal suspend fun markWaitingForNetwork(taskId: String, waiting: Boolean) {
-        dao.task(taskId)?.let { task ->
-            if (!task.isTerminal()) dao.upsertTask(task.copy(waitingForNetwork = waiting, updatedAtMs = nowMs()))
+    internal suspend fun markWaitingForNetwork(taskId: String, reason: GenerationNetworkWaitReason?) {
+        if (reason == null) {
+            dao.clearTaskNetworkWait(taskId, nowMs())
+        } else {
+            dao.markTaskWaitingForNetwork(taskId, reason.name, nowMs())
         }
     }
 
@@ -942,21 +912,24 @@ class SyncTextRepository(
     ) {
         database.withWriteTransaction {
             val task = dao.task(taskId) ?: return@withWriteTransaction
-            val affected = if (blockScheme) dao.activeTasksForScheme(task.schemeId) else listOf(task)
             val timestamp = nowMs()
-            affected.forEach { item ->
-                dao.upsertTask(
-                    item.copy(
-                        state = GenerationTaskState.NeedsAttention.name,
-                        needsAttention = true,
-                        schemeBlocked = blockScheme,
-                        waitingForNetwork = false,
-                        errorCategory = category.name,
-                        errorMessage = message.take(MaxErrorMessageLength),
-                        updatedAtMs = timestamp,
-                    ),
+            if (blockScheme) {
+                dao.markSchemeTasksNeedsAttention(
+                    schemeId = task.schemeId,
+                    category = category.name,
+                    message = message.take(MaxErrorMessageLength),
+                    updatedAtMs = timestamp,
+                )
+            } else {
+                dao.markTaskNeedsAttention(
+                    taskId = taskId,
+                    category = category.name,
+                    message = message.take(MaxErrorMessageLength),
+                    schemeBlocked = false,
+                    updatedAtMs = timestamp,
                 )
             }
+            Unit
         }
         scheduler.schedule()
     }
@@ -971,23 +944,31 @@ class SyncTextRepository(
     internal suspend fun isRunnable(taskId: String): Boolean {
         if (dao.queueControl()?.pauseAll == true) return false
         val task = dao.task(taskId) ?: return false
-        return !task.paused && !task.needsAttention && !task.isTerminal()
+        return !task.paused && !task.needsAttention && !task.waitingForNetwork && !task.isTerminal()
     }
 
     internal suspend fun isTerminal(taskId: String): Boolean = dao.task(taskId)?.isTerminal() != false
 
+    internal suspend fun meteredNetworkAllowed(taskId: String): Boolean =
+        dao.task(taskId)?.meteredNetworkAllowed == true
+
     suspend fun wakeEligibleNetworkTasks(networkState: SyncTextNetworkState) {
         database.withWriteTransaction {
             dao.networkWaitingTasks().forEach { task ->
-                val snapshot = dao.taskSnapshot(task.taskId) ?: return@forEach
-                if (networkState.permits(snapshot.allowMeteredNetwork)) {
-                    dao.upsertTask(task.copy(waitingForNetwork = false, updatedAtMs = nowMs()))
+                val reason = networkState.waitReason(task.meteredNetworkAllowed)
+                if (reason == null) {
+                    dao.clearTaskNetworkWait(task.taskId, nowMs())
+                } else if (task.networkWaitReason != reason.name) {
+                    dao.markTaskWaitingForNetwork(task.taskId, reason.name, nowMs())
                 }
             }
         }
     }
 
-    suspend fun hasNetworkWaitingTasks(): Boolean = dao.networkWaitingTasks().isNotEmpty()
+    suspend fun hasRetryableNetworkWaitingTasks(): Boolean =
+        dao.networkWaitingTasks().any {
+            it.networkWaitReason != GenerationNetworkWaitReason.MeteredPermissionRequired.name
+        }
 
     private suspend fun requireCredential(credentialId: String, intended: CredentialPurpose) {
         val metadata = requireNotNull(dao.credential(credentialId)) { "Credential does not exist" }
@@ -1294,6 +1275,7 @@ private fun GenerationTaskEntity.toSummary(queuePosition: Int, pauseAll: Boolean
         progress = progress.coerceIn(0f, 1f),
         targetLanguage = targetLanguage,
         waitingForNetwork = waitingForNetwork,
+        networkWaitReason = networkWaitReason?.enumValueOr(GenerationNetworkWaitReason.Unavailable),
         paused = paused || pauseAll,
         needsAttention = needsAttention,
         blockedByScheme = schemeBlocked,

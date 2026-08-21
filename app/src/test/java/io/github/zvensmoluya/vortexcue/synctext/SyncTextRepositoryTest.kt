@@ -298,6 +298,9 @@ class SyncTextRepositoryTest {
         assertNull(database.syncTextDao().generatedResult(firstResult.resultId))
         assertTrue(textStorage.revision(firstResult.sourceRevisionId) != null)
         assertEquals(TextPresentationMode.TargetOnly, repository.loadPresentation(secondResult.slotId)?.result?.presentationMode)
+        repository.setPresentationMode(secondResult.slotId, TextPresentationMode.SourceTarget)
+        assertEquals(secondResult.resultId, database.syncTextDao().currentGeneratedResult(secondResult.slotId)?.resultId)
+        assertEquals(TextPresentationMode.SourceTarget, repository.loadPresentation(secondResult.slotId)?.result?.presentationMode)
         assertEquals(TranslationPolicyRegistry.OriginRevision, secondResult.policyRevision)
         assertEquals(
             "bbf6c688ce3df8953fe876ade60a69c28e837234cb3061694bab1467f642891f",
@@ -405,8 +408,21 @@ class SyncTextRepositoryTest {
 
         repository.pauseTask(task.taskId)
         assertEquals(GenerationTaskState.Paused.name, database.syncTextDao().task(task.taskId)?.state)
+        repository.markRunning(task.taskId, GenerationStage.RecognizingSpeech, 0.5f)
+        assertEquals(GenerationTaskState.Paused.name, database.syncTextDao().task(task.taskId)?.state)
         repository.resumeTask(task.taskId)
         assertEquals(GenerationTaskState.Waiting.name, database.syncTextDao().task(task.taskId)?.state)
+        repository.markWaitingForNetwork(task.taskId, GenerationNetworkWaitReason.MeteredPermissionRequired)
+        val meteredWait = requireNotNull(database.syncTextDao().task(task.taskId))
+        assertTrue(meteredWait.waitingForNetwork)
+        assertEquals(GenerationNetworkWaitReason.MeteredPermissionRequired.name, meteredWait.networkWaitReason)
+        repository.markRunning(task.taskId, GenerationStage.RecognizingSpeech, 0.6f)
+        assertTrue(database.syncTextDao().task(task.taskId)?.waitingForNetwork == true)
+        repository.allowMeteredNetworkForContent(ContentId)
+        val allowed = requireNotNull(database.syncTextDao().task(task.taskId))
+        assertTrue(allowed.meteredNetworkAllowed)
+        assertFalse(allowed.waitingForNetwork)
+        assertNull(allowed.networkWaitReason)
         repository.setPauseAll(true)
         assertTrue(database.syncTextDao().queueControl()?.pauseAll == true)
         assertNull(repository.nextRunnableTask())
@@ -417,6 +433,8 @@ class SyncTextRepositoryTest {
         val deleted = requireNotNull(database.syncTextDao().task(task.taskId))
         assertEquals(GenerationTaskState.Deleted.name, deleted.state)
         assertNull(deleted.activeDedupeKey)
+        repository.markRunning(task.taskId, GenerationStage.RecognizingSpeech, 0.75f)
+        assertEquals(GenerationTaskState.Deleted.name, database.syncTextDao().task(task.taskId)?.state)
         assertNull(repository.nextRunnableTask())
 
         val replacement =
@@ -626,7 +644,47 @@ class SyncTextTaskRunnerRecoveryTest {
         assertEquals(1, engine.calls(0))
     }
 
-    private fun runner(engine: AsrEngine) =
+    @Test
+    fun `metered task waits without retrying and resumes after explicit permission`() = runBlocking {
+        insertAudioContent(durationMs = 100_000L)
+        repository.saveCredential("asr-metered", "ASR", CredentialPurpose.Asr, "secret")
+        val scheme =
+            repository.createScheme(
+                name = "Metered ASR",
+                asrProfile = AsrProfile.OpenRouterWhisperV1,
+                asrCredentialId = "asr-metered",
+                isDefault = true,
+            )
+        val task =
+            repository.submit(
+                GenerationRequest(
+                    contentId = RunnerContentId,
+                    input = GenerationInput.AudioTrack("audio:0"),
+                    output = GenerationOutput.SourceOnly,
+                    schemeId = scheme.schemeId,
+                ),
+            )
+        val engine = RecoveringAsrEngine()
+        val networkState = MeteredNetworkState()
+        val runner = runner(engine, networkState)
+
+        assertTrue(runner.runUntilIdle())
+        val waiting = requireNotNull(database.syncTextDao().task(task.taskId))
+        assertEquals(GenerationTaskState.Waiting.name, waiting.state)
+        assertEquals(GenerationNetworkWaitReason.MeteredPermissionRequired.name, waiting.networkWaitReason)
+        assertFalse(repository.hasRetryableNetworkWaitingTasks())
+        assertEquals(0, engine.calls(0))
+
+        repository.allowMeteredNetworkForContent(RunnerContentId)
+        assertTrue(runner.runUntilIdle())
+        assertEquals(GenerationTaskState.Completed.name, database.syncTextDao().task(task.taskId)?.state)
+        assertEquals(1, engine.calls(0))
+    }
+
+    private fun runner(
+        engine: AsrEngine,
+        networkState: SyncTextNetworkState = AlwaysAvailableNetworkState,
+    ) =
         SyncTextTaskRunner(
             database = database,
             repository = repository,
@@ -662,9 +720,7 @@ class SyncTextTaskRunnerRecoveryTest {
             spool = TemporaryPcmSpool(),
             asr = engine,
             translation = TranslationNetworkGateway(TranslationAdapterRegistry(emptyList())),
-            networkState = object : SyncTextNetworkState {
-                override fun permits(allowMetered: Boolean) = true
-            },
+            networkState = networkState,
             nowMs = { runnerClock++ },
             newId = { "lease-${runnerNextId++}" },
         )
@@ -712,6 +768,17 @@ class SyncTextTaskRunnerRecoveryTest {
         private var runnerClock = 20_000L
         private var runnerNextId = 20_000
     }
+}
+
+private object AlwaysAvailableNetworkState : SyncTextNetworkState {
+    override fun permits(allowMetered: Boolean) = true
+}
+
+private class MeteredNetworkState : SyncTextNetworkState {
+    override fun permits(allowMetered: Boolean): Boolean = allowMetered
+
+    override fun waitReason(allowMetered: Boolean): GenerationNetworkWaitReason? =
+        if (allowMetered) null else GenerationNetworkWaitReason.MeteredPermissionRequired
 }
 
 private class RecoveringAsrEngine : AsrEngine {

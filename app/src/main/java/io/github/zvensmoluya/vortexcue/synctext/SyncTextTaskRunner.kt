@@ -41,16 +41,27 @@ import kotlinx.coroutines.withContext
 
 interface SyncTextNetworkState {
     fun permits(allowMetered: Boolean): Boolean
+
+    fun waitReason(allowMetered: Boolean): GenerationNetworkWaitReason? =
+        if (permits(allowMetered)) null else GenerationNetworkWaitReason.Unavailable
 }
 
 class AndroidSyncTextNetworkState(context: Context) : SyncTextNetworkState {
     private val connectivity = context.applicationContext.getSystemService(ConnectivityManager::class.java)
 
-    override fun permits(allowMetered: Boolean): Boolean {
-        val network = connectivity.activeNetwork ?: return false
-        val capabilities = connectivity.getNetworkCapabilities(network) ?: return false
-        if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return false
-        return allowMetered || capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+    override fun permits(allowMetered: Boolean): Boolean = waitReason(allowMetered) == null
+
+    override fun waitReason(allowMetered: Boolean): GenerationNetworkWaitReason? {
+        val network = connectivity.activeNetwork ?: return GenerationNetworkWaitReason.Unavailable
+        val capabilities = connectivity.getNetworkCapabilities(network) ?: return GenerationNetworkWaitReason.Unavailable
+        if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+            return GenerationNetworkWaitReason.Unavailable
+        }
+        return if (!allowMetered && !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) {
+            GenerationNetworkWaitReason.MeteredPermissionRequired
+        } else {
+            null
+        }
     }
 }
 
@@ -111,11 +122,12 @@ class SyncTextTaskRunner(
             val snapshot = requireNotNull(repository.taskSnapshot(task.taskId))
             val kind = task.kind.enumValueOr(GenerationTaskKind.SourceGeneration)
             val requiresNetwork = kind == GenerationTaskKind.TranslationDerivation || snapshot.sourceTrackId == null
-            if (requiresNetwork && !networkState.permits(snapshot.allowMeteredNetwork)) {
-                repository.markWaitingForNetwork(task.taskId, true)
+            val networkWaitReason = networkState.waitReason(task.meteredNetworkAllowed)
+            if (requiresNetwork && networkWaitReason != null) {
+                repository.markWaitingForNetwork(task.taskId, networkWaitReason)
                 return
             }
-            repository.markWaitingForNetwork(task.taskId, false)
+            repository.markWaitingForNetwork(task.taskId, null)
             ensureRunnable(task.taskId)
             val attempt = requireNotNull(repository.currentAttempt(task.taskId))
             val source = resolveSource(task, snapshot, attempt)
@@ -404,7 +416,6 @@ class SyncTextTaskRunner(
             for (index in 0 until MaxAsrAttempts) {
                 ensureRunnable(task.taskId)
                 repository.markRunning(task.taskId, GenerationStage.RecognizingSpeech, 0.10f)
-                repository.markWaitingForNetwork(task.taskId, false)
                 try {
                     val result =
                         asr.transcribe(
@@ -455,8 +466,9 @@ class SyncTextTaskRunner(
                     finalFailure = error
                     recordAsrAttempt(attempt, null, error)
                     if (!error.retryable || index == MaxAsrAttempts - 1) break
-                    if (!networkState.permits(snapshot.allowMeteredNetwork)) {
-                        repository.markWaitingForNetwork(task.taskId, true)
+                    val waitReason = networkState.waitReason(repository.meteredNetworkAllowed(task.taskId))
+                    if (waitReason != null) {
+                        repository.markWaitingForNetwork(task.taskId, waitReason)
                         throw TaskDeferredException()
                     }
                     delay(AsrRetryPolicy.delayMs(error, index))
