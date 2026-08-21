@@ -78,7 +78,7 @@ Import Hub 提供：选择单文件、从文件夹查找、扫描设备媒体、
 
 ASR 配置先选择提供商，再选择该提供商的模型；OpenRouter 提供 Whisper large-v3 与 Grok STT，并保留可编辑的 Base URL。本项目对 OpenAI 官方提供商当前只开放 Whisper-1，固定使用官方 `/v1/audio/transcriptions` multipart 上传协议，不复用 OpenRouter 的 JSON 音频协议。GPT Transcribe 等只能返回纯文本、不能返回可用时间轴的模型不进入可选列表；未来只有在官方提供时间轴后才重新评估。每个提供商由独立适配器负责请求与响应；用户可以发送一个极短的测试音频确认连接，测试不会创建同步文字结果。
 
-生成自动使用当前配置：已有文字优先翻译，没有文字才执行 ASR；只有多音轨等真实歧义才请求选择。单个 ASR 窗口允许没有语音并以空时间轴继续，整个媒体都没有可用 cue 时明确提示“未检测到可转写语音”，不归因于提供商或网络故障。任务默认只使用非计费网络；等待计费网络许可时就地说明原因，并允许用户仅为本次任务授权。同步文字页提供取消与重试，不出现全局任务抽屉。
+生成自动使用当前配置：已有文字优先翻译，没有文字才执行 ASR；只有多音轨等真实歧义才请求选择。单个 ASR 窗口允许没有语音并以空时间轴继续，整个媒体都没有可用 cue 时明确提示“未检测到可转写语音”，不归因于提供商或网络故障。任务默认只使用非计费网络；等待计费网络许可时就地说明原因，并允许用户仅为本次任务授权。临时网络错误使用共享退避与抖动；设备没有 validated network 时进入可自动解除的等待，而不是要求用户手动重试。同步文字页提供取消与重试，不出现全局任务抽屉。
 
 ## 6. 设置
 
@@ -98,7 +98,7 @@ Room 当前 schema 为 v8；v7→v8 通过自动迁移保留任务、结果和�
 
 导入与生成文字统一使用 `CanonicalTimeline`、`TimelineRevision` 和 content-addressed `TextArtifactStore`。Artifact 位于 `noBackupFilesDir/text_artifacts/<kind>/<prefix>/<id>.bin`，ID 是包含 kind、schema、codec 与 canonicalizer version 的完整二进制 envelope SHA-256。Room 只保存 Artifact metadata、不可变 revision、manifest 和 publication pointer，不保存逐 cue 正文。`TimelineRevisionReader` 一次解码当前 publication 为内存 `SubtitleTimeline`；播放进度解析不访问 Room、Artifact 文件或 SAF。
 
-ASR window 与 translation batch 先发布 typed Artifact，再在同一 Room transaction 中登记引用和完成状态。Partial revision 引用连续完成前缀的 WorkUnit Artifact，Final source 使用单个 `FinalTimeline` Artifact；target 保存固定 source revision/hash 的 `TranslationDelta`。启动恢复只重跑没有已提交 Artifact 的单元。启动审计将缺失、损坏或未知版本引用标记为 `MissingArtifact` 或 `Storage / NeedsAttention`，不回读旧 URI，也不静默重发付费请求。不可达 Artifact 与未注册文件使用 24 小时宽限的两阶段 GC；当前 publication、target source pin 和可恢复任务资产是 GC root。
+ASR window 与 translation batch 由固定数量的 worker 按序领取，先发布 typed Artifact，再在同一 Room transaction 中登记引用和完成状态；任务进度只按真正提交的完成单元推进，并保持单调。Partial revision 引用连续完成前缀的 WorkUnit Artifact，Final source 使用单个 `FinalTimeline` Artifact；target 保存固定 source revision/hash 的 `TranslationDelta`。翻译输出继续严格校验 cue ID，只在缺失字面量 `cue-` 前缀且补全后唯一命中预期 ID 时本地正规化，不发起额外模型请求。启动恢复只重跑没有已提交 Artifact 的单元。启动审计将缺失、损坏或未知版本引用标记为 `MissingArtifact` 或 `Storage / NeedsAttention`，不回读旧 URI，也不静默重发付费请求。不可达 Artifact 与未注册文件使用 24 小时宽限的两阶段 GC；当前 publication、target source pin 和可恢复任务资产是 GC root。
 
 当前没有导出功能；内部 codec 与 revision reader 保留明确的 exporter 边界，但本轮不增加导出 UI。
 

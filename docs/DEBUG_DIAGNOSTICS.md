@@ -2,7 +2,7 @@
 
 The debug build keeps a seven-day, local-only diagnostic trail for sync-text work. It records task and scheduler lifecycle events, ASR/translation work-unit outcomes, publication milestones, and redacted request metadata. It never records API keys, authorization headers, request prompts, media paths, or subtitle text in the structured event table.
 
-Request attempts include their ASR window or translation batch ID, semantic operation ordinal, network retry ordinal, wall-clock boundaries, and monotonic duration. Raw provider responses remain in `noBackupFilesDir/sync_text/raw_responses` for seven days, as before, and may contain transcript or translation content.
+Request attempts include their ASR window or translation batch ID, semantic operation ordinal, network retry ordinal, wall-clock boundaries, monotonic duration, provider response ID when available, and sanitized failure phase/root-cause class. Translation validation events record issue-code counts or deterministic ID normalization counts without storing cue IDs or subtitle text. Raw provider responses remain in `noBackupFilesDir/sync_text/raw_responses` for seven days, as before, and may contain transcript or translation content.
 
 Collect the latest task from the only attached device:
 

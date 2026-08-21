@@ -25,6 +25,7 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -423,6 +424,12 @@ class SyncTextRepositoryTest {
         assertTrue(allowed.meteredNetworkAllowed)
         assertFalse(allowed.waitingForNetwork)
         assertNull(allowed.networkWaitReason)
+        repository.markRunning(task.taskId, GenerationStage.RecognizingSpeech, 0.6f)
+        repository.markRunning(task.taskId, GenerationStage.DecodingAudio, 0.2f)
+        val nonRegressed = requireNotNull(database.syncTextDao().task(task.taskId))
+        assertEquals(0.6f, nonRegressed.progress)
+        assertEquals(GenerationStage.DecodingAudio.name, nonRegressed.stage)
+        repository.resumeTask(task.taskId)
         repository.setPauseAll(true)
         assertTrue(database.syncTextDao().queueControl()?.pauseAll == true)
         assertNull(repository.nextRunnableTask())
@@ -689,6 +696,44 @@ class SyncTextTaskRunnerRecoveryTest {
         assertTrue(requireNotNull(request.durationMs) >= 0L)
     }
 
+    @Test
+    fun `transport failure becomes recoverable wait when validated network disappears`() = runBlocking {
+        insertAudioContent(durationMs = 100_000L)
+        repository.saveCredential("asr-network", "ASR", CredentialPurpose.Asr, "secret")
+        val scheme =
+            repository.createScheme(
+                name = "Network ASR",
+                asrProfile = AsrProfile.OpenRouterWhisperV1,
+                asrCredentialId = "asr-network",
+                isDefault = true,
+            )
+        val task =
+            repository.submit(
+                GenerationRequest(
+                    contentId = RunnerContentId,
+                    input = GenerationInput.AudioTrack("audio:0"),
+                    output = GenerationOutput.SourceOnly,
+                    schemeId = scheme.schemeId,
+                ),
+            )
+        val networkState = MutableNetworkState()
+        val engine = NetworkDroppingAsrEngine(networkState)
+        val runner = runner(engine, networkState)
+
+        assertTrue(runner.runUntilIdle())
+        val waiting = requireNotNull(database.syncTextDao().task(task.taskId))
+        assertEquals(GenerationTaskState.Waiting.name, waiting.state)
+        assertEquals(GenerationNetworkWaitReason.Unavailable.name, waiting.networkWaitReason)
+        assertFalse(waiting.needsAttention)
+        assertTrue(repository.hasRetryableNetworkWaitingTasks())
+
+        networkState.available = true
+        repository.wakeEligibleNetworkTasks(networkState)
+        assertTrue(runner.runUntilIdle())
+        assertEquals(GenerationTaskState.Completed.name, database.syncTextDao().task(task.taskId)?.state)
+        assertEquals(2, engine.calls.get())
+    }
+
     private fun runner(
         engine: AsrEngine,
         networkState: SyncTextNetworkState = AlwaysAvailableNetworkState,
@@ -787,6 +832,49 @@ private class MeteredNetworkState : SyncTextNetworkState {
 
     override fun waitReason(allowMetered: Boolean): GenerationNetworkWaitReason? =
         if (allowMetered) null else GenerationNetworkWaitReason.MeteredPermissionRequired
+}
+
+private class MutableNetworkState : SyncTextNetworkState {
+    @Volatile
+    var available: Boolean = true
+
+    override fun permits(allowMetered: Boolean): Boolean = available
+}
+
+private class NetworkDroppingAsrEngine(
+    private val networkState: MutableNetworkState,
+) : AsrEngine {
+    val calls = AtomicInteger(0)
+
+    override suspend fun transcribe(request: AsrRequest): AsrWindowResult {
+        if (calls.incrementAndGet() == 1) {
+            networkState.available = false
+            throw AsrException(
+                category = GenerationErrorCategory.TemporaryNetwork,
+                retryable = false,
+                shouldSplit = false,
+                message = "network disappeared",
+                cause = IOException("socket closed"),
+            )
+        }
+        return AsrWindowResult(
+            segments =
+                listOf(
+                    AsrTimestampedToken(
+                        request.window.ownedStartMs + 10L,
+                        request.window.ownedStartMs + 1_000L,
+                        "recovered",
+                    ),
+                ),
+            detectedLanguage = "en",
+            usage = UsageRecord(totalTokens = 1L),
+            rawResponse = byteArrayOf(1),
+            httpStatus = 200,
+            requestBytes = 1L,
+            responseBytes = 1L,
+            requestId = "response-recovered",
+        )
+    }
 }
 
 private class RecoveringAsrEngine : AsrEngine {

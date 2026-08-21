@@ -6,6 +6,7 @@ import java.math.BigDecimal
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -67,6 +68,7 @@ class TranslationProtocolException(
     val category: GenerationErrorCategory,
     val retryable: Boolean,
     val capacityExceeded: Boolean,
+    val phase: TranslationFailurePhase? = null,
     val httpStatus: Int? = null,
     val requestId: String? = null,
     val rawResponse: ByteArray? = null,
@@ -74,6 +76,14 @@ class TranslationProtocolException(
     message: String,
     cause: Throwable? = null,
 ) : IOException(message, cause)
+
+enum class TranslationFailurePhase {
+    Transport,
+    StreamingTransport,
+    StreamingDecode,
+    ResponseDecode,
+    HttpResponse,
+}
 
 interface TranslationProtocolAdapter {
     val protocol: TranslationProtocol
@@ -102,6 +112,9 @@ class TranslationNetworkGateway(
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val elapsedRealtimeMs: () -> Long = { System.nanoTime() / 1_000_000L },
     private val waitBeforeRetry: suspend (Long) -> Unit = { delay(it) },
+    private val retryJitterMs: (Long) -> Long = { baseDelayMs ->
+        Random.nextLong((baseDelayMs / 4L).coerceIn(1L, MaxRetryJitterMs) + 1L)
+    },
 ) {
     suspend fun translate(
         protocol: TranslationProtocol,
@@ -148,10 +161,16 @@ class TranslationNetworkGateway(
                 )
                 if (!error.retryable || index == MaxNetworkAttempts - 1) throw error
                 val retryDelay = error.retryAfterMs ?: RetryDelaysMs[index]
-                if (error.category == GenerationErrorCategory.RateLimited) {
+                if (
+                    error.category == GenerationErrorCategory.RateLimited ||
+                    error.category == GenerationErrorCategory.TemporaryNetwork
+                ) {
                     requestBudget.awaitSharedBackoff(attemptEpoch, retryDelay, waitBeforeRetry)
                 } else {
                     waitBeforeRetry(retryDelay)
+                }
+                if (error.category == GenerationErrorCategory.TemporaryNetwork) {
+                    retryJitterMs(retryDelay).coerceAtLeast(0L).takeIf { it > 0L }?.let { waitBeforeRetry(it) }
                 }
             }
         }
@@ -160,6 +179,7 @@ class TranslationNetworkGateway(
 
     companion object {
         const val MaxNetworkAttempts = 3
+        private const val MaxRetryJitterMs = 750L
         private val RetryDelaysMs = longArrayOf(500L, 1_500L, 3_000L)
     }
 }
@@ -349,6 +369,7 @@ class BoundedHttpExecutor(
             category = GenerationErrorCategory.ModelOrProtocol,
             retryable = false,
             capacityExceeded = false,
+            phase = TranslationFailurePhase.HttpResponse,
             httpStatus = exchange.status,
             requestId = exchange.requestId,
             rawResponse = exchange.body,
@@ -412,6 +433,7 @@ internal class SseEventReader(
 data class StreamingTextEvent(
     val text: String = "",
     val usage: UsageRecord = UsageRecord(),
+    val providerRequestId: String? = null,
 )
 
 abstract class JsonTranslationProtocolAdapter(
@@ -443,6 +465,7 @@ abstract class JsonTranslationProtocolAdapter(
                     category = GenerationErrorCategory.TemporaryNetwork,
                     retryable = true,
                     capacityExceeded = false,
+                    phase = TranslationFailurePhase.Transport,
                     message = "Translation request failed before a valid response",
                     cause = error,
                 )
@@ -457,7 +480,7 @@ abstract class JsonTranslationProtocolAdapter(
             httpStatus = exchange.status,
             requestBytes = exchange.requestBytes,
             responseBytes = exchange.body.size.toLong(),
-            requestId = exchange.requestId,
+            requestId = exchange.requestId ?: extractResponseId(root),
             endpoint = exchange.endpoint,
         )
     }
@@ -492,6 +515,7 @@ abstract class JsonTranslationProtocolAdapter(
                     category = GenerationErrorCategory.TemporaryNetwork,
                     retryable = true,
                     capacityExceeded = false,
+                    phase = TranslationFailurePhase.StreamingTransport,
                     message = "Streaming translation request failed before a valid response",
                     cause = error,
                 )
@@ -500,6 +524,7 @@ abstract class JsonTranslationProtocolAdapter(
                     category = GenerationErrorCategory.InvalidResponse,
                     retryable = false,
                     capacityExceeded = false,
+                    phase = TranslationFailurePhase.StreamingDecode,
                     message = "Streaming translation response was invalid",
                     cause = error,
                 )
@@ -523,7 +548,7 @@ abstract class JsonTranslationProtocolAdapter(
             httpStatus = exchange.status,
             requestBytes = exchange.requestBytes,
             responseBytes = exchange.body.size.toLong(),
-            requestId = exchange.requestId,
+            requestId = exchange.requestId ?: events.mapNotNull(StreamingTextEvent::providerRequestId).lastOrNull(),
             endpoint = exchange.endpoint,
         )
     }
@@ -551,6 +576,8 @@ abstract class JsonTranslationProtocolAdapter(
 
     protected abstract fun extractUsage(root: JsonObject): UsageRecord
 
+    protected open fun extractResponseId(root: JsonObject): String? = root.string("id")
+
     protected abstract fun parseStreamingEvent(data: String): StreamingTextEvent
 
     private fun parseRoot(exchange: HttpExchange): JsonObject =
@@ -561,6 +588,7 @@ abstract class JsonTranslationProtocolAdapter(
                 category = GenerationErrorCategory.InvalidResponse,
                 retryable = false,
                 capacityExceeded = false,
+                phase = TranslationFailurePhase.ResponseDecode,
                 httpStatus = exchange.status,
                 requestId = exchange.requestId,
                 rawResponse = exchange.body,
@@ -587,6 +615,7 @@ abstract class JsonTranslationProtocolAdapter(
             category = category,
             retryable = category == GenerationErrorCategory.RateLimited || category == GenerationErrorCategory.TemporaryNetwork,
             capacityExceeded = capacity,
+            phase = TranslationFailurePhase.HttpResponse,
             httpStatus = exchange.status,
             requestId = exchange.requestId,
             rawResponse = exchange.body,
@@ -675,7 +704,11 @@ class ResponsesTranslationAdapter(
         val text = if (type == "response.output_text.delta") root.string("delta").orEmpty() else ""
         val usageRoot = root.firstNonEmptyObject("usage")
             ?: root.objectValue("response").firstNonEmptyObject("usage")
-        return StreamingTextEvent(text = text, usage = usageRoot?.toUsage("input_tokens", "output_tokens", "total_tokens") ?: UsageRecord())
+        return StreamingTextEvent(
+            text = text,
+            usage = usageRoot?.toUsage("input_tokens", "output_tokens", "total_tokens") ?: UsageRecord(),
+            providerRequestId = root.string("id") ?: root.objectValue("response").string("id"),
+        )
     }
 }
 
@@ -730,7 +763,11 @@ class AnthropicMessagesTranslationAdapter(
             root.firstNonEmptyObject("usage")
                 ?: root.objectValue("message").firstNonEmptyObject("usage")
                 ?: root.objectValue("message_delta").firstNonEmptyObject("usage")
-        return StreamingTextEvent(text = text, usage = usageRoot?.toUsage("input_tokens", "output_tokens", "total_tokens") ?: UsageRecord())
+        return StreamingTextEvent(
+            text = text,
+            usage = usageRoot?.toUsage("input_tokens", "output_tokens", "total_tokens") ?: UsageRecord(),
+            providerRequestId = root.string("id") ?: root.objectValue("message").string("id"),
+        )
     }
 }
 
@@ -792,7 +829,11 @@ class ChatCompletionsTranslationAdapter(
                 is JsonArray -> content.mapNotNull { (it as? JsonObject)?.string("text") }.joinToString("\n")
                 else -> ""
             }
-        return StreamingTextEvent(text = text, usage = root.objectValue("usage").toUsage("prompt_tokens", "completion_tokens", "total_tokens"))
+        return StreamingTextEvent(
+            text = text,
+            usage = root.objectValue("usage").toUsage("prompt_tokens", "completion_tokens", "total_tokens"),
+            providerRequestId = root.string("id"),
+        )
     }
 }
 
@@ -863,6 +904,7 @@ class GoogleGenerateContentTranslationAdapter(
         return StreamingTextEvent(
             text = text,
             usage = root.objectValue("usageMetadata").toUsage("promptTokenCount", "candidatesTokenCount", "totalTokenCount"),
+            providerRequestId = root.string("responseId"),
         )
     }
 }

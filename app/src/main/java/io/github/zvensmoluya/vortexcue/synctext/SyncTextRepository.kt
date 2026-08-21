@@ -971,14 +971,20 @@ class SyncTextRepository(
         val task = dao.task(taskId)
         val normalizedProgress = progress.coerceIn(0f, 1f)
         if (dao.markTaskRunning(taskId, stage.name, normalizedProgress, nowMs()) > 0) {
-            diagnostics.record(
-                SyncTextDiagnosticEventType.TaskStateChanged,
-                taskId = taskId,
-                attemptId = task?.currentAttemptId,
-                stage = stage.name,
-                outcome = GenerationTaskState.Running.name,
-                reason = "progress=${(normalizedProgress * 1_000).toInt()}",
-            )
+            val updated = dao.task(taskId)
+            if (
+                updated != null &&
+                (task?.state != updated.state || task.stage != updated.stage || task.progress != updated.progress)
+            ) {
+                diagnostics.record(
+                    SyncTextDiagnosticEventType.TaskStateChanged,
+                    taskId = taskId,
+                    attemptId = updated.currentAttemptId,
+                    stage = updated.stage,
+                    outcome = GenerationTaskState.Running.name,
+                    reason = "progress=${(updated.progress * 1_000).toInt()}",
+                )
+            }
         }
     }
 

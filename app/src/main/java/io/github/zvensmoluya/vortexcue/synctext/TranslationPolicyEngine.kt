@@ -190,6 +190,7 @@ data class TranslationValidationIssue(
 data class TranslationValidationResult(
     val rows: Map<String, String>,
     val issues: List<TranslationValidationIssue>,
+    val normalizedIdCount: Int = 0,
 ) {
     val isValid: Boolean
         get() = issues.isEmpty()
@@ -204,15 +205,31 @@ object TranslationResponseValidator {
     fun validate(plan: TranslationBatchPlan, rawText: String): TranslationValidationResult {
         val expected = plan.translateOnly.associateBy { requireNotNull(it.stableId) }
         val contextIds = (plan.contextBefore + plan.contextAfter).mapNotNull(SubtitleCue::stableId).toSet()
+        val missingPrefixAliases =
+            expected.keys
+                .filter { it.startsWith(CueIdPrefix) && it.length > CueIdPrefix.length }
+                .groupBy { it.removePrefix(CueIdPrefix) }
+                .mapNotNull { (alias, ids) ->
+                    if (ids.size == 1 && alias !in expected) alias to ids.single() else null
+                }
+                .toMap()
         val parsed = mutableListOf<Pair<String, String>>()
         val issues = mutableListOf<TranslationValidationIssue>()
+        var normalizedIdCount = 0
         rawText.replace("\r\n", "\n").replace('\r', '\n').lines().forEach { line ->
             val trimmed = line.trim()
             if (trimmed.isEmpty()) return@forEach
             val primary = numberedLine.matchEntire(trimmed)
             val alternate = alternateNumericLine.matchEntire(trimmed)
             if (primary != null) {
-                parsed += primary.groupValues[1] to primary.groupValues[2].trim()
+                val returnedId = primary.groupValues[1]
+                val normalizedId =
+                    if (returnedId in expected) {
+                        returnedId
+                    } else {
+                        missingPrefixAliases[returnedId]?.also { normalizedIdCount += 1 } ?: returnedId
+                    }
+                parsed += normalizedId to primary.groupValues[2].trim()
             } else if (alternate != null && alternate.groupValues[1] in expected) {
                 parsed += alternate.groupValues[1] to alternate.groupValues[2].trim()
             } else {
@@ -252,17 +269,20 @@ object TranslationResponseValidator {
                     issues += TranslationValidationIssue(TranslationValidationIssueCode.ExtremeOutput, id)
             }
         }
-        return TranslationValidationResult(rows, issues.distinct())
+        return TranslationValidationResult(rows, issues.distinct(), normalizedIdCount)
     }
 
     private fun isExtreme(source: String, target: String): Boolean {
         val maximum = maxOf(1_000, source.length * 20 + 200)
         return target.length > maximum || target.length > 8_000
     }
+
+    private const val CueIdPrefix = "cue-"
 }
 
 class TranslationOutputException(
     val issues: List<TranslationValidationIssue>,
+    val normalizedIdCount: Int = 0,
 ) : IllegalStateException("Translation response failed strict validation")
 
 data class TranslationBatchOutput(
@@ -271,6 +291,7 @@ data class TranslationBatchOutput(
     val rawResponses: List<ByteArray>,
     val formatRecoveryCount: Int,
     val repairCount: Int,
+    val normalizedIdCount: Int,
 )
 
 class TranslationBatchExecutor(
@@ -299,11 +320,13 @@ class TranslationBatchExecutor(
         var followUpCalls = 0
         var response = call(TranslationPromptMode.Translate)
         var validation = TranslationResponseValidator.validate(plan, response.text)
+        var normalizedIdCount = validation.normalizedIdCount
         if (validation.hasFormatFailure() && followUpCalls < maxFollowUpCalls) {
             formatRecoveryCount = 1
             followUpCalls += 1
             response = call(TranslationPromptMode.FormatRecovery)
             validation = TranslationResponseValidator.validate(plan, response.text)
+            normalizedIdCount = validation.normalizedIdCount
         }
 
         var repairCount = 0
@@ -315,7 +338,10 @@ class TranslationBatchExecutor(
             val repairResponse = call(TranslationPromptMode.Repair, failedIds)
             val repairPlan = plan.copy(translateOnly = plan.translateOnly.filter { it.stableId in failedIds })
             val repairValidation = TranslationResponseValidator.validate(repairPlan, repairResponse.text)
-            if (!repairValidation.isValid) throw TranslationOutputException(repairValidation.issues)
+            if (!repairValidation.isValid) {
+                throw TranslationOutputException(repairValidation.issues, repairValidation.normalizedIdCount)
+            }
+            normalizedIdCount += repairValidation.normalizedIdCount
             repairCount = 1
             followUpCalls += 1
             val merged = validation.rows.toMutableMap().apply { putAll(repairValidation.rows) }
@@ -324,7 +350,7 @@ class TranslationBatchExecutor(
             }
             validation = TranslationResponseValidator.validate(plan, synthetic)
         }
-        if (!validation.isValid) throw TranslationOutputException(validation.issues)
+        if (!validation.isValid) throw TranslationOutputException(validation.issues, validation.normalizedIdCount)
 
         val targetCues =
             plan.translateOnly.map { source ->
@@ -336,6 +362,7 @@ class TranslationBatchExecutor(
             rawResponses = rawResponses,
             formatRecoveryCount = formatRecoveryCount,
             repairCount = repairCount,
+            normalizedIdCount = normalizedIdCount,
         )
     }
 

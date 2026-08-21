@@ -85,6 +85,54 @@ class TranslationPolicyEngineTest {
     }
 
     @Test
+    fun `missing cue prefixes are normalized only when they uniquely match expected ids`() {
+        val plan = singlePlan(3)
+        val response =
+            plan.translateOnly.joinToString("\n") { cue ->
+                "[${requireNotNull(cue.stableId).removePrefix("cue-")}] translated"
+            }
+
+        val validation = TranslationResponseValidator.validate(plan, response)
+
+        assertTrue(validation.isValid)
+        assertEquals(3, validation.normalizedIdCount)
+        assertEquals(plan.translateOnly.map { it.stableId }.toSet(), validation.rows.keys)
+    }
+
+    @Test
+    fun `unknown ids remain invalid when cue prefix recovery cannot match`() {
+        val plan = singlePlan(2)
+
+        val validation = TranslationResponseValidator.validate(plan, "[not-an-expected-id] translated")
+
+        assertFalse(validation.isValid)
+        assertEquals(0, validation.normalizedIdCount)
+        assertTrue(validation.issues.any { it.code == TranslationValidationIssueCode.UnknownId })
+    }
+
+    @Test
+    fun `missing cue prefixes recover locally without a follow up request`() = runBlocking {
+        val plan = singlePlan(3)
+        var calls = 0
+        val executor =
+            TranslationBatchExecutor { _, _ ->
+                calls += 1
+                val text =
+                    plan.translateOnly.joinToString("\n") { cue ->
+                        "[${requireNotNull(cue.stableId).removePrefix("cue-")}] translated"
+                    }
+                TranslationProviderResponse(text, UsageRecord(), text.toByteArray(), 200, 1L, text.length.toLong(), null, "https://example.test")
+            }
+
+        val result = executor.execute(plan, testPolicy(), "ja", "zh-CN")
+
+        assertEquals(1, calls)
+        assertEquals(3, result.normalizedIdCount)
+        assertEquals(0, result.formatRecoveryCount)
+        assertEquals(0, result.repairCount)
+    }
+
+    @Test
     fun `empty output gets one format recovery`() = runBlocking {
         val plan = singlePlan(2)
         var calls = 0

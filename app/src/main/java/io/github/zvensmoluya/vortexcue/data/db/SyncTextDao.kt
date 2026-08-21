@@ -125,7 +125,8 @@ interface SyncTextDao {
     suspend fun resumeBlockedSchemeTasks(schemeId: String, updatedAtMs: Long): Int
 
     @Query(
-        "UPDATE generation_task SET state = 'Running', stage = :stage, progress = :progress, " +
+        "UPDATE generation_task SET state = 'Running', stage = :stage, " +
+            "progress = CASE WHEN progress > :progress THEN progress ELSE :progress END, " +
             "waiting_for_network = 0, network_wait_reason = NULL, updated_at_ms = :updatedAtMs " +
             "WHERE task_id = :taskId AND state NOT IN ('Completed', 'Deleted', 'Paused', 'NeedsAttention') " +
             "AND paused = 0 AND needs_attention = 0 AND waiting_for_network = 0",

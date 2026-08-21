@@ -209,6 +209,43 @@ class TranslationProtocolAdaptersTest {
     }
 
     @Test
+    fun `responses adapter falls back to provider ids carried in response bodies`() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(
+                MockResponse(
+                    body =
+                        """{"id":"response-full","output_text":"[cue-1] one","usage":{"total_tokens":1}}""",
+                ),
+            )
+            server.enqueue(
+                MockResponse(
+                    headers = headersOf("Content-Type", "text/event-stream"),
+                    body =
+                        """
+                        event: response.created
+                        data: {"type":"response.created","response":{"id":"response-stream"}}
+
+                        event: response.output_text.delta
+                        data: {"type":"response.output_text.delta","delta":"[cue-1] one"}
+
+                        event: response.completed
+                        data: {"type":"response.completed","response":{"id":"response-stream","usage":{"total_tokens":1}}}
+
+                        """.trimIndent(),
+                ),
+            )
+            val adapter = ResponsesTranslationAdapter(BoundedHttpExecutor(testClient()))
+
+            val full = adapter.translate(request(server.url("/").toString()))
+            val streamed = adapter.translateStreaming(request(server.url("/").toString()))
+
+            assertEquals("response-full", full.requestId)
+            assertEquals("response-stream", streamed.requestId)
+        }
+    }
+
+    @Test
     fun `google template switches to the streaming operation`() = runBlocking {
         MockWebServer().use { server ->
             server.start()
@@ -344,6 +381,7 @@ class TranslationProtocolAdaptersTest {
                     wallClockMs += it
                     elapsedClockMs += it
                 },
+                retryJitterMs = { 0L },
             )
 
         val response =
@@ -359,6 +397,40 @@ class TranslationProtocolAdaptersTest {
         assertEquals(listOf(1, 2, 3), attempts.map(TranslationNetworkAttempt::attemptNumber))
         assertEquals(listOf(15L, 15L, 15L), attempts.map(TranslationNetworkAttempt::durationMs))
         assertTrue(attempts.all { requireNotNull(it.finishedAtMs) > requireNotNull(it.startedAtMs) })
+    }
+
+    @Test
+    fun `temporary network retries use shared cooldown and per request jitter`() = runBlocking {
+        var calls = 0
+        val waits = mutableListOf<Long>()
+        val adapter =
+            object : TranslationProtocolAdapter {
+                override val protocol = TranslationProtocol.Responses
+
+                override suspend fun translate(request: TranslationProviderRequest): TranslationProviderResponse {
+                    calls += 1
+                    if (calls == 1) {
+                        throw TranslationProtocolException(
+                            category = GenerationErrorCategory.TemporaryNetwork,
+                            retryable = true,
+                            capacityExceeded = false,
+                            phase = TranslationFailurePhase.Transport,
+                            message = "temporary",
+                        )
+                    }
+                    return TranslationProviderResponse("ok", UsageRecord(), byteArrayOf(), 200, 1L, 1L, null, request.endpoint)
+                }
+            }
+        val gateway =
+            TranslationNetworkGateway(
+                registry = TranslationAdapterRegistry(listOf(adapter)),
+                waitBeforeRetry = { waits += it },
+                retryJitterMs = { 125L },
+            )
+
+        gateway.translate(TranslationProtocol.Responses, request("https://example.test/v1/responses"))
+
+        assertEquals(listOf(500L, 125L), waits)
     }
 
     @Test

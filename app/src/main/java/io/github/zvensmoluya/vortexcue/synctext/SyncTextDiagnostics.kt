@@ -17,6 +17,7 @@ enum class SyncTextDiagnosticEventType {
     RunnerLease,
     RunnerLifecycle,
     WorkUnitLifecycle,
+    TranslationValidation,
     ResultPublished,
     ScheduleOutcome,
 }

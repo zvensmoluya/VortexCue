@@ -26,15 +26,12 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -54,7 +51,10 @@ class AndroidSyncTextNetworkState(context: Context) : SyncTextNetworkState {
     override fun waitReason(allowMetered: Boolean): GenerationNetworkWaitReason? {
         val network = connectivity.activeNetwork ?: return GenerationNetworkWaitReason.Unavailable
         val capabilities = connectivity.getNetworkCapabilities(network) ?: return GenerationNetworkWaitReason.Unavailable
-        if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+        if (
+            !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+            !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        ) {
             return GenerationNetworkWaitReason.Unavailable
         }
         return if (!allowMetered && !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) {
@@ -184,12 +184,14 @@ class SyncTextTaskRunner(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: TranslationProtocolException) {
-            repository.blockTask(
-                task.taskId,
-                error.category,
-                error.message ?: "Translation request failed",
-                blockScheme = error.category.blocksScheme(),
-            )
+            if (!deferForUnavailableNetwork(task.taskId, error.category)) {
+                repository.blockTask(
+                    task.taskId,
+                    error.category,
+                    error.message ?: "Translation request failed",
+                    blockScheme = error.category.blocksScheme(),
+                )
+            }
         } catch (error: TranslationOutputException) {
             repository.blockTask(
                 task.taskId,
@@ -198,12 +200,14 @@ class SyncTextTaskRunner(
                 blockScheme = false,
             )
         } catch (error: AsrException) {
-            repository.blockTask(
-                task.taskId,
-                error.category,
-                error.message ?: "Speech recognition failed",
-                blockScheme = error.category.blocksScheme(),
-            )
+            if (!deferForUnavailableNetwork(task.taskId, error.category)) {
+                repository.blockTask(
+                    task.taskId,
+                    error.category,
+                    error.message ?: "Speech recognition failed",
+                    blockScheme = error.category.blocksScheme(),
+                )
+            }
         } catch (error: PolicyIntegrityException) {
             repository.blockTask(task.taskId, GenerationErrorCategory.Policy, requireNotNull(error.message), true)
         } catch (error: CredentialUnavailableException) {
@@ -239,6 +243,16 @@ class SyncTextTaskRunner(
                 true,
             )
         }
+    }
+
+    private suspend fun deferForUnavailableNetwork(
+        taskId: String,
+        category: GenerationErrorCategory,
+    ): Boolean {
+        if (category != GenerationErrorCategory.TemporaryNetwork) return false
+        val reason = networkState.waitReason(repository.meteredNetworkAllowed(taskId)) ?: return false
+        repository.markWaitingForNetwork(taskId, reason)
+        return true
     }
 
     private suspend fun resolveSource(
@@ -319,65 +333,58 @@ class SyncTextTaskRunner(
             dao.upsertAsrWindows(entities)
         }
         val roots = entities.filter { it.parentWindowId == null }.sortedBy(AsrWindowEntity::ownedStartMs)
-        val semaphore = Semaphore(AsrParallelism)
         val publicationMutex = Mutex()
         val completedByRoot = linkedMapOf<String, List<WindowTranscript>>()
         var publishedRootCount =
             task.sourceResultId?.let { dao.generatedResult(it)?.completedWindowCount } ?: 0
-        val completed = AtomicInteger(0)
+        val initiallyCompletedRootIds =
+            roots.filter { it.state == CompletedState && it.transcriptArtifactId != null }
+                .mapTo(mutableSetOf(), AsrWindowEntity::windowId)
+        val completed = AtomicInteger(initiallyCompletedRootIds.size)
         val transcripts =
-            coroutineScope {
-                roots.map { entity ->
-                    async {
-                        semaphore.acquire()
-                        try {
-                            processAsrWindowTree(task, snapshot, attempt, mediaUri, durationMs, planner, entity).also { work ->
-                                publicationMutex.withLock {
-                                    completedByRoot[entity.windowId] = work
-                                    val prefix = roots.takeWhile { completedByRoot.containsKey(it.windowId) }
-                                    if (prefix.size > publishedRootCount) {
-                                        val prefixWork = prefix.flatMap { requireNotNull(completedByRoot[it.windowId]) }
-                                        val prefixCues = mergeWindowTranscripts(prefixWork)
-                                        if (prefixCues.isNotEmpty()) {
-                                            val language = resolveAsrLanguage(snapshot, prefixWork)
-                                            repository.publishResult(
-                                                taskId = task.taskId,
-                                                sourceLanguage = language,
-                                                targetLanguage = null,
-                                                presentationMode = TextPresentationMode.TargetOnly,
-                                                sourceCues = prefixCues,
-                                                targetCues = null,
-                                                usage = prefixWork.map(WindowTranscript::usage).sumRealUsage(),
-                                                sourceModel = AsrProfile.fromStoredValue(attempt.asrProfile).modelId,
-                                                completeTask = prefix.size == roots.size,
-                                                completeness =
-                                                    if (prefix.size == roots.size) {
-                                                        GeneratedResultCompleteness.Final
-                                                    } else {
-                                                        GeneratedResultCompleteness.Partial
-                                                    },
-                                                coveredEndMs = prefix.last().ownedEndMs,
-                                                completedWindowCount = prefix.size,
-                                                totalWindowCount = roots.size,
-                                                partialArtifactIds = prefixWork.map(WindowTranscript::artifactId),
-                                            )
-                                            publishedRootCount = prefix.size
-                                        }
-                                    }
-                                }
+            fifoParallelMap(roots, AsrParallelism) { entity ->
+                processAsrWindowTree(task, snapshot, attempt, mediaUri, durationMs, planner, entity).also { work ->
+                    if (entity.windowId !in initiallyCompletedRootIds) completed.incrementAndGet()
+                    repository.markRunning(
+                        task.taskId,
+                        GenerationStage.RecognizingSpeech,
+                        0.10f + 0.40f * completed.get() / roots.size.coerceAtLeast(1),
+                    )
+                    publicationMutex.withLock {
+                        completedByRoot[entity.windowId] = work
+                        val prefix = roots.takeWhile { completedByRoot.containsKey(it.windowId) }
+                        if (prefix.size > publishedRootCount) {
+                            val prefixWork = prefix.flatMap { requireNotNull(completedByRoot[it.windowId]) }
+                            val prefixCues = mergeWindowTranscripts(prefixWork)
+                            if (prefixCues.isNotEmpty()) {
+                                val language = resolveAsrLanguage(snapshot, prefixWork)
+                                repository.publishResult(
+                                    taskId = task.taskId,
+                                    sourceLanguage = language,
+                                    targetLanguage = null,
+                                    presentationMode = TextPresentationMode.TargetOnly,
+                                    sourceCues = prefixCues,
+                                    targetCues = null,
+                                    usage = prefixWork.map(WindowTranscript::usage).sumRealUsage(),
+                                    sourceModel = AsrProfile.fromStoredValue(attempt.asrProfile).modelId,
+                                    completeTask = prefix.size == roots.size,
+                                    completeness =
+                                        if (prefix.size == roots.size) {
+                                            GeneratedResultCompleteness.Final
+                                        } else {
+                                            GeneratedResultCompleteness.Partial
+                                        },
+                                    coveredEndMs = prefix.last().ownedEndMs,
+                                    completedWindowCount = prefix.size,
+                                    totalWindowCount = roots.size,
+                                    partialArtifactIds = prefixWork.map(WindowTranscript::artifactId),
+                                )
+                                publishedRootCount = prefix.size
                             }
-                        } finally {
-                            semaphore.release()
-                            val count = completed.incrementAndGet()
-                            repository.markRunning(
-                                task.taskId,
-                                GenerationStage.RecognizingSpeech,
-                                0.10f + 0.40f * count / roots.size.coerceAtLeast(1),
-                            )
                         }
                     }
-                }.awaitAll().flatten()
-            }
+                }
+            }.flatten()
         val merged = mergeWindowTranscripts(transcripts)
         if (merged.isEmpty()) {
             throw AsrException(
@@ -635,39 +642,37 @@ class SyncTextTaskRunner(
             dao.upsertTranslationBatches(entities)
         }
         val initialByRange = entities.filter { it.parentBatchId == null }.associateBy { it.firstCueIndex to it.lastCueIndex }
-        val semaphore = Semaphore(TranslationParallelism)
-        val completed = AtomicInteger(0)
-        repository.markRunning(task.taskId, GenerationStage.Translating, SourceProgress)
+        val initiallyCompletedRanges =
+            initialByRange.filterValues { it.state == CompletedState && it.resultArtifactId != null }.keys
+        val completed = AtomicInteger(initiallyCompletedRanges.size)
+        repository.markRunning(
+            task.taskId,
+            GenerationStage.Translating,
+            SourceProgress + TranslationProgressRange * completed.get() / plans.size.coerceAtLeast(1),
+        )
         val outputs =
-            coroutineScope {
-                plans.map { plan ->
-                    async {
-                        semaphore.acquire()
-                        try {
-                            val entity = initialByRange[plan.firstCueIndex to plan.lastCueIndex]
-                                ?: plan.toEntity(attempt.attemptId, newId()).also { dao.upsertTranslationBatch(it) }
-                            processTranslationBatch(
-                                task,
-                                snapshot,
-                                attempt,
-                                policy,
-                                snapshot.sourceLanguage ?: source.language,
-                                normalizedSource,
-                                plan,
-                                entity,
-                            )
-                        } finally {
-                            semaphore.release()
-                            val count = completed.incrementAndGet()
-                            repository.markRunning(
-                                task.taskId,
-                                GenerationStage.Translating,
-                                SourceProgress + TranslationProgressRange * count / plans.size.coerceAtLeast(1),
-                            )
-                        }
-                    }
-                }.awaitAll().flatten()
-            }
+            fifoParallelMap(plans, TranslationParallelism) { plan ->
+                val range = plan.firstCueIndex to plan.lastCueIndex
+                val entity = initialByRange[range]
+                    ?: plan.toEntity(attempt.attemptId, newId()).also { dao.upsertTranslationBatch(it) }
+                processTranslationBatch(
+                    task,
+                    snapshot,
+                    attempt,
+                    policy,
+                    snapshot.sourceLanguage ?: source.language,
+                    normalizedSource,
+                    plan,
+                    entity,
+                ).also {
+                    if (range !in initiallyCompletedRanges) completed.incrementAndGet()
+                    repository.markRunning(
+                        task.taskId,
+                        GenerationStage.Translating,
+                        SourceProgress + TranslationProgressRange * completed.get() / plans.size.coerceAtLeast(1),
+                    )
+                }
+            }.flatten()
         val translatedById = outputs.flatMap(BatchWork::cues).associateBy { requireNotNull(it.stableId) }
         val target =
             normalizedSource.map { cue ->
@@ -804,6 +809,18 @@ class SyncTextTaskRunner(
                 outcome = "Completed",
                 valueMs = (elapsedRealtimeMs() - workUnitStartedElapsedMs).coerceAtLeast(0L),
             )
+            if (output.normalizedIdCount > 0) {
+                diagnostics.record(
+                    SyncTextDiagnosticEventType.TranslationValidation,
+                    taskId = task.taskId,
+                    attemptId = attempt.attemptId,
+                    workUnitKind = TranslationWorkUnitKind,
+                    workUnitId = entity.batchId,
+                    stage = GenerationStage.Translating.name,
+                    outcome = "Normalized",
+                    reason = "MissingCuePrefix=${output.normalizedIdCount}",
+                )
+            }
             return listOf(BatchWork(output.targetCues, output.usage))
         } catch (error: TranslationProtocolException) {
             if (!error.capacityExceeded || plan.translateOnly.size <= 1) {
@@ -845,6 +862,21 @@ class SyncTextTaskRunner(
             return children.flatMap { (childPlan, childEntity) ->
                 processTranslationBatch(task, snapshot, attempt, policy, sourceLanguage, allSource, childPlan, childEntity)
             }
+        } catch (error: TranslationOutputException) {
+            val issueSummary = error.diagnosticIssueSummary()
+            dao.upsertTranslationBatch(entity.copy(state = FailedState, errorMessage = issueSummary.take(600)))
+            diagnostics.record(
+                SyncTextDiagnosticEventType.TranslationValidation,
+                taskId = task.taskId,
+                attemptId = attempt.attemptId,
+                workUnitKind = TranslationWorkUnitKind,
+                workUnitId = entity.batchId,
+                stage = GenerationStage.Translating.name,
+                outcome = "Rejected",
+                reason = issueSummary,
+                valueMs = (elapsedRealtimeMs() - workUnitStartedElapsedMs).coerceAtLeast(0L),
+            )
+            throw error
         }
     }
 
@@ -911,7 +943,7 @@ class SyncTextTaskRunner(
                     costUsd = response?.usage?.costUsd,
                     rawResponseFileName = rawFile,
                     errorCategory = error?.category?.name,
-                    errorMessage = error?.message?.take(600),
+                    errorMessage = error?.diagnosticDetails()?.take(600),
                     startedAtMs = networkAttempt.startedAtMs ?: timestamp,
                     finishedAtMs = networkAttempt.finishedAtMs ?: timestamp,
                     durationMs = networkAttempt.durationMs,
@@ -958,7 +990,7 @@ class SyncTextTaskRunner(
                     costUsd = result?.usage?.costUsd,
                     rawResponseFileName = rawFile,
                     errorCategory = error?.category?.name,
-                    errorMessage = error?.message?.take(600),
+                    errorMessage = error?.diagnosticDetails()?.take(600),
                     startedAtMs = startedAtMs,
                     finishedAtMs = finishedAtMs,
                     durationMs = durationMs,
@@ -1151,6 +1183,44 @@ private fun TranslationBatchPlan.toEntity(
 
 private fun TranslationBatchEntity.usage() =
     UsageRecord(inputTokens, outputTokens, totalTokens, costUsd)
+
+private fun TranslationOutputException.diagnosticIssueSummary(): String {
+    val counts =
+        issues.groupingBy(TranslationValidationIssue::code).eachCount().entries
+            .sortedBy { it.key.name }
+            .joinToString(",") { "${it.key.name}=${it.value}" }
+    return listOfNotNull(
+        counts.takeIf(String::isNotBlank)?.let { "issues=$it" },
+        normalizedIdCount.takeIf { it > 0 }?.let { "normalizedIds=$it" },
+    ).joinToString(";").ifBlank { "issues=Unknown" }
+}
+
+private fun TranslationProtocolException.diagnosticDetails(): String =
+    diagnosticErrorDetails(message, phase?.name, cause)
+
+private fun AsrException.diagnosticDetails(): String =
+    diagnosticErrorDetails(message, (cause as? TranslationProtocolException)?.phase?.name, cause)
+
+private fun diagnosticErrorDetails(
+    message: String?,
+    phase: String?,
+    cause: Throwable?,
+): String =
+    listOfNotNull(
+        message?.takeIf(String::isNotBlank),
+        phase?.let { "phase=$it" },
+        cause?.rootCauseType()?.let { "cause=$it" },
+    ).joinToString("; ")
+
+private fun Throwable.rootCauseType(): String {
+    var current = this
+    val visited = mutableSetOf<Throwable>()
+    while (visited.add(current)) {
+        val next = current.cause ?: break
+        current = next
+    }
+    return current::class.simpleName ?: current.javaClass.name
+}
 
 private fun SubtitleCue.toTimestampedToken() =
     AsrTimestampedToken(startMs, endMs, text)
