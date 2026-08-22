@@ -10,13 +10,13 @@ import io.github.zvensmoluya.vortexcue.core.model.stableTimedTextTrackId
 import io.github.zvensmoluya.vortexcue.data.db.ActiveMediaLocatorEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentDispositionEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentEntity
-import io.github.zvensmoluya.vortexcue.data.db.ContentFolderEntity
-import io.github.zvensmoluya.vortexcue.data.db.ContentFolderMembershipEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentIdentityEntity
 import io.github.zvensmoluya.vortexcue.data.db.CurrentDraftEntity
 import io.github.zvensmoluya.vortexcue.data.db.CurrentPlaybackSessionEntity
 import io.github.zvensmoluya.vortexcue.data.db.CurrentQueueEntryEntity
 import io.github.zvensmoluya.vortexcue.data.db.MediaLocatorEntity
+import io.github.zvensmoluya.vortexcue.data.db.PlaylistEntity
+import io.github.zvensmoluya.vortexcue.data.db.PlaylistItemEntity
 import io.github.zvensmoluya.vortexcue.data.db.RecentEntryEntity
 import io.github.zvensmoluya.vortexcue.data.db.TextSelectionEntity
 import io.github.zvensmoluya.vortexcue.data.db.TimedTextTrackEntity
@@ -69,8 +69,8 @@ class ContentMergeTest {
         dao.upsertDisposition(ContentDispositionEntity("duplicate", true, 3L))
         dao.upsertRecent(RecentEntryEntity("primary", 10L))
         dao.upsertRecent(RecentEntryEntity("duplicate", 20L))
-        dao.upsertContentFolder(ContentFolderEntity("folder", "Test", 1L, 1L))
-        dao.upsertContentFolderMembership(ContentFolderMembershipEntity("duplicate", "folder", 2L))
+        dao.upsertPlaylist(PlaylistEntity("playlist", "Test", 0L, 1L, 1L))
+        dao.upsertPlaylistItem(PlaylistItemEntity("playlist", "duplicate", 0L, 2L))
         dao.upsertDraft(CurrentDraftEntity(contentId = "duplicate", updatedAtMs = 2L))
 
         val primaryTrackId = stableTimedTextTrackId("primary", TimedTextOrigin.Sidecar, SharedTextIdentity)
@@ -111,7 +111,7 @@ class ContentMergeTest {
         assertEquals(25L, dao.content("primary")?.subtitleOffsetMs)
         assertEquals(true, dao.disposition("primary")?.isCollected)
         assertEquals(20L, dao.recent("primary")?.lastOpenedAtMs)
-        assertEquals("folder", dao.contentFolderMembership("primary")?.folderId)
+        assertEquals("playlist", dao.playlistItemsForContent("primary").single().playlistId)
         assertEquals("primary", dao.draft()?.contentId)
         assertEquals(listOf("primary", "other"), playbackDao.queueEntries().map { it.contentId })
         assertEquals("primary", playbackDao.session()?.currentContentId)

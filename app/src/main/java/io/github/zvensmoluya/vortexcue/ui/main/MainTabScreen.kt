@@ -22,28 +22,24 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.QueueMusic
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AudioFile
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material.icons.outlined.Tune
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -54,7 +50,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -89,16 +84,16 @@ import io.github.zvensmoluya.vortexcue.core.model.DisplayProfile
 import io.github.zvensmoluya.vortexcue.R
 import io.github.zvensmoluya.vortexcue.core.model.displayArtist
 import io.github.zvensmoluya.vortexcue.core.model.displayTitle
-import io.github.zvensmoluya.vortexcue.data.ContentFolderSummary
 import io.github.zvensmoluya.vortexcue.data.ContentRepository
-import io.github.zvensmoluya.vortexcue.data.ContentSort
 import io.github.zvensmoluya.vortexcue.data.ContentSummary
+import io.github.zvensmoluya.vortexcue.data.PlaylistSummary
 import io.github.zvensmoluya.vortexcue.data.PlaybackRecoveryProjection
 import io.github.zvensmoluya.vortexcue.data.SourceSummary
 import io.github.zvensmoluya.vortexcue.library.LibraryCoordinatorState
 import io.github.zvensmoluya.vortexcue.library.LibrarySourceKind
 import io.github.zvensmoluya.vortexcue.playback.PlaybackGateway
 import io.github.zvensmoluya.vortexcue.ui.player.PlaybackSnapshot
+import io.github.zvensmoluya.vortexcue.ui.player.formatTime
 import io.github.zvensmoluya.vortexcue.ui.queue.QueueItemRow
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextAction
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextConfigPage
@@ -113,7 +108,6 @@ import io.github.zvensmoluya.vortexcue.ui.theme.AppHairline
 import io.github.zvensmoluya.vortexcue.ui.theme.AppMutedText
 import io.github.zvensmoluya.vortexcue.ui.theme.AppPrimaryText
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSecondaryText
-import io.github.zvensmoluya.vortexcue.ui.theme.AppSurface
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceRaised
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceSelected
 import kotlinx.coroutines.launch
@@ -132,8 +126,10 @@ internal fun MainTabScreen(
     playback: PlaybackSnapshot,
     gateway: PlaybackGateway,
     displayProfile: DisplayProfile,
-    contentSort: ContentSort,
-    onContentSortChanged: (ContentSort) -> Unit,
+    playlistViewId: String?,
+    onPlaylistViewChanged: (String?) -> Unit,
+    playlistListState: LazyListState,
+    playlistDetailListState: LazyListState,
     onPickMedia: () -> Unit,
     onRequestLibraryAccess: () -> Unit,
     onRefreshLibrary: () -> Unit,
@@ -144,6 +140,7 @@ internal fun MainTabScreen(
     onRemoveSource: (String) -> Unit,
     onPendingImportConsumed: () -> Unit,
     onPlaySingle: (String) -> Unit,
+    onPlayPlaylist: (String, List<String>, Int) -> Unit,
     onQueueSelect: (Int) -> Unit,
     onContinue: () -> Unit,
     onPlayPause: () -> Unit,
@@ -155,26 +152,32 @@ internal fun MainTabScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    val folders by repository.contentFolders.collectAsState(initial = emptyList())
+    val playlists by repository.playlists.collectAsState(initial = emptyList())
+    val recentPlaylists by repository.recentPlaylists.collectAsState(initial = emptyList())
+    val allContent by repository.allContent.collectAsState(initial = emptyList())
     val ignoredContent by repository.ignoredContent.collectAsState(initial = emptyList())
     val sourceSummaries by repository.sources.collectAsState(initial = sources)
-    var selectedFolderId by rememberSaveable { mutableStateOf<String?>(null) }
-    var query by rememberSaveable { mutableStateOf("") }
+    val detailContentFlow = remember(repository, playlistViewId) {
+        if (playlistViewId == null || playlistViewId == AllContentPlaylistId) repository.allContent
+        else repository.observePlaylistContent(playlistViewId)
+    }
+    val detailContent by detailContentFlow.collectAsState(initial = emptyList())
     var importVisible by rememberSaveable { mutableStateOf(false) }
     var selectedItem by remember { mutableStateOf<ContentSummary?>(null) }
-    var folderDialogMode by remember { mutableStateOf<FolderDialogMode?>(null) }
-    var folderName by remember { mutableStateOf("") }
-    var folderPickerForContent by remember { mutableStateOf<ContentSummary?>(null) }
-    var sourceMenuVisible by remember { mutableStateOf(false) }
-    var sortMenuVisible by remember { mutableStateOf(false) }
+    var playlistDialogMode by remember { mutableStateOf<PlaylistDialogMode?>(null) }
+    var playlistName by remember { mutableStateOf("") }
+    var membershipItem by remember { mutableStateOf<ContentSummary?>(null) }
+    var membershipInitialIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var playlistToDelete by remember { mutableStateOf<PlaylistSummary?>(null) }
+    var playlistReorderMode by rememberSaveable { mutableStateOf(false) }
+    var contentReorderMode by rememberSaveable { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
-    val contentListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val queueListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val settingsListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
 
-    LaunchedEffect(selectedFolderId, folders) {
-        if (selectedFolderId != null && folders.none { it.folderId == selectedFolderId }) {
-            selectedFolderId = null
+    LaunchedEffect(playlistViewId, playlists) {
+        if (playlistViewId != null && playlistViewId != AllContentPlaylistId && playlists.none { it.playlistId == playlistViewId }) {
+            onPlaylistViewChanged(null)
         }
     }
     LaunchedEffect(openImportHubRequest) {
@@ -183,23 +186,16 @@ internal fun MainTabScreen(
             onImportHubRequestConsumed()
         }
     }
-    val content by remember(repository, selectedFolderId, query, contentSort) {
-        repository.observeContent(selectedFolderId, query, contentSort)
-    }.collectAsState(initial = emptyList())
-    val rootContent by remember(repository, contentSort) {
-        repository.observeContent(null, "", contentSort)
-    }.collectAsState(initial = emptyList())
-
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = AppBackground,
         topBar = {
-            if (selectedTab != MainTab.Config) {
+            if (selectedTab != MainTab.Playlists && selectedTab != MainTab.Config) {
                 TopAppBar(
                     title = {
                         Text(
                             when (selectedTab) {
-                                MainTab.Content -> "内容"
+                                MainTab.Playlists -> "歌单"
                                 MainTab.Queue -> "播放列表"
                                 MainTab.Config -> "配置"
                                 MainTab.Settings -> "设置"
@@ -210,33 +206,7 @@ internal fun MainTabScreen(
                     },
                     actions = {
                         when (selectedTab) {
-                            MainTab.Content -> {
-                                IconButton(
-                                    onClick = { sortMenuVisible = true },
-                                    modifier = Modifier.semantics { contentDescription = "内容排序" },
-                                ) { Icon(Icons.Outlined.SwapVert, null, tint = AppSecondaryText) }
-                                DropdownMenu(
-                                    expanded = sortMenuVisible,
-                                    onDismissRequest = { sortMenuVisible = false },
-                                ) {
-                                    ContentSort.entries.forEach { sort ->
-                                        DropdownMenuItem(
-                                            text = { Text(sort.label()) },
-                                            leadingIcon = {
-                                                if (sort == contentSort) Icon(Icons.Outlined.Check, null)
-                                            },
-                                            onClick = {
-                                                sortMenuVisible = false
-                                                onContentSortChanged(sort)
-                                            },
-                                        )
-                                    }
-                                }
-                                IconButton(
-                                    onClick = { importVisible = true },
-                                    modifier = Modifier.semantics { contentDescription = "添加内容" },
-                                ) { Icon(Icons.Outlined.Add, null, tint = AppBoneLogo) }
-                            }
+                            MainTab.Playlists -> Unit
                             MainTab.Queue -> {
                                 if (recovery.queue.isNotEmpty()) {
                                     IconButton(
@@ -261,6 +231,8 @@ internal fun MainTabScreen(
                         title = recovery.currentItem?.media?.displayTitle ?: "播放列表",
                         isPlaying = playback.isPlaying,
                         progress = if (playback.durationMs > 0) playback.positionMs.toFloat() / playback.durationMs else 0f,
+                        positionMs = playback.positionMs,
+                        durationMs = playback.durationMs,
                         onOpen = onContinue,
                         onPlayPause = onPlayPause,
                     )
@@ -276,45 +248,67 @@ internal fun MainTabScreen(
     ) { insets ->
         Box(modifier = Modifier.padding(insets).fillMaxSize()) {
             when (selectedTab) {
-                MainTab.Content ->
-                    ContentTab(
-                        query = query,
-                        onQueryChanged = { query = it },
-                        folders = folders,
-                        rootCount = rootContent.size,
-                        selectedFolderId = selectedFolderId,
-                        onFolderSelected = { selectedFolderId = it },
-                        content = content,
-                        coordinator = coordinator,
-                        sourceMenuVisible = sourceMenuVisible,
-                        onSourceMenuVisibleChanged = { sourceMenuVisible = it },
-                        sources = sourceSummaries,
-                        onPlay = onPlaySingle,
-                        onLongPress = { selectedItem = it },
-                        onCreateFolder = {
-                            folderName = ""
-                            folderDialogMode = FolderDialogMode.Create
-                        },
-                        onRenameFolder = { folder ->
-                            folderName = folder.name
-                            folderDialogMode = FolderDialogMode.Rename(folder.folderId)
-                        },
-                        onDeleteFolder = { folder ->
-                            scope.launch {
-                                repository.deleteContentFolder(folder.folderId)
-                                notice = "已删除文件夹，内容已回到根目录"
-                            }
-                        },
-                        onPickMedia = onPickMedia,
-                        onRequestLibraryAccess = onRequestLibraryAccess,
-                        onAddFolder = onAddFolder,
-                        onRefreshLibrary = onRefreshLibrary,
-                        onRefreshSource = onRefreshSource,
-                        onCancelScan = onCancelScan,
-                        onRemoveSource = onRemoveSource,
-                        syncTextTasks = syncTextUiState.tasks,
-                        listState = contentListState,
-                    )
+                MainTab.Playlists ->
+                    if (playlistViewId == null) {
+                        PlaylistOverview(
+                            playlists = playlists,
+                            recentPlaylists = recentPlaylists,
+                            allContentCount = allContent.size,
+                            reorderMode = playlistReorderMode,
+                            listState = playlistListState,
+                            onOpenAllContent = { onPlaylistViewChanged(AllContentPlaylistId) },
+                            onOpenPlaylist = onPlaylistViewChanged,
+                            onCreatePlaylist = {
+                                playlistName = ""
+                                playlistDialogMode = PlaylistDialogMode.Create
+                            },
+                            onRenamePlaylist = { playlist ->
+                                playlistName = playlist.name
+                                playlistDialogMode = PlaylistDialogMode.Rename(playlist.playlistId)
+                            },
+                            onDeletePlaylist = { playlistToDelete = it },
+                            onReorderModeChanged = { playlistReorderMode = it },
+                            onMovePlaylist = { from, to ->
+                                val ids = playlists.map { it.playlistId }.toMutableList()
+                                if (from in ids.indices && to in ids.indices) {
+                                    ids.add(to, ids.removeAt(from))
+                                    scope.launch { repository.reorderPlaylists(ids) }
+                                }
+                            },
+                        )
+                    } else {
+                        val isAllContent = playlistViewId == AllContentPlaylistId
+                        val playlist = playlists.firstOrNull { it.playlistId == playlistViewId }
+                        PlaylistDetail(
+                            title = if (isAllContent) "全部内容" else playlist?.name ?: "歌单",
+                            content = detailContent,
+                            isAllContent = isAllContent,
+                            reorderMode = contentReorderMode,
+                            listState = playlistDetailListState,
+                            onBack = {
+                                contentReorderMode = false
+                                onPlaylistViewChanged(null)
+                            },
+                            onPlayAll = {
+                                if (!isAllContent && detailContent.isNotEmpty()) {
+                                    onPlayPlaylist(playlistViewId, detailContent.map { it.contentId }, 0)
+                                }
+                            },
+                            onPlay = { index ->
+                                if (isAllContent) detailContent.getOrNull(index)?.let { onPlaySingle(it.contentId) }
+                                else onPlayPlaylist(playlistViewId, detailContent.map { it.contentId }, index)
+                            },
+                            onLongPress = { selectedItem = it },
+                            onReorderModeChanged = { contentReorderMode = it },
+                            onMove = { from, to ->
+                                val ids = detailContent.map { it.contentId }.toMutableList()
+                                if (!isAllContent && from in ids.indices && to in ids.indices) {
+                                    ids.add(to, ids.removeAt(from))
+                                    scope.launch { repository.reorderPlaylistItems(playlistViewId, ids) }
+                                }
+                            },
+                        )
+                    }
                 MainTab.Queue ->
                     QueueTab(
                         recovery = recovery,
@@ -353,7 +347,13 @@ internal fun MainTabScreen(
                 task = syncTextUiState.tasks.firstOrNull { it.contentId == item.contentId },
                 onPlay = {
                     selectedItem = null
-                    onPlaySingle(item.contentId)
+                    val currentPlaylistId = playlistViewId?.takeIf { it != AllContentPlaylistId }
+                    val index = detailContent.indexOfFirst { it.contentId == item.contentId }
+                    if (currentPlaylistId != null && index >= 0) {
+                        onPlayPlaylist(currentPlaylistId, detailContent.map { it.contentId }, index)
+                    } else {
+                        onPlaySingle(item.contentId)
+                    }
                 },
                 onAdd = {
                     selectedItem = null
@@ -366,10 +366,23 @@ internal fun MainTabScreen(
                         }
                     }
                 },
-                onMove = {
+                onManagePlaylists = {
                     selectedItem = null
-                    folderPickerForContent = item
+                    scope.launch {
+                        membershipInitialIds = repository.playlistIdsForContent(item.contentId)
+                        membershipItem = item
+                    }
                 },
+                onRemoveFromPlaylist =
+                    playlistViewId?.takeIf { it != AllContentPlaylistId }?.let { currentPlaylistId ->
+                        {
+                            selectedItem = null
+                            scope.launch {
+                                repository.removeContentFromPlaylist(item.contentId, currentPlaylistId)
+                                notice = "已从歌单移除"
+                            }
+                        }
+                    },
                 onSync = {
                     selectedItem = null
                     onOpenSyncText(item)
@@ -397,36 +410,59 @@ internal fun MainTabScreen(
         }
     }
 
-    folderPickerForContent?.let { item ->
-        FolderPickerDialog(
-            folders = folders,
-            onDismiss = { folderPickerForContent = null },
-            onSelect = { folderId ->
-                folderPickerForContent = null
+    membershipItem?.let { item ->
+        PlaylistMembershipSheet(
+            title = item.media.displayTitle,
+            playlists = playlists,
+            initialSelection = membershipInitialIds,
+            onDismiss = { membershipItem = null },
+            onSave = { selectedIds, newName ->
                 scope.launch {
-                    repository.moveContentToFolder(item.contentId, folderId)
-                    notice = if (folderId == null) "已移到根目录" else "已移动到文件夹"
+                    runCatching {
+                        val finalIds =
+                            newName?.let { selectedIds + repository.createPlaylist(it).playlistId }
+                                ?: selectedIds
+                        repository.setContentPlaylists(item.contentId, finalIds)
+                    }.onSuccess {
+                        membershipItem = null
+                        notice = "歌单已更新"
+                    }
+                        .onFailure { notice = it.message ?: "无法更新歌单" }
                 }
             },
         )
     }
 
-    folderDialogMode?.let { mode ->
-        FolderNameDialog(
-            mode = mode,
-            value = folderName,
-            onValueChanged = { folderName = it },
-            onDismiss = { folderDialogMode = null },
+    playlistDialogMode?.let { mode ->
+        PlaylistNameDialog(
+            title = if (mode == PlaylistDialogMode.Create) "新建歌单" else "重命名歌单",
+            value = playlistName,
+            onValueChanged = { playlistName = it },
+            onDismiss = { playlistDialogMode = null },
             onConfirm = {
-                val value = folderName
-                folderDialogMode = null
+                val value = playlistName
+                playlistDialogMode = null
                 scope.launch {
                     runCatching {
                         when (mode) {
-                            FolderDialogMode.Create -> repository.createContentFolder(value)
-                            is FolderDialogMode.Rename -> repository.renameContentFolder(mode.folderId, value)
+                            PlaylistDialogMode.Create -> repository.createPlaylist(value)
+                            is PlaylistDialogMode.Rename -> repository.renamePlaylist(mode.playlistId, value)
                         }
-                    }.onSuccess { notice = "文件夹已保存" }.onFailure { notice = it.message ?: "无法保存文件夹" }
+                    }.onSuccess { notice = "歌单已保存" }.onFailure { notice = it.message ?: "无法保存歌单" }
+                }
+            },
+        )
+    }
+
+    playlistToDelete?.let { playlist ->
+        DeletePlaylistDialog(
+            name = playlist.name,
+            onDismiss = { playlistToDelete = null },
+            onConfirm = {
+                playlistToDelete = null
+                scope.launch {
+                    repository.deletePlaylist(playlist.playlistId)
+                    notice = "歌单已删除"
                 }
             },
         )
@@ -435,7 +471,7 @@ internal fun MainTabScreen(
     if (importVisible) {
         ImportHub(
             sources = sourceSummaries,
-            folders = folders,
+            playlists = playlists,
             coordinator = coordinator,
             onDismiss = { importVisible = false },
             onPickMedia = { importVisible = false; onPickMedia() },
@@ -448,16 +484,16 @@ internal fun MainTabScreen(
             onRemoveSource = onRemoveSource,
             ignoredContent = ignoredContent,
             onRestoreIgnored = { id -> scope.launch { repository.collect(id) } },
-            onImport = { allIds, selectedIds, folderId, newFolderName ->
+            onImport = { allIds, selectedIds, playlistId, newPlaylistName ->
                 scope.launch {
                     runCatching {
-                        val targetFolderId =
-                            newFolderName?.trim()?.takeIf(String::isNotBlank)?.let {
-                                repository.createContentFolder(it).folderId
-                            } ?: folderId
+                        val targetPlaylistId =
+                            newPlaylistName?.trim()?.takeIf(String::isNotBlank)?.let {
+                                repository.createPlaylist(it).playlistId
+                            } ?: playlistId
                         repository.importContent(
                             contentIds = selectedIds,
-                            folderId = targetFolderId,
+                            playlistId = targetPlaylistId,
                             ignoredContentIds = allIds - selectedIds,
                         )
                     }.onSuccess {
@@ -473,172 +509,9 @@ internal fun MainTabScreen(
     }
 }
 
-private sealed interface FolderDialogMode {
-    data object Create : FolderDialogMode
-    data class Rename(val folderId: String) : FolderDialogMode
-}
-
-@Composable
-private fun ContentTab(
-    query: String,
-    onQueryChanged: (String) -> Unit,
-    folders: List<ContentFolderSummary>,
-    rootCount: Int,
-    selectedFolderId: String?,
-    onFolderSelected: (String?) -> Unit,
-    content: List<ContentSummary>,
-    coordinator: LibraryCoordinatorState,
-    sourceMenuVisible: Boolean,
-    onSourceMenuVisibleChanged: (Boolean) -> Unit,
-    sources: List<SourceSummary>,
-    onPlay: (String) -> Unit,
-    onLongPress: (ContentSummary) -> Unit,
-    onCreateFolder: () -> Unit,
-    onRenameFolder: (ContentFolderSummary) -> Unit,
-    onDeleteFolder: (ContentFolderSummary) -> Unit,
-    onPickMedia: () -> Unit,
-    onRequestLibraryAccess: () -> Unit,
-    onAddFolder: () -> Unit,
-    onRefreshLibrary: () -> Unit,
-    onRefreshSource: (String) -> Unit,
-    onCancelScan: () -> Unit,
-    onRemoveSource: (String) -> Unit,
-    syncTextTasks: List<GenerationTaskSummary>,
-    listState: LazyListState,
-) {
-    Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = onQueryChanged,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            singleLine = true,
-            placeholder = { Text("搜索内容", color = AppMutedText) },
-            leadingIcon = { Icon(Icons.Outlined.Search, null, tint = AppSecondaryText) },
-        )
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp),
-        ) {
-            item(key = "root") {
-                FolderRow(
-                    name = "根目录",
-                    count = rootCount,
-                    selected = selectedFolderId == null,
-                    onClick = { onFolderSelected(null) },
-                )
-            }
-            items(folders, key = { it.folderId }) { folder ->
-                FolderRow(
-                    name = folder.name,
-                    count = folder.itemCount,
-                    selected = selectedFolderId == folder.folderId,
-                    onClick = { onFolderSelected(folder.folderId) },
-                    onRename = { onRenameFolder(folder) },
-                    onDelete = { onDeleteFolder(folder) },
-                )
-            }
-            item(key = "folder-actions") {
-                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    TextButton(onClick = onCreateFolder) {
-                        Icon(Icons.Outlined.CreateNewFolder, null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("新建文件夹")
-                    }
-                    Spacer(Modifier.weight(1f))
-                    IconButton(
-                        onClick = { onSourceMenuVisibleChanged(true) },
-                        modifier = Modifier.semantics { contentDescription = "来源" },
-                    ) { Icon(Icons.Outlined.MoreVert, null, tint = AppSecondaryText) }
-                    DropdownMenu(
-                        expanded = sourceMenuVisible,
-                        onDismissRequest = { onSourceMenuVisibleChanged(false) },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("重新扫描设备") },
-                            leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
-                            onClick = { onSourceMenuVisibleChanged(false); onRefreshLibrary() },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("从文件夹查找") },
-                            leadingIcon = { Icon(Icons.Outlined.FolderOpen, null) },
-                            onClick = { onSourceMenuVisibleChanged(false); onAddFolder() },
-                        )
-                        sources.forEach { source ->
-                            DropdownMenuItem(
-                                text = { Text("扫描 ${source.displayName}") },
-                                onClick = { onSourceMenuVisibleChanged(false); onRefreshSource(source.sourceId) },
-                            )
-                        }
-                        if (coordinator.isLoading) {
-                            DropdownMenuItem(
-                                text = { Text("取消扫描") },
-                                onClick = { onSourceMenuVisibleChanged(false); onCancelScan() },
-                            )
-                        }
-                    }
-                }
-            }
-            if (content.isEmpty()) {
-                item(key = "empty") {
-                    EmptyContent(
-                        onPickMedia = onPickMedia,
-                        onRequestLibraryAccess = onRequestLibraryAccess,
-                        onAddFolder = onAddFolder,
-                    )
-                }
-            } else {
-                items(content, key = { it.contentId }) { item ->
-                    ContentRow(
-                        item = item,
-                        status = generationProductStatus(syncTextTasks.firstOrNull { it.contentId == item.contentId }),
-                        onClick = { onPlay(item.contentId) },
-                        onLongPress = { onLongPress(item) },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-internal fun FolderRow(
-    name: String,
-    count: Int,
-    selected: Boolean,
-    onClick: () -> Unit,
-    onRename: (() -> Unit)? = null,
-    onDelete: (() -> Unit)? = null,
-) {
-    var menuVisible by remember { mutableStateOf(false) }
-    Column {
-        Row(
-            modifier = Modifier.fillMaxWidth().background(if (selected) AppSurfaceSelected else Color.Transparent).padding(horizontal = 16.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onClick, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
-                Icon(Icons.Outlined.Folder, null, tint = AppAccent)
-                Spacer(Modifier.width(12.dp))
-                Text(name, color = AppPrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.weight(1f))
-                Text(count.toString(), color = AppMutedText)
-            }
-            if (onRename != null || onDelete != null) {
-                IconButton(onClick = { menuVisible = true }) {
-                    Icon(Icons.Outlined.MoreVert, contentDescription = "$name 文件夹操作", tint = AppSecondaryText)
-                }
-                DropdownMenu(expanded = menuVisible, onDismissRequest = { menuVisible = false }) {
-                    onRename?.let {
-                        DropdownMenuItem(text = { Text("重命名") }, onClick = { menuVisible = false; it() })
-                    }
-                    onDelete?.let {
-                        DropdownMenuItem(text = { Text("删除文件夹") }, onClick = { menuVisible = false; it() })
-                    }
-                }
-            }
-        }
-        HorizontalDivider(color = AppHairline)
-    }
+private sealed interface PlaylistDialogMode {
+    data object Create : PlaylistDialogMode
+    data class Rename(val playlistId: String) : PlaylistDialogMode
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -806,16 +679,45 @@ private fun SettingsTab(
 }
 
 @Composable
-internal fun MiniPlayer(title: String, isPlaying: Boolean, progress: Float, onOpen: () -> Unit, onPlayPause: () -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth().background(AppSurface).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.AutoMirrored.Outlined.QueueMusic, null, tint = AppSecondaryText, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(10.dp))
-        Column(modifier = Modifier.weight(1f).combinedClickable(onClick = onOpen, onLongClick = onOpen)) {
-            Text(title, color = AppPrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
-            LinearProgressIndicator(progress = { progress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp), color = AppAccent, trackColor = AppHairline)
+internal fun MiniPlayer(
+    title: String,
+    isPlaying: Boolean,
+    progress: Float,
+    positionMs: Long,
+    durationMs: Long,
+    onOpen: () -> Unit,
+    onPlayPause: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .heightIn(min = 72.dp)
+            .background(AppSurfaceRaised, RoundedCornerShape(8.dp)),
+    ) {
+        if (durationMs > 0L) {
+            LinearProgressIndicator(
+                progress = { progress.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                color = AppAccent,
+                trackColor = AppHairline,
+            )
         }
-        IconButton(onClick = onPlayPause, modifier = Modifier.semantics { contentDescription = if (isPlaying) "暂停" else "播放" }) {
-            Icon(if (isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, null, tint = AppPrimaryText)
+        Row(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(start = 18.dp, end = 8.dp, top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f).combinedClickable(onClick = onOpen, onLongClick = onOpen).padding(vertical = 10.dp),
+            ) {
+                Text(title, color = AppPrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                if (durationMs > 0L) {
+                    Text("${formatTime(positionMs)} / ${formatTime(durationMs)}", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                }
+            }
+            IconButton(onClick = onPlayPause, modifier = Modifier.semantics { contentDescription = if (isPlaying) "暂停" else "播放" }) {
+                Icon(if (isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, null, tint = AppPrimaryText)
+            }
         }
     }
 }
@@ -826,7 +728,8 @@ private fun ItemActions(
     task: GenerationTaskSummary?,
     onPlay: () -> Unit,
     onAdd: () -> Unit,
-    onMove: () -> Unit,
+    onManagePlaylists: () -> Unit,
+    onRemoveFromPlaylist: (() -> Unit)?,
     onSync: () -> Unit,
     onIgnore: () -> Unit,
     onCancelSync: () -> Unit,
@@ -837,7 +740,8 @@ private fun ItemActions(
         Text(item.media.displayTitle, color = AppPrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 12.dp))
         ActionButton("立即播放", Icons.Outlined.PlayArrow, onPlay)
         ActionButton("加入播放列表", Icons.AutoMirrored.Outlined.QueueMusic, onAdd)
-        ActionButton("移动到文件夹", Icons.Outlined.Folder, onMove)
+        ActionButton("加入歌单", Icons.AutoMirrored.Outlined.QueueMusic, onManagePlaylists)
+        onRemoveFromPlaylist?.let { ActionButton("从当前歌单移除", Icons.Outlined.Close, it) }
         ActionButton("同步文字", Icons.Outlined.Translate, onSync)
         task?.let {
             if (
@@ -865,39 +769,11 @@ private fun ActionButton(label: String, icon: androidx.compose.ui.graphics.vecto
     }
 }
 
-@Composable
-private fun FolderPickerDialog(folders: List<ContentFolderSummary>, onDismiss: () -> Unit, onSelect: (String?) -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("移动到文件夹") },
-        text = {
-            Column {
-                TextButton(onClick = { onSelect(null) }, modifier = Modifier.fillMaxWidth()) { Text("根目录") }
-                folders.forEach { folder -> TextButton(onClick = { onSelect(folder.folderId) }, modifier = Modifier.fillMaxWidth()) { Text(folder.name) } }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-        containerColor = AppSurfaceRaised,
-    )
-}
-
-@Composable
-private fun FolderNameDialog(mode: FolderDialogMode, value: String, onValueChanged: (String) -> Unit, onDismiss: () -> Unit, onConfirm: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (mode == FolderDialogMode.Create) "新建文件夹" else "重命名文件夹") },
-        text = { OutlinedTextField(value = value, onValueChange = onValueChanged, singleLine = true, label = { Text("名称") }) },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-        confirmButton = { TextButton(enabled = value.trim().isNotBlank(), onClick = onConfirm) { Text("保存") } },
-        containerColor = AppSurfaceRaised,
-    )
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ImportHub(
     sources: List<SourceSummary>,
-    folders: List<ContentFolderSummary>,
+    playlists: List<PlaylistSummary>,
     coordinator: LibraryCoordinatorState,
     ignoredContent: List<ContentSummary>,
     onRestoreIgnored: (String) -> Unit,
@@ -910,16 +786,16 @@ internal fun ImportHub(
     onRelinkSource: (String) -> Unit,
     onCancelScan: () -> Unit,
     onRemoveSource: (String) -> Unit,
-    onImport: (allIds: Set<String>, selectedIds: Set<String>, folderId: String?, newFolderName: String?) -> Unit,
+    onImport: (allIds: Set<String>, selectedIds: Set<String>, playlistId: String?, newPlaylistName: String?) -> Unit,
 ) {
     val pending = coordinator.pendingImport
     var selectedIds by remember(pending?.contentIds) {
         mutableStateOf(pending?.defaultSelectedContentIds.orEmpty())
     }
-    var targetFolderId by remember(pending?.contentIds) { mutableStateOf<String?>(null) }
-    var folderMenuVisible by remember { mutableStateOf(false) }
-    var newFolderName by remember(pending?.contentIds) { mutableStateOf("") }
-    val targetFolderName = folders.firstOrNull { it.folderId == targetFolderId }?.name ?: "根目录"
+    var targetPlaylistId by remember(pending?.contentIds) { mutableStateOf<String?>(null) }
+    var playlistMenuVisible by remember { mutableStateOf(false) }
+    var newPlaylistName by remember(pending?.contentIds) { mutableStateOf("") }
+    val targetPlaylistName = playlists.firstOrNull { it.playlistId == targetPlaylistId }?.name ?: "仅加入全部内容"
 
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AppSurfaceRaised) {
         LazyColumn(
@@ -978,31 +854,31 @@ internal fun ImportHub(
                     }
                 }
                 item {
-                    Text("导入位置", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                    Text("加入歌单", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                     Box {
-                        OutlinedButton(onClick = { folderMenuVisible = true }) {
-                            Icon(Icons.Outlined.Folder, null)
+                        OutlinedButton(onClick = { playlistMenuVisible = true }) {
+                            Icon(Icons.AutoMirrored.Outlined.QueueMusic, null)
                             Spacer(Modifier.width(8.dp))
-                            Text(targetFolderName)
+                            Text(targetPlaylistName)
                         }
-                        DropdownMenu(expanded = folderMenuVisible, onDismissRequest = { folderMenuVisible = false }) {
+                        DropdownMenu(expanded = playlistMenuVisible, onDismissRequest = { playlistMenuVisible = false }) {
                             DropdownMenuItem(
-                                text = { Text("根目录") },
-                                onClick = { targetFolderId = null; folderMenuVisible = false },
+                                text = { Text("仅加入全部内容") },
+                                onClick = { targetPlaylistId = null; playlistMenuVisible = false },
                             )
-                            folders.forEach { folder ->
+                            playlists.forEach { playlist ->
                                 DropdownMenuItem(
-                                    text = { Text(folder.name) },
-                                    onClick = { targetFolderId = folder.folderId; folderMenuVisible = false },
+                                    text = { Text(playlist.name) },
+                                    onClick = { targetPlaylistId = playlist.playlistId; playlistMenuVisible = false },
                                 )
                             }
                         }
                     }
                     OutlinedTextField(
-                        value = newFolderName,
-                        onValueChange = { newFolderName = it },
+                        value = newPlaylistName,
+                        onValueChange = { newPlaylistName = it },
                         modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                        label = { Text("或新建文件夹") },
+                        label = { Text("或新建歌单") },
                         singleLine = true,
                     )
                     Button(
@@ -1011,8 +887,8 @@ internal fun ImportHub(
                             onImport(
                                 batch.contentIds.toSet(),
                                 selectedIds,
-                                targetFolderId,
-                                newFolderName.takeIf(String::isNotBlank),
+                                targetPlaylistId,
+                                newPlaylistName.takeIf(String::isNotBlank),
                             )
                         },
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -1076,16 +952,9 @@ private fun Notice(message: String, onDismiss: () -> Unit, modifier: Modifier = 
     }
 }
 
-private fun ContentSort.label(): String =
-    when (this) {
-        ContentSort.RecentAdded -> "最近加入"
-        ContentSort.RecentPlayed -> "最近播放"
-        ContentSort.Title -> "标题"
-    }
-
 private fun MainTab.label(): String =
     when (this) {
-        MainTab.Content -> "内容"
+        MainTab.Playlists -> "歌单"
         MainTab.Queue -> "播放列表"
         MainTab.Config -> "配置"
         MainTab.Settings -> "设置"
@@ -1093,7 +962,7 @@ private fun MainTab.label(): String =
 
 private fun MainTab.icon(): androidx.compose.ui.graphics.vector.ImageVector =
     when (this) {
-        MainTab.Content -> Icons.Outlined.AudioFile
+        MainTab.Playlists -> Icons.Outlined.LibraryMusic
         MainTab.Queue -> Icons.AutoMirrored.Outlined.QueueMusic
         MainTab.Config -> Icons.Outlined.Tune
         MainTab.Settings -> Icons.Outlined.Settings

@@ -116,11 +116,14 @@ data class SourceSummary(
     val itemCount: Int,
 )
 
-data class ContentFolderSummary(
-    val folderId: String,
+data class PlaylistSummary(
+    val playlistId: String,
     val name: String,
     val itemCount: Int = 0,
+    val sortPosition: Long = 0L,
+    val lastPlayedAtMs: Long? = null,
 )
+
 
 data class SourceScanDescriptor(
     val sourceId: String,

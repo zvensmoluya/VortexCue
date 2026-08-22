@@ -85,50 +85,61 @@ interface ContentDao {
     fun observeDisposition(contentId: String): Flow<ContentDispositionEntity?>
 
     @Query(
-        "SELECT f.folder_id AS folderId, f.name AS name, COUNT(m.content_id) AS itemCount " +
-            "FROM content_folder f LEFT JOIN content_folder_membership m ON m.folder_id = f.folder_id " +
-            "GROUP BY f.folder_id ORDER BY f.name COLLATE NOCASE, f.folder_id",
+        "SELECT p.playlist_id AS playlistId, p.name AS name, COUNT(i.content_id) AS itemCount, " +
+            "p.sort_position AS sortPosition, p.last_played_at_ms AS lastPlayedAtMs " +
+            "FROM playlist p LEFT JOIN playlist_item i ON i.playlist_id = p.playlist_id " +
+            "GROUP BY p.playlist_id ORDER BY p.sort_position, p.playlist_id",
     )
-    fun observeContentFolders(): Flow<List<ContentFolderSummaryRow>>
+    fun observePlaylists(): Flow<List<PlaylistSummaryRow>>
 
     @Query(
-        "SELECT f.folder_id AS folderId, f.name AS name, COUNT(m.content_id) AS itemCount " +
-            "FROM content_folder f LEFT JOIN content_folder_membership m ON m.folder_id = f.folder_id " +
-            "GROUP BY f.folder_id ORDER BY f.name COLLATE NOCASE, f.folder_id",
+        "SELECT p.playlist_id AS playlistId, p.name AS name, COUNT(i.content_id) AS itemCount, " +
+            "p.sort_position AS sortPosition, p.last_played_at_ms AS lastPlayedAtMs " +
+            "FROM playlist p LEFT JOIN playlist_item i ON i.playlist_id = p.playlist_id " +
+            "GROUP BY p.playlist_id ORDER BY p.sort_position, p.playlist_id",
     )
-    suspend fun contentFolders(): List<ContentFolderSummaryRow>
+    suspend fun playlists(): List<PlaylistSummaryRow>
 
-    @Query("SELECT * FROM content_folder WHERE folder_id = :folderId")
-    suspend fun contentFolder(folderId: String): ContentFolderEntity?
+    @Query(
+        "SELECT p.playlist_id AS playlistId, p.name AS name, COUNT(i.content_id) AS itemCount, " +
+            "p.sort_position AS sortPosition, p.last_played_at_ms AS lastPlayedAtMs " +
+            "FROM playlist p INNER JOIN playlist_item i ON i.playlist_id = p.playlist_id " +
+            "WHERE p.last_played_at_ms IS NOT NULL GROUP BY p.playlist_id " +
+            "ORDER BY p.last_played_at_ms DESC, p.playlist_id LIMIT :limit",
+    )
+    fun observeRecentPlaylists(limit: Int): Flow<List<PlaylistSummaryRow>>
 
-    @Query("SELECT * FROM content_folder WHERE name = :name COLLATE NOCASE LIMIT 1")
-    suspend fun contentFolderByName(name: String): ContentFolderEntity?
+    @Query("SELECT * FROM playlist WHERE playlist_id = :playlistId")
+    suspend fun playlist(playlistId: String): PlaylistEntity?
 
-    @Query("SELECT * FROM content_folder_membership WHERE content_id = :contentId")
-    suspend fun contentFolderMembership(contentId: String): ContentFolderMembershipEntity?
+    @Query("SELECT * FROM playlist WHERE playlist_id = :playlistId")
+    fun observePlaylist(playlistId: String): Flow<PlaylistEntity?>
+
+    @Query("SELECT * FROM playlist WHERE name = :name COLLATE NOCASE LIMIT 1")
+    suspend fun playlistByName(name: String): PlaylistEntity?
+
+    @Query("SELECT * FROM playlist_item WHERE playlist_id = :playlistId ORDER BY sort_position, content_id")
+    suspend fun playlistItems(playlistId: String): List<PlaylistItemEntity>
+
+    @Query("SELECT * FROM playlist_item WHERE content_id = :contentId ORDER BY playlist_id")
+    suspend fun playlistItemsForContent(contentId: String): List<PlaylistItemEntity>
+
+    @Query("SELECT playlist_id FROM playlist_item WHERE content_id = :contentId ORDER BY playlist_id")
+    fun observePlaylistIdsForContent(contentId: String): Flow<List<String>>
 
     @Query(
         SUMMARY_SELECT +
-            " LEFT JOIN content_folder_membership fm ON fm.content_id = c.content_id " +
-            "WHERE (:query != '' OR (:folderId IS NULL AND fm.content_id IS NULL) OR fm.folder_id = :folderId) " +
-            "AND (" +
-            ":query = '' OR l.display_name LIKE '%' || :query || '%' COLLATE NOCASE " +
-            "OR l.title LIKE '%' || :query || '%' COLLATE NOCASE " +
-            "OR l.artist LIKE '%' || :query || '%' COLLATE NOCASE " +
-            "OR l.album LIKE '%' || :query || '%' COLLATE NOCASE" +
-            ") AND d.is_collected = 1 " +
-            "ORDER BY " +
-            "CASE WHEN :sort = 'Title' THEN COALESCE(NULLIF(l.title, ''), l.display_name) END COLLATE NOCASE ASC, " +
-            "CASE WHEN :sort = 'RecentPlayed' THEN COALESCE(r.last_opened_at_ms, 0) END DESC, " +
-            "CASE WHEN :sort = 'RecentAdded' THEN d.decided_at_ms END DESC, " +
-            "CASE WHEN :sort = 'Title' THEN l.date_added_seconds END DESC, " +
-            "c.content_id",
+            " WHERE d.is_collected = 1 ORDER BY d.decided_at_ms DESC, c.content_id",
     )
-    fun observeContent(
-        folderId: String?,
-        query: String,
-        sort: String,
-    ): Flow<List<ContentSummaryRow>>
+    fun observeAllContent(): Flow<List<ContentSummaryRow>>
+
+    @Query(
+        SUMMARY_SELECT +
+            " INNER JOIN playlist_item pi ON pi.content_id = c.content_id " +
+            "WHERE pi.playlist_id = :playlistId AND d.is_collected = 1 " +
+            "ORDER BY pi.sort_position, c.content_id",
+    )
+    fun observePlaylistContent(playlistId: String): Flow<List<ContentSummaryRow>>
 
     @Query("SELECT * FROM recent_entry WHERE content_id = :contentId")
     suspend fun recent(contentId: String): RecentEntryEntity?
@@ -234,22 +245,34 @@ interface ContentDao {
     suspend fun upsertDisposition(entity: ContentDispositionEntity)
 
     @Upsert
-    suspend fun upsertContentFolder(entity: ContentFolderEntity)
+    suspend fun upsertPlaylist(entity: PlaylistEntity)
 
     @Upsert
-    suspend fun upsertContentFolderMembership(entity: ContentFolderMembershipEntity)
+    suspend fun upsertPlaylistItem(entity: PlaylistItemEntity)
 
-    @Query("DELETE FROM content_folder_membership WHERE content_id = :contentId")
-    suspend fun clearContentFolderMembership(contentId: String)
+    @Query("DELETE FROM playlist_item WHERE content_id = :contentId")
+    suspend fun clearPlaylistItemsForContent(contentId: String)
 
-    @Query("DELETE FROM content_folder_membership WHERE folder_id = :folderId")
-    suspend fun clearContentFolderMemberships(folderId: String)
+    @Query("DELETE FROM playlist_item WHERE playlist_id = :playlistId")
+    suspend fun clearPlaylistItems(playlistId: String)
 
-    @Query("DELETE FROM content_folder WHERE folder_id = :folderId")
-    suspend fun deleteContentFolder(folderId: String)
+    @Query("DELETE FROM playlist_item WHERE playlist_id = :playlistId AND content_id = :contentId")
+    suspend fun deletePlaylistItem(playlistId: String, contentId: String)
 
-    @Query("UPDATE content_folder SET name = :name, updated_at_ms = :updatedAtMs WHERE folder_id = :folderId")
-    suspend fun renameContentFolder(folderId: String, name: String, updatedAtMs: Long): Int
+    @Query("DELETE FROM playlist WHERE playlist_id = :playlistId")
+    suspend fun deletePlaylist(playlistId: String)
+
+    @Query("UPDATE playlist SET name = :name, updated_at_ms = :updatedAtMs WHERE playlist_id = :playlistId")
+    suspend fun renamePlaylist(playlistId: String, name: String, updatedAtMs: Long): Int
+
+    @Query("UPDATE playlist SET sort_position = :sortPosition, updated_at_ms = :updatedAtMs WHERE playlist_id = :playlistId")
+    suspend fun updatePlaylistPosition(playlistId: String, sortPosition: Long, updatedAtMs: Long): Int
+
+    @Query("UPDATE playlist_item SET sort_position = :sortPosition WHERE playlist_id = :playlistId AND content_id = :contentId")
+    suspend fun updatePlaylistItemPosition(playlistId: String, contentId: String, sortPosition: Long): Int
+
+    @Query("UPDATE playlist SET last_played_at_ms = :playedAtMs, updated_at_ms = :playedAtMs WHERE playlist_id = :playlistId")
+    suspend fun markPlaylistPlayed(playlistId: String, playedAtMs: Long): Int
 
     @Query("DELETE FROM content_disposition WHERE content_id = :contentId")
     suspend fun deleteDisposition(contentId: String)
@@ -335,6 +358,7 @@ interface ContentDao {
             "  AND (l.source_id IS NULL OR s.removed_at_ms IS NULL)) " +
             "AND NOT EXISTS (SELECT 1 FROM content_disposition d WHERE d.content_id = c.content_id) " +
             "AND NOT EXISTS (SELECT 1 FROM recent_entry r WHERE r.content_id = c.content_id) " +
+            "AND NOT EXISTS (SELECT 1 FROM playlist_item p WHERE p.content_id = c.content_id) " +
             "AND NOT EXISTS (SELECT 1 FROM current_queue_entry q WHERE q.content_id = c.content_id) " +
             "AND NOT EXISTS (SELECT 1 FROM current_draft d WHERE d.content_id = c.content_id) " +
             "AND NOT EXISTS (SELECT 1 FROM text_selection x WHERE x.content_id = c.content_id AND x.mode = 'Manual') " +

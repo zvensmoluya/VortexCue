@@ -1,7 +1,7 @@
 package io.github.zvensmoluya.vortexcue.ui.main
 
 enum class MainTab {
-    Content,
+    Playlists,
     Queue,
     Config,
     Settings,

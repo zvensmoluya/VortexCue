@@ -11,11 +11,11 @@ class AppRouteTest {
         val fromGlow =
             resolveBackRoute(
                 destination = AppDestination.Player,
-                mainTab = MainTab.Content,
+                mainTab = MainTab.Playlists,
                 playerOriginTab = MainTab.Queue,
                 playerSurface = PlayerSurface.Glow,
             )
-        assertEquals(AppRouteSnapshot(AppDestination.Player, MainTab.Content, PlayerSurface.Normal), fromGlow)
+        assertEquals(AppRouteSnapshot(AppDestination.Player, MainTab.Playlists, PlayerSurface.Normal), fromGlow)
 
         val fromNormal =
             resolveBackRoute(
@@ -41,15 +41,15 @@ class AppRouteTest {
     }
 
     @Test
-    fun backFromAnotherMainTabReturnsToContent() {
+    fun backFromAnotherMainTabReturnsToPlaylists() {
         val result =
             resolveBackRoute(
                 destination = AppDestination.Main,
                 mainTab = MainTab.Config,
-                playerOriginTab = MainTab.Content,
+                playerOriginTab = MainTab.Playlists,
                 playerSurface = PlayerSurface.Normal,
             )
 
-        assertEquals(AppRouteSnapshot(AppDestination.Main, MainTab.Content, PlayerSurface.Normal), result)
+        assertEquals(AppRouteSnapshot(AppDestination.Main, MainTab.Playlists, PlayerSurface.Normal), result)
     }
 }

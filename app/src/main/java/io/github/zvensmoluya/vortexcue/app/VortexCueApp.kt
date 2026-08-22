@@ -9,6 +9,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
@@ -115,8 +116,8 @@ internal fun resolveBackRoute(
             AppRouteSnapshot(AppDestination.Player, mainTab, PlayerSurface.Normal)
         destination == AppDestination.Player ->
             AppRouteSnapshot(AppDestination.Main, playerOriginTab, PlayerSurface.Normal)
-        mainTab != MainTab.Content ->
-            AppRouteSnapshot(AppDestination.Main, MainTab.Content, PlayerSurface.Normal)
+        mainTab != MainTab.Playlists ->
+            AppRouteSnapshot(AppDestination.Main, MainTab.Playlists, PlayerSurface.Normal)
         else -> AppRouteSnapshot(destination, mainTab, playerSurface)
     }
 
@@ -169,8 +170,10 @@ internal fun VortexCueApp(
     val dispatchSyncTextAction = container.syncTextUiController::dispatch
 
     var destination by rememberSaveable { mutableStateOf(AppDestination.Main) }
-    var mainTab by rememberSaveable { mutableStateOf(MainTab.Content) }
-    var playerOriginTab by rememberSaveable { mutableStateOf(MainTab.Content) }
+    var mainTab by rememberSaveable { mutableStateOf(MainTab.Playlists) }
+    var playerOriginTab by rememberSaveable { mutableStateOf(MainTab.Playlists) }
+    var playlistViewId by rememberSaveable { mutableStateOf<String?>(null) }
+    var playerOriginPlaylistViewId by rememberSaveable { mutableStateOf<String?>(null) }
     var importHubRequest by rememberSaveable { mutableIntStateOf(0) }
     var playerSurface by rememberSaveable { mutableStateOf(PlayerSurface.Normal) }
     var mediaPickTarget by remember { mutableStateOf(MediaPickTarget.Import) }
@@ -179,18 +182,18 @@ internal fun VortexCueApp(
     var folderRelinkSourceId by remember { mutableStateOf<String?>(null) }
     var materialization by remember { mutableStateOf(PlayerMaterializationState.NotLoaded) }
     var displayProfile by remember { mutableStateOf(DisplayProfile.Balanced) }
-    var contentSort by remember { mutableStateOf(io.github.zvensmoluya.vortexcue.data.ContentSort.RecentAdded) }
     var glowCalibrationCompleted by remember { mutableStateOf(false) }
     var glowGestureHintSeen by remember { mutableStateOf(false) }
     var primarySubtitle by remember { mutableStateOf<LoadedSubtitle?>(null) }
     var secondarySubtitle by remember { mutableStateOf<LoadedSubtitle?>(null) }
     var sleepTimerRevision by remember { mutableIntStateOf(0) }
+    val playlistListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
+    val playlistDetailListState = rememberSaveable(playlistViewId, saver = LazyListState.Saver) { LazyListState() }
 
     LaunchedEffect(persistedSettings) {
         displayProfile = persistedSettings.displayProfile
         glowCalibrationCompleted = persistedSettings.glowCalibrationCompleted
         glowGestureHintSeen = persistedSettings.glowGestureHintSeen
-        contentSort = persistedSettings.contentSort
     }
     LaunchedEffect(player) {
         materialization = runCatching { gateway.materializationState() }
@@ -406,6 +409,7 @@ internal fun VortexCueApp(
         materialization = PlayerMaterializationState.Materialized
         playerSurface = PlayerSurface.Normal
         playerOriginTab = mainTab
+        playerOriginPlaylistViewId = playlistViewId
         destination = AppDestination.Player
         startPlayback()
         return true
@@ -413,12 +417,14 @@ internal fun VortexCueApp(
 
     fun openContent(contentIds: List<String>, index: Int) {
         playerOriginTab = mainTab
+        playerOriginPlaylistViewId = playlistViewId
         scope.launch { openContentNow(contentIds, index) }
     }
 
     fun continuePlayback() {
         if (recovery.queue.isEmpty() && playback.queue.isEmpty()) return
         playerOriginTab = mainTab
+        playerOriginPlaylistViewId = playlistViewId
         scope.launch {
             val result = gateway.materialize()
             if (result.resultCode != SessionResult.RESULT_SUCCESS) return@launch
@@ -595,6 +601,9 @@ internal fun VortexCueApp(
 
     fun navigateBack() {
         val next = resolveBackRoute(destination, mainTab, playerOriginTab, playerSurface)
+        if (destination == AppDestination.Player && next.destination == AppDestination.Main) {
+            playlistViewId = playerOriginPlaylistViewId
+        }
         destination = next.destination
         mainTab = next.mainTab
         playerSurface = next.playerSurface
@@ -620,11 +629,10 @@ internal fun VortexCueApp(
                 playback = playback,
                 gateway = gateway,
                 displayProfile = displayProfile,
-                contentSort = contentSort,
-                onContentSortChanged = { sort ->
-                    contentSort = sort
-                    scope.launch { settingsStore.saveContentSort(sort) }
-                },
+                playlistViewId = playlistViewId,
+                onPlaylistViewChanged = { playlistViewId = it },
+                playlistListState = playlistListState,
+                playlistDetailListState = playlistDetailListState,
                 onPickMedia = {
                     mediaPickTarget = MediaPickTarget.Import
                     mediaPicker.launch(arrayOf("audio/*", "video/*"))
@@ -648,6 +656,13 @@ internal fun VortexCueApp(
                 onRemoveSource = coordinator::removeSource,
                 onPendingImportConsumed = coordinator::clearPendingImport,
                 onPlaySingle = { id -> openContent(listOf(id), 0) },
+                onPlayPlaylist = { playlistId, contentIds, index ->
+                    playerOriginTab = mainTab
+                    playerOriginPlaylistViewId = playlistViewId
+                    scope.launch {
+                        if (openContentNow(contentIds, index)) repository.markPlaylistPlayed(playlistId)
+                    }
+                },
                 onQueueSelect = { index ->
                     if (index in recovery.queue.indices) {
                         playerOriginTab = MainTab.Queue
@@ -738,10 +753,12 @@ internal fun VortexCueApp(
                     },
                     onBackToLibrary = {
                         mainTab = playerOriginTab
+                        playlistViewId = playerOriginPlaylistViewId
                         destination = AppDestination.Main
                     },
                     onOpenSources = {
-                        mainTab = MainTab.Content
+                        mainTab = MainTab.Playlists
+                        playlistViewId = null
                         importHubRequest += 1
                         destination = AppDestination.Main
                     },
@@ -883,8 +900,12 @@ internal fun VortexCueApp(
         }
     }
 
-    BackHandler(enabled = destination == AppDestination.Main && mainTab != MainTab.Content) {
-        navigateBack()
+    BackHandler(enabled = destination == AppDestination.Main && (mainTab != MainTab.Playlists || playlistViewId != null)) {
+        if (mainTab == MainTab.Playlists && playlistViewId != null) {
+            playlistViewId = null
+        } else {
+            navigateBack()
+        }
     }
 
     SyncTextUiHost(

@@ -35,10 +35,12 @@ data class SourceSummaryRow(
     val itemCount: Int,
 )
 
-data class ContentFolderSummaryRow(
-    val folderId: String,
+data class PlaylistSummaryRow(
+    val playlistId: String,
     val name: String,
     val itemCount: Int,
+    val sortPosition: Long,
+    val lastPlayedAtMs: Long?,
 )
 
 data class QueueItemRow(

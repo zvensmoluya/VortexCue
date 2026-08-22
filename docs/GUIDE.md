@@ -11,12 +11,12 @@ VortexCue 是 Android-first、OLED-first、sleep-first 的本地内容播放器�
 一级页面固定为四个：
 
 ```text
-内容 | 播放列表 | [骨白荧荧 Logo：Import Hub] | 配置 | 设置
+歌单 | 播放列表 | [骨白荧荧 Logo：Import Hub] | 配置 | 设置
 ```
 
-Logo 是动作，不是第五个页面；点击只打开 Import Hub，不改变当前 Tab。页面不再出现 Home、今晚、发现、来源一级入口或命名 Playlist。
+Logo 是动作，不是第五个页面；点击只打开 Import Hub，不改变当前 Tab。歌单页承担默认进入位置，但 UI 不使用“首页”命名，也不再出现 Home、今晚、发现或来源一级入口。
 
-存在 Current Queue 时，Mini Player 跨四个 Tab 显示。点击 Mini Player 进入 Normal Player；播放键直接播放/暂停。冷启动不恢复 Glow，Glow 只能由当前运行期的 PlayerSurface 明确进入。
+存在 Current Queue 时，Mini Player 跨四个 Tab 显示。Mini Player 是底栏上方的内缩 Raised Surface 卡片，只显示标题、有效时间/进度和播放/暂停；点击正文进入 Normal Player。冷启动不恢复 Glow，Glow 只能由当前运行期的 PlayerSurface 明确进入。
 
 应用内视觉令牌：
 
@@ -30,39 +30,40 @@ Logo 是动作，不是第五个页面；点击只打开 Import Hub，不改变�
 | Selection | `#282432` | 当前项与选中态 |
 | Mascot | `#E8E0D0` | 中央骨白 Logo |
 
-黄色不进入应用内 UI；Launcher 与 Splash 保留既有品牌资源。列表不使用封面图，最多 8dp 圆角，分隔线细而克制。交互控件最小 48dp 触控区，图标按钮必须有 TalkBack 描述；拖动、长按等动作同时提供可访问的替代操作。
+黄色不进入应用内 UI；Launcher 与 Splash 保留既有品牌资源。当前歌单不使用封面、拼贴或文件夹图标，最多 8dp 圆角。普通浏览页允许使用 Raised Surface 与较高文字对比度；极低发光只约束 Glow 等退场阶段。交互控件最小 48dp 触控区，图标按钮必须有 TalkBack 描述；拖动、长按等动作同时提供可访问的替代操作。
 
-## 2. 内容
+## 2. 歌单与全部内容
 
-内容页直接表示用户收录的媒体。根目录是默认位置，虚拟文件夹只有一层；一个 `contentId` 最多属于一个文件夹，没有关系即根目录。删除文件夹只清除关系，成员回到根目录，不删除原文件。
+歌单是用户长期整理和重复进入的内容集合，与物理文件夹和 Source 完全独立。一个 `contentId` 可以加入多个歌单，但同一歌单内唯一；用户歌单和歌单成员均使用手动顺序。删除歌单或移除成员不删除原文件、不移出收录，也不改变已经生成的 Current Queue。
 
-顶部固定显示文件夹，下面是全局搜索与排序。排序选项为“最近加入 / 最近播放 / 标题”，选择写入 Settings DataStore；文件夹永远排在媒体之前。
+歌单页不显示页面大标题和搜索。顶部“最近听过”最多横向展示 6 个最近真正从中开始播放的非空用户歌单；卡片只显示歌单名和内容数量，点击只进入详情，不续播。下面“全部歌单”固定以虚拟入口“全部内容”置顶，再按用户手动顺序展示歌单。当前版本仅用排版和 Raised Surface 区分歌单，不提供图标或图片封面。
 
-点击媒体立即以单项替换 Current Queue 并播放。长按 Bottom Sheet 提供：
+“全部内容”包含全部已收录、未忽略的媒体，按最近加入优先排列，不写入 `playlist` 表，也不进入“最近听过”。从“全部内容”点击媒体只以单项替换 Current Queue。歌单详情提供“播放全部”；点击具体内容时用完整歌单顺序替换 Current Queue，并从点击项开始。只有替换成功后才更新歌单最近播放时间。
+
+内容长按 Bottom Sheet 提供：
 
 - 立即播放；
 - 加入播放列表；
-- 移动到文件夹；
+- 加入歌单；
+- 从当前歌单移除（仅歌单详情）；
 - 同步文字；
 - 移出内容。
 
 “移出内容”只写入内部忽略状态，不删除原始媒体、不打断当前播放；来源刷新不会再次推荐。来源详情的次级入口可以恢复忽略项。
 
-空内容页直接提供“选择文件”和“从文件夹查找”，都复用 Import Hub。没有首次样片，也没有“未分类”虚拟文件夹。
-
 ## 3. Import Hub 与来源
 
 Import Hub 提供：选择单文件、从文件夹查找、扫描设备媒体、已授权来源列表。
 
-- Logo 选择单文件：加入内容根目录并立即播放；
+- Logo 选择单文件：加入“全部内容”并立即播放；
 - 外部 `ACTION_VIEW`：只进入当前 Queue，不自动收录；Player 提供“加入内容”；
 - 文件夹扫描默认勾选全部可播放音视频；
 - 全设备扫描默认只勾选音频；
-- 批量导入默认进入根目录，也可当场选择或新建虚拟文件夹；
+- 批量导入默认只加入“全部内容”，也可当场选择或新建一个初始歌单；导入后可再加入多个歌单；
 - 来源重扫只展示本次新增项；已移出/忽略项在来源详情中恢复；
 - 来源失效、重新授权、取消扫描和媒体重新定位就地反馈，不建立异常管理中心。
 
-来源是扫描授权与刷新边界，不是内容页的虚拟文件夹。扫描不得覆盖用户的忽略决定。
+来源是扫描授权与刷新边界，不是歌单。扫描不得复制物理目录结构，也不得覆盖用户的忽略或歌单决定。
 
 ## 4. 播放列表
 
@@ -94,7 +95,7 @@ Normal Player 的主体固定为“上一句弱化 / 当前句主视觉 / 下一
 
 ## 8. 数据与迁移
 
-Room 当前 schema 为 v8；v7→v8 通过自动迁移保留任务、结果和手测诊断数据，v6 及其他不兼容版本仍允许破坏性重建。重建清理应用私有旧字幕缓存、旧 result/checkpoint VTT、孤立凭据文件和旧的命名 Playlist/Home shortcut 数据；保留 Settings、用户原始媒体和 SAF 外部字幕文件。数据库不再把 `lastSurface` 当作启动入口；`PlayerSurface` 只管理运行期 Normal/Calibration/Glow 层级。
+Room 当前 schema 为 v9；v7→v8 通过自动迁移保留任务、结果和手测诊断数据，v8→v9 手动把旧虚拟文件夹和单归属成员关系迁移为同名多对多歌单，不从单内容历史推断歌单最近播放。v6 及其他不兼容版本仍允许破坏性重建。重建清理应用私有旧字幕缓存、旧 result/checkpoint VTT、孤立凭据文件和旧的 Home shortcut 数据；保留 Settings、用户原始媒体和 SAF 外部字幕文件。数据库不再把 `lastSurface` 当作启动入口；`PlayerSurface` 只管理运行期 Normal/Calibration/Glow 层级。
 
 导入与生成文字统一使用 `CanonicalTimeline`、`TimelineRevision` 和 content-addressed `TextArtifactStore`。Artifact 位于 `noBackupFilesDir/text_artifacts/<kind>/<prefix>/<id>.bin`，ID 是包含 kind、schema、codec 与 canonicalizer version 的完整二进制 envelope SHA-256。Room 只保存 Artifact metadata、不可变 revision、manifest 和 publication pointer，不保存逐 cue 正文。`TimelineRevisionReader` 一次解码当前 publication 为内存 `SubtitleTimeline`；播放进度解析不访问 Room、Artifact 文件或 SAF。
 
@@ -102,13 +103,13 @@ ASR window 与 translation batch 由固定数量的 worker 按序领取，先发
 
 当前没有导出功能；内部 codec 与 revision reader 保留明确的 exporter 边界，但本轮不增加导出 UI。
 
-核心新接口包括 `MainTab`、`ContentSort`、`ContentFolderSummary`、`SyncTextConfig` 及对应 Repository 查询/写入。Home projection、HomeSection、PlaylistSummary、命名 Playlist CRUD、Home shortcut 和 UI-facing Scheme/Task actions 不得成为新 UI 依赖。
+核心 UI 接口包括 `MainTab.Playlists`、`PlaylistSummary`、多对多 `PlaylistItem`、`SyncTextConfig` 及对应 Repository 查询/写入。Home projection、HomeSection、物理 Folder projection、Home shortcut 和 UI-facing Scheme/Task actions 不得成为新 UI 依赖。
 
 ## 9. 验收
 
-自动化覆盖：虚拟文件夹单归属、删除回根目录、搜索排序、移出/恢复、Queue 唯一与重排、外部打开不收录、单套配置校验、生成状态归并；四种字幕格式 canonicalization、稳定 cue ID、版本化 binary codec、partial/final assembly、translation source pin、Artifact 审计与 24 小时 GC；Room 首次创建、v7→v8 保留迁移与 v6→v8 破坏性重建；Settings DataStore 与用户媒体不受影响。
+自动化覆盖：歌单多归属与去重、歌单及成员重排、删除歌单保留内容、最近歌单上限、移出/恢复、Queue 唯一与重排、外部打开不收录、单套配置校验、生成状态归并；四种字幕格式 canonicalization、稳定 cue ID、版本化 binary codec、partial/final assembly、translation source pin、Artifact 审计与 24 小时 GC；Room 首次创建、v7→v8、v8→v9 保留迁移与 v6→v9 破坏性重建；Settings DataStore 与用户媒体不受影响。
 
-Compose UI 覆盖四 Tab、中央 Import Hub、Mini Player、空态、文件夹导航、长按菜单、Queue、配置校验和 Back Stack。默认验证命令：
+Compose UI 覆盖四 Tab、歌单总览与详情、最近歌单、全部内容、多选成员、重排模式、中央 Import Hub、Mini Player、长按菜单、Queue、配置校验和 Back Stack。默认验证命令：
 
 ```text
 gradlew.bat testDebugUnitTest

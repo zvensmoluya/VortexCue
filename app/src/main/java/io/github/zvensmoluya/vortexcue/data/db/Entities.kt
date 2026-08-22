@@ -315,26 +315,30 @@ data class ContentDispositionEntity(
     val decidedAtMs: Long,
 )
 
-/** A user-created, single-level virtual folder. It never owns a filesystem path. */
+/** A user-created playlist. It is independent from filesystem folders and media sources. */
 @Entity(
-    tableName = "content_folder",
+    tableName = "playlist",
     indices = [Index(value = ["name"], unique = true)],
 )
-data class ContentFolderEntity(
+data class PlaylistEntity(
     @PrimaryKey
-    @ColumnInfo(name = "folder_id")
-    val folderId: String,
+    @ColumnInfo(name = "playlist_id")
+    val playlistId: String,
     val name: String,
+    @ColumnInfo(name = "sort_position")
+    val sortPosition: Long,
     @ColumnInfo(name = "created_at_ms")
     val createdAtMs: Long,
     @ColumnInfo(name = "updated_at_ms")
     val updatedAtMs: Long,
+    @ColumnInfo(name = "last_played_at_ms")
+    val lastPlayedAtMs: Long? = null,
 )
 
-/** One content can belong to at most one virtual folder. No row means the root folder. */
+/** A content can belong to multiple playlists, but only once inside each playlist. */
 @Entity(
-    tableName = "content_folder_membership",
-    primaryKeys = ["content_id"],
+    tableName = "playlist_item",
+    primaryKeys = ["playlist_id", "content_id"],
     foreignKeys = [
         ForeignKey(
             entity = ContentEntity::class,
@@ -344,22 +348,24 @@ data class ContentFolderEntity(
             onUpdate = ForeignKey.CASCADE,
         ),
         ForeignKey(
-            entity = ContentFolderEntity::class,
-            parentColumns = ["folder_id"],
-            childColumns = ["folder_id"],
+            entity = PlaylistEntity::class,
+            parentColumns = ["playlist_id"],
+            childColumns = ["playlist_id"],
             onDelete = ForeignKey.CASCADE,
             onUpdate = ForeignKey.CASCADE,
         ),
     ],
-    indices = [Index("folder_id")],
+    indices = [Index("content_id"), Index(value = ["playlist_id", "sort_position"])],
 )
-data class ContentFolderMembershipEntity(
+data class PlaylistItemEntity(
+    @ColumnInfo(name = "playlist_id")
+    val playlistId: String,
     @ColumnInfo(name = "content_id")
     val contentId: String,
-    @ColumnInfo(name = "folder_id")
-    val folderId: String,
-    @ColumnInfo(name = "moved_at_ms")
-    val movedAtMs: Long,
+    @ColumnInfo(name = "sort_position")
+    val sortPosition: Long,
+    @ColumnInfo(name = "added_at_ms")
+    val addedAtMs: Long,
 )
 
 @Entity(

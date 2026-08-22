@@ -133,8 +133,8 @@ class VortexDatabaseTest {
         contentDao.upsertDisposition(ContentDispositionEntity("collected", true, 1L))
         contentDao.upsertDisposition(ContentDispositionEntity("ignored", false, 1L))
         contentDao.upsertRecent(RecentEntryEntity("recent", 1L))
-        contentDao.upsertContentFolder(ContentFolderEntity("folder-root", "Root", 1L, 1L))
-        contentDao.upsertContentFolderMembership(ContentFolderMembershipEntity("folder", "folder-root", 1L))
+        contentDao.upsertPlaylist(PlaylistEntity("playlist-root", "Root", 0L, 1L, 1L))
+        contentDao.upsertPlaylistItem(PlaylistItemEntity("playlist-root", "folder", 0L, 1L))
         playbackDao.upsertQueueEntries(listOf(CurrentQueueEntryEntity("queued", 0, 1L)))
         contentDao.upsertDraft(CurrentDraftEntity(contentId = "draft", updatedAtMs = 1L))
         contentDao.upsertTextTrack(textTrack("track-manual", "manual-track"))
@@ -147,7 +147,7 @@ class VortexDatabaseTest {
 
         val candidates = contentDao.garbageCollectableContentIds().toSet()
 
-        assertEquals(setOf("folder", "orphan"), candidates)
+        assertEquals(setOf("orphan"), candidates)
     }
 
     @Test
@@ -271,7 +271,7 @@ class VortexDatabaseTest {
                 val tables = buildList {
                     while (statement.step()) add(statement.getText(0))
                 }
-                assertEquals(listOf("content"), tables)
+                assertEquals(listOf("content", "playlist"), tables)
             }
             connection.prepare("PRAGMA table_info(current_playback_session)").use { statement ->
                 val columns = buildList {
@@ -325,7 +325,7 @@ class VortexDatabaseTest {
     }
 
     @Test
-    fun versionSevenMigrationPreservesDataInVersionEight() = runBlocking {
+    fun versionSevenMigrationPreservesDataInVersionNine() = runBlocking {
         val helper =
             MigrationTestHelper(
                 databasePath = temporaryFolder.root.resolve("migration-v7-v8.db").toPath(),
@@ -341,7 +341,7 @@ class VortexDatabaseTest {
             ).use { it.step() }
         }
 
-        helper.runMigrationsAndValidate(8).use { connection ->
+        helper.runMigrationsAndValidate(9, listOf(MIGRATION_8_9)).use { connection ->
             connection.prepare("SELECT content_id FROM content WHERE content_id = 'preserved-content'").use { statement ->
                 assertTrue(statement.step())
                 assertEquals("preserved-content", statement.getText(0))
@@ -354,8 +354,54 @@ class VortexDatabaseTest {
     }
 
     @Test
-    fun versionSixIsDestructivelyRebuiltAsVersionEight() = runBlocking {
-        val path = temporaryFolder.root.resolve("migration-v6-v8.db").toPath()
+    fun versionEightMigrationPreservesFoldersAsPlaylistsWithoutInventingRecency() = runBlocking {
+        val helper =
+            MigrationTestHelper(
+                databasePath = temporaryFolder.root.resolve("migration-v8-v9.db").toPath(),
+                schemaDirectoryPath = File("schemas").toPath(),
+                driver = BundledSQLiteDriver(),
+                databaseClass = VortexDatabase::class,
+                databaseFactory = { VortexDatabase_Impl() },
+                autoMigrationSpecs = emptyList(),
+            )
+        helper.createDatabase(8).use { connection ->
+            connection.prepare(
+                "INSERT INTO content (content_id, created_at_ms, subtitle_offset_ms) VALUES ('preserved-content', 1, 0)",
+            ).use { it.step() }
+            connection.prepare(
+                "INSERT INTO content_folder (folder_id, name, created_at_ms, updated_at_ms) VALUES ('folder:test', '睡前', 2, 3)",
+            ).use { it.step() }
+            connection.prepare(
+                "INSERT INTO content_folder_membership (content_id, folder_id, moved_at_ms) VALUES ('preserved-content', 'folder:test', 4)",
+            ).use { it.step() }
+        }
+
+        helper.runMigrationsAndValidate(9, listOf(MIGRATION_8_9)).use { connection ->
+            connection.prepare(
+                "SELECT name, sort_position, last_played_at_ms FROM playlist WHERE playlist_id = 'folder:test'",
+            ).use { statement ->
+                assertTrue(statement.step())
+                assertEquals("睡前", statement.getText(0))
+                assertEquals(0L, statement.getLong(1))
+                assertTrue(statement.isNull(2))
+            }
+            connection.prepare(
+                "SELECT content_id, sort_position, added_at_ms FROM playlist_item WHERE playlist_id = 'folder:test'",
+            ).use { statement ->
+                assertTrue(statement.step())
+                assertEquals("preserved-content", statement.getText(0))
+                assertEquals(0L, statement.getLong(1))
+                assertEquals(4L, statement.getLong(2))
+            }
+            connection.prepare("SELECT content_id FROM content WHERE content_id = 'preserved-content'").use { statement ->
+                assertTrue(statement.step())
+            }
+        }
+    }
+
+    @Test
+    fun versionSixIsDestructivelyRebuiltAsVersionNine() = runBlocking {
+        val path = temporaryFolder.root.resolve("migration-v6-v9.db").toPath()
         val helper =
             MigrationTestHelper(
                 databasePath = path,

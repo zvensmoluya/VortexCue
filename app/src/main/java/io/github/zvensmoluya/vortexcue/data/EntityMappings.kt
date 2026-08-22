@@ -17,7 +17,7 @@ import io.github.zvensmoluya.vortexcue.core.model.TimedTextTrack
 import io.github.zvensmoluya.vortexcue.core.model.mediaIdentityKey
 import io.github.zvensmoluya.vortexcue.core.model.stableMediaLocatorId
 import io.github.zvensmoluya.vortexcue.data.db.ContentSummaryRow
-import io.github.zvensmoluya.vortexcue.data.db.ContentFolderSummaryRow
+import io.github.zvensmoluya.vortexcue.data.db.PlaylistSummaryRow
 import io.github.zvensmoluya.vortexcue.data.db.MediaLocatorEntity
 import io.github.zvensmoluya.vortexcue.data.db.QueueItemRow
 import io.github.zvensmoluya.vortexcue.data.db.SourceSummaryRow
@@ -192,11 +192,13 @@ internal fun TimedTextTrack.toEntity(
         generatedSlotId = locator.generatedSlotId,
     )
 
-internal fun ContentFolderSummaryRow.toDomain(): ContentFolderSummary =
-    ContentFolderSummary(
-        folderId = folderId,
+internal fun PlaylistSummaryRow.toDomain(): PlaylistSummary =
+    PlaylistSummary(
+        playlistId = playlistId,
         name = name,
         itemCount = itemCount,
+        sortPosition = sortPosition,
+        lastPlayedAtMs = lastPlayedAtMs,
     )
 
 private fun TimedTextTrackEntity.toDomainLocator(): TimedTextLocator =

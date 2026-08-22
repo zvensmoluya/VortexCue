@@ -8,10 +8,12 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.foundation.lazy.rememberLazyListState
 import io.github.zvensmoluya.vortexcue.core.model.ContentAvailability
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
 import io.github.zvensmoluya.vortexcue.data.ContentDisposition
 import io.github.zvensmoluya.vortexcue.data.ContentSummary
+import io.github.zvensmoluya.vortexcue.data.PlaylistSummary
 import io.github.zvensmoluya.vortexcue.library.LibraryCoordinatorState
 import io.github.zvensmoluya.vortexcue.ui.queue.QueueItemRow
 import io.github.zvensmoluya.vortexcue.ui.theme.VortexCueTheme
@@ -30,7 +32,7 @@ class MainSurfaceComposeTest {
 
     @Test
     fun fourTabsAndCentralImportExposeIndependentActions() {
-        var selected = MainTab.Content
+        var selected = MainTab.Playlists
         var importRequests = 0
         compose.setContent {
             VortexCueTheme {
@@ -42,7 +44,7 @@ class MainSurfaceComposeTest {
             }
         }
 
-        listOf("内容", "播放列表", "配置", "设置").forEach {
+        listOf("歌单", "播放列表", "配置", "设置").forEach {
             compose.onNodeWithText(it).assertExists()
         }
         compose.onNodeWithContentDescription("添加内容", useUnmergedTree = true).assertExists()
@@ -65,6 +67,8 @@ class MainSurfaceComposeTest {
                     title = "当前标题",
                     isPlaying = false,
                     progress = 0.5f,
+                    positionMs = 30_000L,
+                    durationMs = 60_000L,
                     onOpen = { openRequests += 1 },
                     onPlayPause = { playRequests += 1 },
                 )
@@ -131,21 +135,85 @@ class MainSurfaceComposeTest {
     }
 
     @Test
-    fun folderRowNavigatesIntoVirtualFolder() {
+    fun playlistOverviewShowsRecentShortcutAndAllContentWithoutPageTitle() {
         var opens = 0
         compose.setContent {
             VortexCueTheme {
-                FolderRow(
-                    name = "练习",
-                    count = 3,
-                    selected = false,
-                    onClick = { opens += 1 },
+                PlaylistOverview(
+                    playlists = listOf(PlaylistSummary("all-list", "练习", 3)),
+                    recentPlaylists = listOf(PlaylistSummary("recent-list", "睡前", 5, lastPlayedAtMs = 1L)),
+                    allContentCount = 8,
+                    reorderMode = false,
+                    listState = rememberLazyListState(),
+                    onOpenAllContent = {},
+                    onOpenPlaylist = { opens += 1 },
+                    onCreatePlaylist = {},
+                    onRenamePlaylist = {},
+                    onDeletePlaylist = {},
+                    onReorderModeChanged = {},
+                    onMovePlaylist = { _, _ -> },
+                )
+            }
+        }
+
+        compose.onNodeWithText("最近听过").assertExists()
+        compose.onNodeWithText("全部歌单").assertExists()
+        compose.onNodeWithText("全部内容").assertExists()
+        compose.onNodeWithText("首页").assertDoesNotExist()
+        compose.onNodeWithText("搜索内容").assertDoesNotExist()
+        compose.onNodeWithText("睡前").performClick()
+        compose.runOnIdle { assertEquals(1, opens) }
+    }
+
+    @Test
+    fun playlistDetailExposesPlayAllAndStartsFromSelectedItem() {
+        var playAll = 0
+        var selectedIndex = -1
+        val content = listOf(summary("第一项.mp3"), summary("第二项.mp3"))
+        compose.setContent {
+            VortexCueTheme {
+                PlaylistDetail(
+                    title = "睡前",
+                    content = content,
+                    isAllContent = false,
+                    reorderMode = false,
+                    listState = rememberLazyListState(),
+                    onBack = {},
+                    onPlayAll = { playAll += 1 },
+                    onPlay = { selectedIndex = it },
+                    onLongPress = {},
+                    onReorderModeChanged = {},
+                    onMove = { _, _ -> },
+                )
+            }
+        }
+
+        compose.onNodeWithText("播放全部").performClick()
+        compose.onNodeWithText("第二项").performClick()
+        compose.runOnIdle {
+            assertEquals(1, playAll)
+            assertEquals(1, selectedIndex)
+        }
+    }
+
+    @Test
+    fun membershipSheetSavesMultiplePlaylistSelections() {
+        var saved: Set<String>? = null
+        compose.setContent {
+            VortexCueTheme {
+                PlaylistMembershipSheet(
+                    title = "示例内容",
+                    playlists = listOf(PlaylistSummary("first", "睡前", 1), PlaylistSummary("second", "练习", 1)),
+                    initialSelection = setOf("first"),
+                    onDismiss = {},
+                    onSave = { ids, _ -> saved = ids },
                 )
             }
         }
 
         compose.onNodeWithText("练习").performClick()
-        compose.runOnIdle { assertEquals(1, opens) }
+        compose.onNodeWithText("保存").performClick()
+        compose.runOnIdle { assertEquals(setOf("first", "second"), saved) }
     }
 
     @Test
@@ -185,6 +253,16 @@ class MainSurfaceComposeTest {
         }
     }
 
+    private fun summary(name: String): ContentSummary =
+        ContentSummary(
+            contentId = name,
+            locatorId = "locator-$name",
+            media = MediaSourceRef(Uri.parse("content://test/$name"), name, "audio/mpeg"),
+            availability = ContentAvailability.Available,
+            disposition = ContentDisposition.Collected,
+            lastOpenedAtMs = null,
+        )
+
     @Test
     fun importHubExposesSingleFileImportAction() {
         var fileRequests = 0
@@ -192,7 +270,7 @@ class MainSurfaceComposeTest {
             VortexCueTheme {
                 ImportHub(
                     sources = emptyList(),
-                    folders = emptyList(),
+                    playlists = emptyList(),
                     coordinator = LibraryCoordinatorState(),
                     ignoredContent = emptyList(),
                     onRestoreIgnored = {},
