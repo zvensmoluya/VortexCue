@@ -4,6 +4,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -18,15 +21,18 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,8 +63,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.contentDescription
@@ -92,6 +101,10 @@ import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceSelected
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceRaised
 import java.net.URI
 import java.security.MessageDigest
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.sign
+import kotlin.math.sin
 import kotlinx.coroutines.launch
 
 private val ConfigControlHeight = 58.dp
@@ -150,7 +163,7 @@ internal fun SyncTextConfigPage(
     val existing = state.config
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
     val scope = rememberCoroutineScope()
-    var selectedPage by rememberSaveable { mutableStateOf(0) }
+    var textInputFocused by remember { mutableStateOf(false) }
     val translationListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val asrListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     var translationDraft by remember(existing?.configId) {
@@ -267,7 +280,6 @@ internal fun SyncTextConfigPage(
     }
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.settledPage }.collect { page ->
-            selectedPage = page
             focusManager.clearFocus(force = true)
             commitDraft()
         }
@@ -293,11 +305,10 @@ internal fun SyncTextConfigPage(
     DisposableEffect(Unit) {
         onDispose { commitLatestDraft() }
     }
-    Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+    Column(modifier = Modifier.fillMaxSize()) {
         PagerTabs(
-            selectedPage = selectedPage,
+            pagerState = pagerState,
             onSelect = { page ->
-                selectedPage = page
                 focusManager.clearFocus(force = true)
                 commitDraft()
                 scope.launch {
@@ -323,6 +334,7 @@ internal fun SyncTextConfigPage(
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
+            userScrollEnabled = !textInputFocused,
             beyondViewportPageCount = 1,
             flingBehavior = PagerDefaults.flingBehavior(
                 state = pagerState,
@@ -365,6 +377,7 @@ internal fun SyncTextConfigPage(
                                 ),
                             )
                         },
+                        onTextInputFocusChanged = { textInputFocused = it },
                     )
                 else ->
                     AsrPage(
@@ -397,6 +410,7 @@ internal fun SyncTextConfigPage(
                                 ),
                             )
                         },
+                        onTextInputFocusChanged = { textInputFocused = it },
                     )
             }
         }
@@ -405,44 +419,116 @@ internal fun SyncTextConfigPage(
 
 @Composable
 private fun PagerTabs(
-    selectedPage: Int,
+    pagerState: PagerState,
     onSelect: (Int) -> Unit,
 ) {
-    BoxWithConstraints(
-        modifier = Modifier.fillMaxWidth().background(Color.Black),
+    val pagePosition =
+        (pagerState.currentPage + pagerState.currentPageOffsetFraction)
+            .coerceIn(0f, 1f)
+    var motionDirection by remember(pagerState) { mutableStateOf(0f) }
+    LaunchedEffect(pagerState) {
+        var previousPosition = pagerState.currentPage + pagerState.currentPageOffsetFraction
+        snapshotFlow {
+            (pagerState.currentPage + pagerState.currentPageOffsetFraction) to pagerState.isScrollInProgress
+        }.collect { (position, scrolling) ->
+            val delta = position - previousPosition
+            when {
+                abs(delta) > 0.0005f -> motionDirection = sign(delta)
+                !scrolling -> motionDirection = 0f
+            }
+            previousPosition = position
+        }
+    }
+    val stretchProgress = sin(PI * pagePosition).toFloat().coerceIn(0f, 1f)
+    val landingScale by animateFloatAsState(
+        targetValue = if (pagerState.isScrollInProgress) 0.985f else 1f,
+        animationSpec =
+            if (pagerState.isScrollInProgress) {
+                tween(90)
+            } else {
+                spring(dampingRatio = 0.72f, stiffness = 650f)
+            },
+        label = "config-tab-landing",
+    )
+    val indicatorShape = RoundedCornerShape(6.dp)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color.Black)
+            .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 10.dp),
     ) {
-        val tabWidth = maxWidth / 2
-        val indicatorInset = (tabWidth - 36.dp) / 2
-        val indicatorOffset by animateDpAsState(
-            targetValue = indicatorInset + tabWidth * selectedPage,
-            animationSpec = tween(220),
-            label = "config-tab-indicator",
-        )
-        Column {
-            Row(modifier = Modifier.fillMaxWidth()) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .selectableGroup()
+                .testTag("sync-text-config-tabs"),
+        ) {
+            val tabWidth = maxWidth / 2
+            val indicatorInset = 3.dp
+            val indicatorStretch = 6.dp * stretchProgress
+            val indicatorOffset =
+                tabWidth * pagePosition + indicatorInset -
+                    if (motionDirection < 0f) indicatorStretch else 0.dp
+            val indicatorWidth = tabWidth - indicatorInset * 2 + indicatorStretch
+
+            Box(
+                modifier = Modifier
+                    .offset(x = indicatorOffset)
+                    .width(indicatorWidth)
+                    .fillMaxHeight()
+                    .padding(vertical = indicatorInset)
+                    .graphicsLayer {
+                        scaleY = landingScale - stretchProgress * 0.012f
+                    }
+                    .background(AppSurfaceSelected, indicatorShape)
+                    .border(1.dp, AppAccent.copy(alpha = 0.16f), indicatorShape)
+                    .testTag("sync-text-config-tab-indicator"),
+            )
+
+            Row(modifier = Modifier.fillMaxSize()) {
                 listOf("翻译", "语音识别").forEachIndexed { index, label ->
+                    val interactionSource = remember { MutableInteractionSource() }
+                    val pressed by interactionSource.collectIsPressedAsState()
+                    val pressProgress by animateFloatAsState(
+                        targetValue = if (pressed) 1f else 0f,
+                        animationSpec = tween(if (pressed) 80 else 150),
+                        label = "config-tab-press",
+                    )
+                    val selectionProgress =
+                        (1f - abs(pagePosition - index)).coerceIn(0f, 1f)
                     Box(
-                        modifier = Modifier.weight(1f).heightIn(min = 48.dp).clickable {
-                            onSelect(index)
-                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxSize()
+                            .selectable(
+                                selected = pagerState.settledPage == index,
+                                onClick = {
+                                    if (pagerState.targetPage != index) onSelect(index)
+                                },
+                                role = Role.Tab,
+                                interactionSource = interactionSource,
+                                indication = null,
+                            )
+                            .testTag("sync-text-config-tab-$index"),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
                             label,
-                            color = if (selectedPage == index) AppPrimaryText else AppSecondaryText,
+                            color = lerp(AppSecondaryText, AppPrimaryText, selectionProgress),
                             fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier
+                                .offset(y = 1.dp * pressProgress)
+                                .graphicsLayer {
+                                    val scale = 1f - pressProgress * 0.018f
+                                    scaleX = scale
+                                    scaleY = scale
+                                },
                         )
                     }
                 }
-            }
-            Box(modifier = Modifier.fillMaxWidth().height(3.dp)) {
-                Box(
-                    modifier = Modifier
-                        .offset(x = indicatorOffset)
-                        .width(36.dp)
-                        .height(3.dp)
-                        .background(AppAccent, RoundedCornerShape(2.dp))
-                )
             }
         }
     }
@@ -464,6 +550,7 @@ private fun TranslationPage(
     onDiscoverModels: (TranslationPageDraft) -> Unit,
     onSaveCredential: (String) -> Unit,
     onTest: (String) -> Unit,
+    onTextInputFocusChanged: (Boolean) -> Unit,
 ) {
     val fingerprint = draft.translationFingerprint()
     val stale = connectionTest.testedFingerprint != null && connectionTest.testedFingerprint != fingerprint
@@ -498,6 +585,7 @@ private fun TranslationPage(
                     onCommit(next)
                     onDiscoverModels(next)
                 },
+                onFocusChanged = onTextInputFocusChanged,
             )
         }
         item {
@@ -531,6 +619,7 @@ private fun TranslationPage(
                 saveCompletedRequestId = saveCompletedRequestId,
                 onValueChange = { onDraftChanged(draft.copy(secret = it)) },
                 onSave = onSaveCredential,
+                onFocusChanged = onTextInputFocusChanged,
             )
         }
         item {
@@ -562,6 +651,7 @@ private fun AsrPage(
     onCommit: (AsrPageDraft) -> Unit,
     onSaveCredential: (String) -> Unit,
     onTest: (String) -> Unit,
+    onTextInputFocusChanged: (Boolean) -> Unit,
 ) {
     val fingerprint = draft.asrFingerprint()
     val stale = connectionTest.testedFingerprint != null && connectionTest.testedFingerprint != fingerprint
@@ -605,6 +695,7 @@ private fun AsrPage(
                     placeholder = draft.profile.provider.defaultEndpoint,
                     onValueChange = { onDraftChanged(draft.copy(endpoint = it)) },
                     onCommit = { value -> onCommit(draft.copy(endpoint = value)) },
+                    onFocusChanged = onTextInputFocusChanged,
                 )
             }
         }
@@ -616,6 +707,7 @@ private fun AsrPage(
                 saveCompletedRequestId = saveCompletedRequestId,
                 onValueChange = { onDraftChanged(draft.copy(secret = it)) },
                 onSave = onSaveCredential,
+                onFocusChanged = onTextInputFocusChanged,
             )
         }
         item {
@@ -641,6 +733,7 @@ private fun BaseUrlField(
     placeholder: String,
     onValueChange: (String) -> Unit,
     onCommit: (String) -> Unit,
+    onFocusChanged: (Boolean) -> Unit,
 ) {
     var input by remember { mutableStateOf(TextFieldValue(value)) }
     var wasFocused by remember { mutableStateOf(false) }
@@ -672,19 +765,24 @@ private fun BaseUrlField(
                 errorContainerColor = AppSurfaceRaised,
             ),
             shape = ConfigControlShape,
-            modifier = Modifier.fillMaxWidth().heightIn(min = ConfigControlHeight).onFocusChanged { focusState ->
-                if (focusState.isFocused) {
-                    wasFocused = true
-                    if (selectAllOnFocus) {
-                        input = input.copy(selection = TextRange(0, input.text.length))
-                        selectAllOnFocus = false
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = ConfigControlHeight)
+                .onFocusChanged { focusState ->
+                    onFocusChanged(focusState.isFocused)
+                    if (focusState.isFocused) {
+                        wasFocused = true
+                        if (selectAllOnFocus) {
+                            input = input.copy(selection = TextRange(0, input.text.length))
+                            selectAllOnFocus = false
+                        }
+                    } else if (wasFocused) {
+                        wasFocused = false
+                        selectAllOnFocus = true
+                        onCommit(input.text)
                     }
-                } else if (wasFocused) {
-                    wasFocused = false
-                    selectAllOnFocus = true
-                    onCommit(input.text)
                 }
-            },
+                .testTag("sync-text-base-url-field"),
         )
     }
 }
@@ -697,14 +795,17 @@ private fun ApiKeyField(
     saveCompletedRequestId: Long?,
     onValueChange: (String) -> Unit,
     onSave: (String) -> Unit,
+    onFocusChanged: (Boolean) -> Unit,
 ) {
     var editing by rememberSaveable(hasSavedKey) { mutableStateOf(!hasSavedKey) }
     var localError by rememberSaveable(hasSavedKey, saveError) { mutableStateOf<String?>(null) }
     var externalErrorVisible by remember(saveError) { mutableStateOf(true) }
     val error = localError ?: saveError.takeIf { externalErrorVisible }
+    val focusManager = LocalFocusManager.current
 
     LaunchedEffect(saveCompletedRequestId) {
         if (saveCompletedRequestId != null) {
+            onFocusChanged(false)
             editing = false
             localError = null
             externalErrorVisible = false
@@ -719,6 +820,8 @@ private fun ApiKeyField(
             else -> {
                 localError = null
                 externalErrorVisible = false
+                focusManager.clearFocus()
+                onFocusChanged(false)
                 onSave(normalized)
             }
         }
@@ -770,6 +873,7 @@ private fun ApiKeyField(
                         if (hasSavedKey) {
                             TextButton(
                                 onClick = {
+                                    onFocusChanged(false)
                                     editing = false
                                     localError = null
                                     externalErrorVisible = false
@@ -801,6 +905,7 @@ private fun ApiKeyField(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = ConfigControlHeight)
+                    .onFocusChanged { onFocusChanged(it.isFocused) }
                     .testTag("sync-text-api-key-field"),
             )
         }
