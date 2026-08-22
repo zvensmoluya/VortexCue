@@ -92,6 +92,7 @@ import io.github.zvensmoluya.vortexcue.synctext.SyncTextConfig
 import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocol
 import io.github.zvensmoluya.vortexcue.ui.theme.AppAccent
+import io.github.zvensmoluya.vortexcue.ui.theme.AppBackground
 import io.github.zvensmoluya.vortexcue.ui.theme.AppError
 import io.github.zvensmoluya.vortexcue.ui.theme.AppHairline
 import io.github.zvensmoluya.vortexcue.ui.theme.AppMutedText
@@ -103,7 +104,6 @@ import java.net.URI
 import java.security.MessageDigest
 import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.sign
 import kotlin.math.sin
 import kotlinx.coroutines.launch
 
@@ -164,6 +164,9 @@ internal fun SyncTextConfigPage(
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
     val scope = rememberCoroutineScope()
     var textInputFocused by remember { mutableStateOf(false) }
+    var lastCommittedDraft by remember(existing?.configId) {
+        mutableStateOf<SyncTextConfigDraft?>(null)
+    }
     val translationListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val asrListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     var translationDraft by remember(existing?.configId) {
@@ -248,6 +251,8 @@ internal fun SyncTextConfigPage(
     ) {
         val draft = fullDraft(translation, asr)
         if (!draft.isComplete()) return
+        if (draft == lastCommittedDraft) return
+        lastCommittedDraft = draft
         onAction(SyncTextAction.SaveConfig(existing?.configId, draft))
     }
     fun saveCredential(
@@ -316,32 +321,18 @@ internal fun SyncTextConfigPage(
                 }
             },
         )
-        if (state.configSaving) {
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth().height(2.dp),
-                color = AppAccent,
-                trackColor = Color.Transparent,
-            )
-        }
-        state.configError?.let { error ->
-            Text(
-                error,
-                color = AppError,
-                fontSize = 12.sp,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
-            )
-        }
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            userScrollEnabled = !textInputFocused,
-            beyondViewportPageCount = 1,
-            flingBehavior = PagerDefaults.flingBehavior(
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            HorizontalPager(
                 state = pagerState,
-                snapPositionalThreshold = 0.35f,
-            ),
-        ) { page ->
-            when (page) {
+                modifier = Modifier.fillMaxSize(),
+                userScrollEnabled = !textInputFocused,
+                beyondViewportPageCount = 1,
+                flingBehavior = PagerDefaults.flingBehavior(
+                    state = pagerState,
+                    snapPositionalThreshold = 0.35f,
+                ),
+            ) { page ->
+                when (page) {
                 0 ->
                     TranslationPage(
                         draft = translationDraft,
@@ -412,6 +403,31 @@ internal fun SyncTextConfigPage(
                         },
                         onTextInputFocusChanged = { textInputFocused = it },
                     )
+                }
+            }
+            if (state.configSaving) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .height(2.dp),
+                    color = AppAccent,
+                    trackColor = Color.Transparent,
+                )
+            }
+            state.configError?.let { error ->
+                Text(
+                    error,
+                    color = AppError,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .background(AppBackground.copy(alpha = 0.96f))
+                        .padding(horizontal = 20.dp, vertical = 6.dp),
+                )
             }
         }
     }
@@ -425,20 +441,6 @@ private fun PagerTabs(
     val pagePosition =
         (pagerState.currentPage + pagerState.currentPageOffsetFraction)
             .coerceIn(0f, 1f)
-    var motionDirection by remember(pagerState) { mutableStateOf(0f) }
-    LaunchedEffect(pagerState) {
-        var previousPosition = pagerState.currentPage + pagerState.currentPageOffsetFraction
-        snapshotFlow {
-            (pagerState.currentPage + pagerState.currentPageOffsetFraction) to pagerState.isScrollInProgress
-        }.collect { (position, scrolling) ->
-            val delta = position - previousPosition
-            when {
-                abs(delta) > 0.0005f -> motionDirection = sign(delta)
-                !scrolling -> motionDirection = 0f
-            }
-            previousPosition = position
-        }
-    }
     val stretchProgress = sin(PI * pagePosition).toFloat().coerceIn(0f, 1f)
     val landingScale by animateFloatAsState(
         targetValue = if (pagerState.isScrollInProgress) 0.985f else 1f,
@@ -469,8 +471,7 @@ private fun PagerTabs(
             val indicatorInset = 3.dp
             val indicatorStretch = 6.dp * stretchProgress
             val indicatorOffset =
-                tabWidth * pagePosition + indicatorInset -
-                    if (motionDirection < 0f) indicatorStretch else 0.dp
+                tabWidth * pagePosition + indicatorInset - indicatorStretch / 2
             val indicatorWidth = tabWidth - indicatorInset * 2 + indicatorStretch
 
             Box(
