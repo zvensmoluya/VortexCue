@@ -39,6 +39,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         restoreExternalMediaRequest(savedInstanceState)
         publishExternalMediaRequest(intent)
+        requestHighestRefreshRate()
 
         setContent {
             VortexCueTheme {
@@ -148,6 +149,34 @@ class MainActivity : ComponentActivity() {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun requestHighestRefreshRate() {
+        val currentDisplay =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                display
+            } else {
+                windowManager.defaultDisplay
+            } ?: return
+        val currentMode = currentDisplay.mode
+        val highestRefreshRateMode =
+            currentDisplay.supportedModes
+                .asSequence()
+                .filter { mode ->
+                    mode.physicalWidth == currentMode.physicalWidth &&
+                        mode.physicalHeight == currentMode.physicalHeight
+                }
+                .maxByOrNull { mode -> mode.refreshRate }
+                ?: return
+
+        window.attributes =
+            window.attributes.apply {
+                preferredDisplayModeId = highestRefreshRateMode.modeId
+            }
+        if (Build.VERSION.SDK_INT >= 37) {
+            window.decorView.requestedFrameRate = highestRefreshRateMode.refreshRate
         }
     }
 
