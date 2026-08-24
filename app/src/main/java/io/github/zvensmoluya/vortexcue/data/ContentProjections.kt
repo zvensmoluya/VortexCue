@@ -132,6 +132,16 @@ data class PlaylistSummary(
         get() = systemRole == PlaylistSystemRole.DefaultFavorite
 }
 
+data class ImportContentResult(
+    val contentCount: Int,
+    val changedContentCount: Int,
+    val newlyCollectedCount: Int,
+    val addedPlaylistMembershipCount: Int,
+) {
+    val unchangedContentCount: Int
+        get() = contentCount - changedContentCount
+}
+
 enum class DiscoveryItemStatus {
     Pending,
     Collected,

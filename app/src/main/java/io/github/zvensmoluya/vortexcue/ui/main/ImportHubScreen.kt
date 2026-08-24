@@ -67,6 +67,7 @@ import io.github.zvensmoluya.vortexcue.data.ContentRepository
 import io.github.zvensmoluya.vortexcue.data.DiscoveryGroupSummary
 import io.github.zvensmoluya.vortexcue.data.DiscoveryItem
 import io.github.zvensmoluya.vortexcue.data.DiscoveryItemStatus
+import io.github.zvensmoluya.vortexcue.data.ImportContentResult
 import io.github.zvensmoluya.vortexcue.data.PlaylistSummary
 import io.github.zvensmoluya.vortexcue.data.SourceSummary
 import io.github.zvensmoluya.vortexcue.library.LibraryCoordinatorState
@@ -423,6 +424,18 @@ private fun ImportSourceDetail(
     val visibleSelectedCount = visibleItems.count { it.contentId in selectedIds }
     val orderedSelected = items.filter { it.contentId in selectedIds }.map(DiscoveryItem::contentId)
     val targetNames = playlists.filter { it.playlistId in targetIds }.map(PlaylistSummary::name)
+    val targetSummary =
+        when {
+            targetNames.isEmpty() -> "正在读取目标歌单…"
+            targetNames.size == 1 -> targetNames.single()
+            else -> targetNames.joinToString("、")
+        }
+    val importButtonLabel =
+        when {
+            targetIds.isEmpty() -> "选择导入歌单"
+            targetNames.size == 1 -> "将 ${orderedSelected.size} 项加入「${targetNames.single()}」"
+            else -> "将 ${orderedSelected.size} 项加入 ${targetIds.size} 个歌单"
+        }
 
     Scaffold(
         containerColor = AppBackground,
@@ -449,19 +462,26 @@ private fun ImportSourceDetail(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { targetSheetVisible = true },
+                    modifier =
+                        Modifier.fillMaxWidth()
+                            .heightIn(min = 56.dp)
+                            .background(AppSurfaceSelected)
+                            .clickable { targetSheetVisible = true }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("加入歌单", color = AppSecondaryText, fontSize = 11.sp)
+                        Text("导入到", color = AppSecondaryText, fontSize = 12.sp)
                         Text(
-                            targetNames.ifEmpty { listOf("默认收藏") }.joinToString("、"),
+                            targetSummary,
                             color = AppPrimaryText,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    Text("选择", color = AppAccent)
+                    Text("更改", color = AppAccent)
                 }
                 notice?.let { Text(it, color = AppAccent, fontSize = 12.sp) }
                 Button(
@@ -471,8 +491,8 @@ private fun ImportSourceDetail(
                             importing = true
                             runCatching {
                                 repository.importContent(orderedSelected, targetIds, group.sourceKey)
-                            }.onSuccess {
-                                notice = "已将 ${orderedSelected.size} 项加入 ${targetIds.size} 个歌单"
+                            }.onSuccess { result ->
+                                notice = importResultNotice(result, targetNames, targetIds.size)
                                 selectedIds = emptySet()
                             }.onFailure { notice = it.message ?: "添加失败" }
                             importing = false
@@ -480,7 +500,7 @@ private fun ImportSourceDetail(
                     },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                 ) {
-                    Text("将 ${orderedSelected.size} 项加入 ${targetIds.size.coerceAtLeast(1)} 个歌单")
+                    Text(importButtonLabel)
                 }
             }
         },
@@ -683,6 +703,21 @@ private fun ImportActionRow(label: String, icon: androidx.compose.ui.graphics.ve
 }
 
 private enum class ImportRange { New, All }
+
+private fun importResultNotice(
+    result: ImportContentResult,
+    targetNames: List<String>,
+    targetCount: Int,
+): String =
+    when {
+        result.changedContentCount == 0 -> "所选 ${result.contentCount} 项已在目标歌单"
+        result.unchangedContentCount > 0 ->
+            "已更新 ${result.changedContentCount} 项，另有 ${result.unchangedContentCount} 项已在目标歌单"
+        targetNames.size == 1 -> "已将 ${result.changedContentCount} 项加入「${targetNames.single()}」"
+        result.addedPlaylistMembershipCount == result.changedContentCount * targetCount ->
+            "已将 ${result.changedContentCount} 项加入 $targetCount 个歌单"
+        else -> "已更新 ${result.changedContentCount} 项的歌单归属"
+    }
 
 private fun formatDuration(durationMs: Long): String {
     val totalSeconds = (durationMs / 1_000L).coerceAtLeast(0L)

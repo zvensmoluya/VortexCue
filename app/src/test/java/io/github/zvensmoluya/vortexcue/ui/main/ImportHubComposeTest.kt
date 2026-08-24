@@ -88,6 +88,9 @@ class ImportHubComposeTest {
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Music").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Music").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("已选择 2 / 2").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("将 2 项加入「默认收藏」").fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithText("默认收藏").performClick()
         compose.onNodeWithText("练习").performClick()
         compose.onNodeWithText("睡前").performClick()
@@ -99,6 +102,13 @@ class ImportHubComposeTest {
         compose.onNodeWithText("将 2 项加入 3 个歌单").performClick()
         compose.waitUntil(5_000) {
             compose.onAllNodesWithText("已将 2 项加入 3 个歌单").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        compose.onNodeWithText("全部 2 项").performClick()
+        compose.onNodeWithText("全选").performClick()
+        compose.onNodeWithText("将 2 项加入 3 个歌单").performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("所选 2 项已在目标歌单").fetchSemanticsNodes().isNotEmpty()
         }
 
         compose.onNodeWithText("Music").assertExists()

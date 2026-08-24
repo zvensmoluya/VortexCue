@@ -428,24 +428,34 @@ class ContentRepository(
         contentIds: List<String>,
         playlistIds: Set<String>,
         sourceKey: String? = null,
-    ) {
+    ): ImportContentResult {
         require(playlistIds.isNotEmpty()) { "至少选择一个歌单" }
-        database.withWriteTransaction {
+        return database.withWriteTransaction {
             val targets = playlistIds
             targets.forEach { requireNotNull(dao.playlist(it)) { "歌单不存在" } }
             val nextPositions = targets.associateWith { id ->
                 (dao.playlistItems(id).maxOfOrNull { it.sortPosition } ?: -1L) + 1L
             }.toMutableMap()
-            contentIds.distinct().forEach { contentId ->
-                val canonical = resolveRedirect(contentId)
+            val canonicalIds = contentIds.map { resolveRedirect(it) }.distinct()
+            var changedContentCount = 0
+            var newlyCollectedCount = 0
+            var addedPlaylistMembershipCount = 0
+            canonicalIds.forEach { canonical ->
                 requireContent(canonical)
                 val timestamp = nowMs()
-                dao.upsertDisposition(ContentDispositionEntity(canonical, true, timestamp))
+                val wasCollected = dao.disposition(canonical)?.isCollected == true
                 val existing = dao.playlistItemsForContent(canonical).mapTo(hashSetOf()) { it.playlistId }
-                targets.filterNot(existing::contains).forEach { playlistId ->
+                val missingTargets = targets.filterNot(existing::contains)
+                if (!wasCollected || missingTargets.isNotEmpty()) changedContentCount += 1
+                if (!wasCollected) {
+                    newlyCollectedCount += 1
+                    dao.upsertDisposition(ContentDispositionEntity(canonical, true, timestamp))
+                }
+                missingTargets.forEach { playlistId ->
                     val position = requireNotNull(nextPositions[playlistId])
                     dao.upsertPlaylistItem(PlaylistItemEntity(playlistId, canonical, position, timestamp))
                     nextPositions[playlistId] = position + 1L
+                    addedPlaylistMembershipCount += 1
                 }
             }
             sourceKey?.let { key ->
@@ -453,6 +463,12 @@ class ContentRepository(
                 dao.clearImportSourceTargets(key)
                 dao.upsertImportSourceTargets(targets.map { ImportSourceTargetEntity(key, it) })
             }
+            ImportContentResult(
+                contentCount = canonicalIds.size,
+                changedContentCount = changedContentCount,
+                newlyCollectedCount = newlyCollectedCount,
+                addedPlaylistMembershipCount = addedPlaylistMembershipCount,
+            )
         }
     }
 

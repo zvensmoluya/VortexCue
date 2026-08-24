@@ -97,22 +97,25 @@ class PlaylistRepositoryTest {
         val playlist = repository.createPlaylist("Imported")
         val second = repository.createPlaylist("Also imported")
 
-        repository.importContent(
+        val firstImport = repository.importContent(
             contentIds = listOf(selected),
             playlistIds = setOf(playlist.playlistId, second.playlistId),
             sourceKey = "system:test",
         )
 
+        assertEquals(ImportContentResult(1, 1, 1, 2), firstImport)
         assertEquals(ContentDisposition.Collected, repository.details(selected)?.disposition)
         assertEquals(setOf(playlist.playlistId, second.playlistId), repository.playlistIdsForContent(selected))
         assertEquals(null, repository.details(unchecked)?.disposition)
         assertTrue(repository.playlistIdsForContent(unchecked).isEmpty())
         assertEquals(setOf(playlist.playlistId, second.playlistId), repository.observeImportTargets("system:test").first())
-        repository.importContent(
+        val repeatedImport = repository.importContent(
             contentIds = listOf(selected, selected),
             playlistIds = setOf(playlist.playlistId, second.playlistId),
             sourceKey = "system:test",
         )
+        assertEquals(ImportContentResult(1, 0, 0, 0), repeatedImport)
+        assertEquals(1, repeatedImport.unchangedContentCount)
         assertEquals(listOf(selected), repository.playlistContentIds(playlist.playlistId))
         assertEquals(listOf(selected), repository.playlistContentIds(second.playlistId))
         assertEquals(listOf(selected), repository.allContent.first().map(ContentSummary::contentId))
