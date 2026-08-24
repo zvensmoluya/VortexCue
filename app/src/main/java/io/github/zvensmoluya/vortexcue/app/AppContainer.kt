@@ -81,6 +81,11 @@ class AppContainer(context: Context) {
             NoOpSyncTextDiagnosticRecorder
         }
     val contentRepository = ContentRepository(database)
+
+    init {
+        scope.launch { contentRepository.ensureDefaultPlaylist() }
+    }
+
     val playbackStateRepository = PlaybackStateRepository(database, contentRepository)
     val settingsStore = SettingsStore(appContext)
     val rawResponseStore = PrivateRawResponseStore(appContext)

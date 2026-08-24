@@ -1,30 +1,23 @@
 package io.github.zvensmoluya.vortexcue.library
 
+import android.Manifest
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class MediaLibraryPermissionsTest {
     @Test
-    fun fullVideoAccessWinsSelectedAccess() {
+    fun androidThirteenRequestsAudioOnly() {
         assertEquals(
-            VideoLibraryAccess.Full,
-            resolveVideoLibraryAccess(hasFullAccess = true, hasSelectedAccess = true),
+            Manifest.permission.READ_MEDIA_AUDIO,
+            requiredAudioLibraryPermission(33),
         )
     }
 
     @Test
-    fun selectedAccessIsReportedAsPartial() {
+    fun olderAndroidUsesLegacyStoragePermission() {
         assertEquals(
-            VideoLibraryAccess.Partial,
-            resolveVideoLibraryAccess(hasFullAccess = false, hasSelectedAccess = true),
-        )
-    }
-
-    @Test
-    fun missingVideoPermissionsAreReportedAsNone() {
-        assertEquals(
-            VideoLibraryAccess.None,
-            resolveVideoLibraryAccess(hasFullAccess = false, hasSelectedAccess = false),
+            Manifest.permission.READ_EXTERNAL_STORAGE,
+            requiredAudioLibraryPermission(32),
         )
     }
 }

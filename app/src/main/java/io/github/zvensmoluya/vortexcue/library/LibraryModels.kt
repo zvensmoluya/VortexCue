@@ -47,16 +47,10 @@ internal data class LibraryScanScope(
     }
 }
 
-internal fun isAuthoritativeSystemScan(
+internal fun isAuthoritativeSystemAudioScan(
     hasAudioAccess: Boolean,
-    videoAccess: VideoLibraryAccess,
     audioScanSucceeded: Boolean,
-    videoScanSucceeded: Boolean,
-): Boolean =
-    hasAudioAccess &&
-        videoAccess == VideoLibraryAccess.Full &&
-        audioScanSucceeded &&
-        videoScanSucceeded
+): Boolean = hasAudioAccess && audioScanSucceeded
 
 object LibrarySourceIds {
     const val SystemLibrary = "system-library"

@@ -103,90 +103,6 @@ class LocalMediaScanner(private val context: Context) {
             } ?: emptyList()
         }
 
-    suspend fun scanSystemVideo(): List<MediaSourceRef> =
-        withContext(Dispatchers.IO) {
-            val collection =
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
-                } else {
-                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-                }
-            val projection =
-                buildList {
-                    add(MediaStore.Video.Media._ID)
-                    add(MediaStore.Video.Media.DISPLAY_NAME)
-                    add(MediaStore.Video.Media.TITLE)
-                    add(MediaStore.Video.Media.MIME_TYPE)
-                    add(MediaStore.Video.Media.DURATION)
-                    add(MediaStore.Video.Media.DATE_ADDED)
-                    add(MediaStore.Video.Media.SIZE)
-                    add(MediaStore.Video.Media.WIDTH)
-                    add(MediaStore.Video.Media.HEIGHT)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        add(MediaStore.Video.Media.RELATIVE_PATH)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        add(MediaStore.Video.Media.DATA)
-                    }
-                }.toTypedArray()
-
-            resolver.query(
-                collection,
-                projection,
-                "${MediaStore.Video.Media.DURATION} > 0",
-                null,
-                "${MediaStore.Video.Media.TITLE} COLLATE NOCASE ASC",
-            )?.use { cursor ->
-                val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-                val nameIndex = cursor.getColumnIndex(MediaStore.Video.Media.DISPLAY_NAME)
-                val titleIndex = cursor.getColumnIndex(MediaStore.Video.Media.TITLE)
-                val mimeIndex = cursor.getColumnIndex(MediaStore.Video.Media.MIME_TYPE)
-                val durationIndex = cursor.getColumnIndex(MediaStore.Video.Media.DURATION)
-                val addedIndex = cursor.getColumnIndex(MediaStore.Video.Media.DATE_ADDED)
-                val sizeIndex = cursor.getColumnIndex(MediaStore.Video.Media.SIZE)
-                val widthIndex = cursor.getColumnIndex(MediaStore.Video.Media.WIDTH)
-                val heightIndex = cursor.getColumnIndex(MediaStore.Video.Media.HEIGHT)
-                val pathIndex =
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        cursor.getColumnIndex(MediaStore.Video.Media.RELATIVE_PATH)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        cursor.getColumnIndex(MediaStore.Video.Media.DATA)
-                    }
-
-                buildList {
-                    while (cursor.moveToNext()) {
-                        currentCoroutineContext().ensureActive()
-                        val id = cursor.getLong(idIndex)
-                        val displayName = cursor.stringOrNull(nameIndex) ?: "未命名视频"
-                        val rawPath = cursor.stringOrNull(pathIndex)
-                        add(
-                            MediaSourceRef(
-                                uri = ContentUris.withAppendedId(collection, id),
-                                displayName = displayName,
-                                mimeType = cursor.stringOrNull(mimeIndex),
-                                title = cursor.stringOrNull(titleIndex),
-                                durationMs = cursor.longOrZero(durationIndex),
-                                folder =
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                        rawPath?.trimEnd('/')
-                                    } else {
-                                        rawPath?.let(::File)?.parentFile?.name
-                                    },
-                                dateAddedSeconds = cursor.longOrZero(addedIndex),
-                                origin = MediaOrigin.MediaStore,
-                                sourceId = LibrarySourceIds.SystemLibrary,
-                                kind = MediaKind.Video,
-                                sizeBytes = cursor.longOrZero(sizeIndex),
-                                videoWidth = cursor.intOrZero(widthIndex),
-                                videoHeight = cursor.intOrZero(heightIndex),
-                            ),
-                        )
-                    }
-                }
-            } ?: emptyList()
-        }
-
     suspend fun scanFolder(folder: LibraryFolderRef): LibraryScanBatch =
         withContext(Dispatchers.IO) {
             val rootId = DocumentsContract.getTreeDocumentId(folder.uri)
@@ -218,7 +134,7 @@ class LocalMediaScanner(private val context: Context) {
                         val mime = cursor.getString(mimeIndex)
                         if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
                             pending.add(PendingFolder(documentId, "${current.path}/$name"))
-                        } else if (isPlayableDocument(name, mime)) {
+                        } else if (isAudioDocument(name, mime)) {
                             val uri = DocumentsContract.buildDocumentUriUsingTree(folder.uri, documentId)
                             val source =
                                 MediaSourceRef(
@@ -232,7 +148,8 @@ class LocalMediaScanner(private val context: Context) {
                                     kind = MediaKind.infer(mime, name),
                                     sizeBytes = cursor.longOrZero(sizeIndex),
                                 )
-                            results += inspect(source)
+                            val inspected = inspect(source)
+                            if (inspected.kind == MediaKind.Audio) results += inspected
                         } else if (isSubtitleDocument(name, mime)) {
                             subtitles +=
                                 DiscoveredSubtitle(
@@ -318,8 +235,8 @@ class LocalMediaScanner(private val context: Context) {
         val source: SubtitleSourceRef,
     )
 
-    private companion object {
-        val DocumentProjection =
+    companion object {
+        private val DocumentProjection =
             arrayOf(
                 DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                 DocumentsContract.Document.COLUMN_DISPLAY_NAME,
@@ -328,47 +245,37 @@ class LocalMediaScanner(private val context: Context) {
                 DocumentsContract.Document.COLUMN_SIZE,
             )
 
-        val MediaExtensions =
+        private val AudioExtensions =
             setOf(
                 "aac",
                 "flac",
                 "m4a",
                 "mka",
-                "m2ts",
-                "m4v",
-                "mkv",
-                "mov",
                 "mp3",
-                "mp4",
-                "mpeg",
-                "mpg",
                 "oga",
                 "ogg",
                 "opus",
-                "3gp",
-                "ts",
                 "wav",
-                "webm",
             )
 
-        val SubtitleExtensions = setOf("ass", "lrc", "srt", "ssa", "vtt")
+        private val SubtitleExtensions = setOf("ass", "lrc", "srt", "ssa", "vtt")
 
-        fun isPlayableDocument(
+        internal fun isAudioDocument(
             name: String,
             mimeType: String?,
         ): Boolean =
-            mimeType?.startsWith("audio/") == true ||
-                mimeType?.startsWith("video/") == true ||
-                name.substringAfterLast('.', "").lowercase() in MediaExtensions
+            mimeType?.startsWith("video/") != true &&
+                (mimeType?.startsWith("audio/") == true ||
+                    name.substringAfterLast('.', "").lowercase() in AudioExtensions)
 
-        fun isSubtitleDocument(
+        private fun isSubtitleDocument(
             name: String,
             mimeType: String?,
         ): Boolean =
             mimeType in setOf("application/x-subrip", "text/vtt") ||
                 name.substringAfterLast('.', "").lowercase() in SubtitleExtensions
 
-        fun matchSubtitles(
+        private fun matchSubtitles(
             media: List<MediaSourceRef>,
             subtitles: List<DiscoveredSubtitle>,
         ): List<TimedTextTrackCandidate> =
@@ -389,9 +296,6 @@ private fun android.database.Cursor.stringOrNull(index: Int): String? =
 
 private fun android.database.Cursor.longOrZero(index: Int): Long =
     if (index < 0 || isNull(index)) 0L else getLong(index)
-
-private fun android.database.Cursor.intOrZero(index: Int): Int =
-    if (index < 0 || isNull(index)) 0 else getInt(index)
 
 private fun String?.normalizeMetadata(): String? =
     this?.takeIf { it.isNotBlank() && it != "<unknown>" }

@@ -34,11 +34,13 @@ Logo 是动作，不是第五个页面；点击只打开 Import Hub，不改变�
 
 ## 2. 歌单与全部内容
 
-歌单是用户长期整理和重复进入的内容集合，与物理文件夹和 Source 完全独立。一个 `contentId` 可以加入多个歌单，但同一歌单内唯一；用户歌单和歌单成员均使用手动顺序。删除歌单或移除成员不删除原文件、不移出收录，也不改变已经生成的 Current Queue。
+歌单是用户长期整理和重复进入的内容集合，与物理文件夹和 Source 完全独立。一个 `contentId` 可以加入多个歌单，但同一歌单内唯一；用户歌单和歌单成员均使用手动顺序。每个已收录内容必须至少属于一个真实歌单，删除歌单或移除成员不删除原文件，也不改变已经生成的 Current Queue。
 
-歌单页不显示页面大标题和搜索。顶部“最近听过”最多横向展示 6 个最近真正从中开始播放的非空用户歌单；卡片只显示歌单名和内容数量，点击只进入详情，不续播。下面“全部歌单”固定以虚拟入口“全部内容”置顶，再按用户手动顺序展示歌单。当前版本仅用排版和 Raised Surface 区分歌单，不提供图标或图片封面。
+固定系统歌单“默认收藏”是所有收录操作的安全落点，不可改名、删除或参与歌单排序。歌单页不显示页面大标题和搜索。顶部“最近听过”最多横向展示 6 个最近真正从中开始播放的非空真实歌单；默认收藏实际开始播放后也可以进入最近听过。下面“全部歌单”固定以虚拟入口“全部内容”置顶，默认收藏固定其后，再按用户手动顺序展示普通歌单。当前版本仅用排版和 Raised Surface 区分歌单，不提供图标或图片封面。
 
-“全部内容”包含全部已收录、未忽略的媒体，按最近加入优先排列，不写入 `playlist` 表，也不进入“最近听过”。从“全部内容”点击媒体只以单项替换 Current Queue。歌单详情提供“播放全部”；点击具体内容时用完整歌单顺序替换 Current Queue，并从点击项开始。只有替换成功后才更新歌单最近播放时间。
+“全部内容”是所有真实歌单成员按 `contentId` 去重后的聚合视图，按最近加入优先排列，不写入 `playlist` 表，不能成为任何导入或管理操作的目标，也不进入“最近听过”。从“全部内容”点击媒体只以单项替换 Current Queue。歌单详情提供“播放全部”；点击具体内容时用完整歌单顺序替换 Current Queue，并从点击项开始。只有替换成功后才更新歌单最近播放时间。
+
+从普通歌单移除内容的最后一个归属时，内容自动进入默认收藏；删除普通歌单时，其独占内容同样转入默认收藏。归属编辑器不允许最终为空，空选择回退默认收藏。默认收藏中的唯一成员不提供“从当前歌单移除”；彻底移除使用独立“移出内容”，清空全部歌单归属并写入忽略状态。恢复忽略项时加入默认收藏。
 
 内容长按 Bottom Sheet 提供：
 
@@ -53,17 +55,17 @@ Logo 是动作，不是第五个页面；点击只打开 Import Hub，不改变�
 
 ## 3. Import Hub 与来源
 
-Import Hub 提供：选择单文件、从文件夹查找、扫描设备媒体、已授权来源列表。
+底栏中央 Logo 打开临时全屏 Import Hub，不改变当前 Tab。流程只有“来源首页 / 来源详情”两层：详情返回来源首页，来源首页关闭后回到原 Tab。首次进入先说明音频发现用途并由“开始查找”请求音频权限；拒绝后不自动重弹，仅保留“再次允许”“选择音频或视频文件”“从其他位置查找音频”。Android 13+ 只请求 `READ_MEDIA_AUDIO`；旧系统即使使用宽泛存储权限，应用也只查询音频。
 
-- Logo 选择单文件：加入“全部内容”并立即播放；
-- 外部 `ACTION_VIEW`：只进入当前 Queue，不自动收录；Player 提供“加入内容”；
-- 文件夹扫描默认勾选全部可播放音视频；
-- 全设备扫描默认只勾选音频；
-- 批量导入默认只加入“全部内容”，也可当场选择或新建一个初始歌单；导入后可再加入多个歌单；
-- 来源重扫只展示本次新增项；已移出/忽略项在来源详情中恢复；
-- 来源失效、重新授权、取消扫描和媒体重新定位就地反馈，不建立异常管理中心。
+已授权时先展示持久缓存，并在每次打开 Import Hub 时后台刷新系统音频和已授权文件夹。刷新期间旧结果仍可浏览，显示进度与取消；失败或授权失效时保留旧索引并就地提供重试或重新授权。系统音频按扫描边界和规范化相对位置形成稳定来源卡片，卡片显示名称、总数、新增数和示例标题；有新增、较新、偏长音频的位置优先，系统提示目录和全为一分钟内短音频的位置降级到“全部位置”。没有位置元数据时归入“其他音频”，同名位置补充上级名称。
 
-来源是扫描授权与刷新边界，不是歌单。扫描不得复制物理目录结构，也不得覆盖用户的忽略或歌单决定。
+自动发现和文件夹持续扫描都只收录音频。视频只允许用户通过单文件选择明确导入，本轮没有来源级视频发现开关。文件夹扫描仍会静默登记外挂字幕候选并沿用现有匹配与按需物化逻辑，但扫描、选择和完成反馈都不显示字幕状态，字幕处理不阻塞媒体导入。
+
+来源详情默认进入“新增”范围并全选待添加音频，也可切换“全部”，选择已收录内容追加到其他歌单。列表按标题/文件名自然排序，导入按当前顺序追加；取消勾选不改变待添加状态，只有单项更多菜单的“不再推荐”写入忽略。底部固定显示选择数量、目标摘要和“将 N 项加入 M 个歌单”；成功后停留在来源详情，刷新新增数，不自动播放。
+
+批量导入必须选择至少一个真实歌单并支持多选。来源首次默认选择默认收藏；成功后记住该来源最后确认的目标集合，下次恢复仍存在的目标，否则回退默认收藏。默认收藏为唯一选择时，首次选择普通歌单会替换它，之后可以继续多选或显式重新加入默认收藏；目标选择面板可当场新建歌单并自动选中。新内容加入全部目标；已收录内容只做归属并集，不移除原归属，也不重复插入。
+
+单文件音频或视频直接加入默认收藏并立即播放；外部 `ACTION_VIEW` 仍只临时播放，不自动收录。来源是扫描授权与刷新边界，不是歌单；设备目录不会复制成真实歌单或额外授权 Source。
 
 ## 4. 播放列表
 
@@ -83,7 +85,7 @@ ASR 配置先选择提供商，再选择该提供商的模型；OpenRouter 提�
 
 ## 6. 设置
 
-设置只负责 Glow 窗口/文字/控制亮度、字号、垂直位置、预设与首次校准，以及权限状态和关于。系统栏隐藏、队列连续播放等固定行为不做可选项。
+设置只负责 Glow 窗口/文字/控制亮度、字号、垂直位置、预设与首次校准，以及音频权限状态和关于。应用不请求或展示设备视频库权限；系统栏隐藏、队列连续播放等固定行为不做可选项。
 
 Glow 为纯黑、安全 Insets、独立亮度；双击分区、长按临时控制、5 秒退场保持现有行为。Glow 返回 Normal Player，再返回原一级页面。
 
@@ -95,7 +97,11 @@ Normal Player 的主体固定为“上一句弱化 / 当前句主视觉 / 下一
 
 ## 8. 数据与迁移
 
-Room 当前 schema 为 v9；v7→v8 通过自动迁移保留任务、结果和手测诊断数据，v8→v9 手动把旧虚拟文件夹和单归属成员关系迁移为同名多对多歌单，不从单内容历史推断歌单最近播放。v6 及其他不兼容版本仍允许破坏性重建。重建清理应用私有旧字幕缓存、旧 result/checkpoint VTT、孤立凭据文件和旧的 Home shortcut 数据；保留 Settings、用户原始媒体和 SAF 外部字幕文件。数据库不再把 `lastSurface` 当作启动入口；`PlayerSurface` 只管理运行期 Normal/Calibration/Glow 层级。
+Room 当前 schema 为 v10。`playlist.system_role` 唯一标识默认收藏；来源导入偏好和多选目标关系持久保存，目标歌单删除时级联清理。来源卡片由可用音频 locator 的 `sourceId + normalized folder` 动态聚合，不把设备目录复制为歌单或授权 Source；扫描只更新持久索引，UI 直接观察数据库中的待添加状态，不保留进程内整批 `pendingImport`。
+
+v7→v8 通过自动迁移保留任务、结果和手测诊断数据，v8→v9 手动把旧虚拟文件夹和单归属成员关系迁移为同名多对多歌单。v9→v10 优先把现有同名“默认收藏”提升为系统歌单，否则创建；已收录但零歌单归属的内容按原全部内容顺序迁入默认收藏，现有多归属、播放时间、同步文字和忽略状态保持。迁移会清理旧自动发现且未收录的视频记录，已明确收录的视频保留，后续音频刷新只失效旧音频 locator，不误伤这些视频。v6 及其他不兼容版本仍允许破坏性重建。
+
+重建清理应用私有旧字幕缓存、旧 result/checkpoint VTT、孤立凭据文件和旧的 Home shortcut 数据；保留 Settings、用户原始媒体和 SAF 外部字幕文件。数据库不再把 `lastSurface` 当作启动入口；`PlayerSurface` 只管理运行期 Normal/Calibration/Glow 层级。
 
 导入与生成文字统一使用 `CanonicalTimeline`、`TimelineRevision` 和 content-addressed `TextArtifactStore`。Artifact 位于 `noBackupFilesDir/text_artifacts/<kind>/<prefix>/<id>.bin`，ID 是包含 kind、schema、codec 与 canonicalizer version 的完整二进制 envelope SHA-256。Room 只保存 Artifact metadata、不可变 revision、manifest 和 publication pointer，不保存逐 cue 正文。`TimelineRevisionReader` 一次解码当前 publication 为内存 `SubtitleTimeline`；播放进度解析不访问 Room、Artifact 文件或 SAF。
 
@@ -103,18 +109,18 @@ ASR window 与 translation batch 由固定数量的 worker 按序领取，先发
 
 当前没有导出功能；内部 codec 与 revision reader 保留明确的 exporter 边界，但本轮不增加导出 UI。
 
-核心 UI 接口包括 `MainTab.Playlists`、`PlaylistSummary`、多对多 `PlaylistItem`、`SyncTextConfig` 及对应 Repository 查询/写入。Home projection、HomeSection、物理 Folder projection、Home shortcut 和 UI-facing Scheme/Task actions 不得成为新 UI 依赖。
+核心 UI 接口包括 `MainTab.Playlists`、带系统角色的 `PlaylistSummary`、多对多 `PlaylistItem`、`DiscoveryGroupSummary`、来源目标偏好、`SyncTextConfig` 及对应 Repository 查询/写入。Home projection、HomeSection、物理 Folder projection、Home shortcut、瞬时 `pendingImport` 和 UI-facing Scheme/Task actions 不得成为新 UI 依赖。
 
 ## 9. 验收
 
-自动化覆盖：歌单多归属与去重、歌单及成员重排、删除歌单保留内容、最近歌单上限、移出/恢复、Queue 唯一与重排、外部打开不收录、单套配置校验、生成状态归并；四种字幕格式 canonicalization、稳定 cue ID、版本化 binary codec、partial/final assembly、translation source pin、Artifact 审计与 24 小时 GC；Room 首次创建、v7→v8、v8→v9 保留迁移与 v6→v9 破坏性重建；Settings DataStore 与用户媒体不受影响。
+自动化覆盖：默认收藏创建/提升和保护、固定排序、歌单多归属与去重、多目标导入和来源偏好回退、最后归属与删除歌单转移、移出/恢复、全部内容聚合、Queue 唯一与重排、外部打开不收录、单套配置校验、生成状态归并；系统与文件夹只发现音频、音频扫描独立权威、位置稳定分组和自然排序；四种字幕格式 canonicalization、稳定 cue ID、版本化 binary codec、partial/final assembly、translation source pin、Artifact 审计与 24 小时 GC；Room 首次创建、v7→v8、v8→v9、v9→v10 保留迁移与不兼容版本破坏性重建。
 
-Compose UI 覆盖四 Tab、歌单总览与详情、最近歌单、全部内容、多选成员、重排模式、中央 Import Hub、Mini Player、长按菜单、Queue、配置校验和 Back Stack。默认验证命令：
+Compose UI 覆盖四 Tab、歌单总览与详情、默认收藏、最近歌单、全部内容、多选成员、重排模式、全屏 Import Hub、权限状态、来源卡片、默认全选、多歌单与现场新建、成功后留在详情、Mini Player、长按菜单、Queue、配置校验和 Back Stack。默认验证命令：
 
 ```text
-gradlew.bat testDebugUnitTest
-gradlew.bat lint
-gradlew.bat assembleDebug
+$env:VORTEX_LIVE_TEST='0'; .\gradlew.bat testDebugUnitTest
+$env:VORTEX_LIVE_TEST='0'; .\gradlew.bat lint
+$env:VORTEX_LIVE_TEST='0'; .\gradlew.bat assembleDebug
 ```
 
-有设备后补充 `connectedDebugAndroidTest`，并在 360x800、412x915、较大字体、长标题/双语字幕下检查遮挡、溢出、触控区、Glow 纯黑和亮度。真机还需覆盖单文件、SAF Folder、设备扫描、外部打开、后台播放、进程恢复、同步文字生成、Glow 沉浸与 Sleep Timer。
+真机至少覆盖 Android 12 与 Android 13+，并在 360x800、412x915、旋转、较大字体、长标题/双语字幕下检查遮挡、溢出、触控区、TalkBack、Glow 纯黑和亮度。媒体回归使用混合音视频设备库，覆盖权限允许/拒绝/撤销、SAF Folder、来源刷新与失效重授权、后台字幕候选匹配、单文件音频/视频立即播放、外部打开不收录、后台播放、进程恢复、同步文字生成、系统返回层级、Glow 沉浸与 Sleep Timer。本轮不验收来源级视频发现开关，也不向导入 UI 暴露字幕维护。

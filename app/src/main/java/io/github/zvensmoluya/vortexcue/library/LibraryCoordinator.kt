@@ -8,7 +8,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
-import io.github.zvensmoluya.vortexcue.core.model.MediaKind
 import io.github.zvensmoluya.vortexcue.core.storage.persistReadPermission
 import io.github.zvensmoluya.vortexcue.core.storage.treeDisplayName
 import io.github.zvensmoluya.vortexcue.data.ContentRepository
@@ -21,27 +20,12 @@ import kotlinx.coroutines.launch
 data class LibraryCoordinatorState(
     val scanningSourceIds: Set<String> = emptySet(),
     val hasAudioAccess: Boolean = false,
-    val videoAccess: VideoLibraryAccess = VideoLibraryAccess.None,
+    val hasRequestedAudioAccess: Boolean = false,
     val errorMessage: String? = null,
-    val pendingImport: PendingImportBatch? = null,
 ) {
     val isLoading: Boolean
         get() = scanningSourceIds.isNotEmpty()
 }
-
-data class PendingImportBatch(
-    val items: List<PendingImportItem>,
-    val defaultSelectedContentIds: Set<String>,
-) {
-    val contentIds: List<String>
-        get() = items.map { it.contentId }
-}
-
-data class PendingImportItem(
-    val contentId: String,
-    val title: String,
-    val kind: MediaKind,
-)
 
 @Stable
 class LibraryCoordinator(
@@ -52,6 +36,8 @@ class LibraryCoordinator(
 ) {
     private val appContext = context.applicationContext
     private val resolver = appContext.contentResolver
+    private val permissionPreferences =
+        appContext.getSharedPreferences(PermissionPreferencesName, Context.MODE_PRIVATE)
     private val jobs = mutableMapOf<String, Job>()
     private var nextRequestId = 0L
     private val requestIds = mutableMapOf<String, Long>()
@@ -61,30 +47,35 @@ class LibraryCoordinator(
 
     suspend fun inspect(source: MediaSourceRef): MediaSourceRef = scanner.inspect(source)
 
-    fun scanDevice(admitNew: Boolean = true, audioOnly: Boolean = true) {
-        state = permissionState().copy(errorMessage = null, pendingImport = null)
-        startSystemScan(admitNew = admitNew, audioOnly = audioOnly)
+    fun noteAudioPermissionRequest() {
+        permissionPreferences.edit().putBoolean(AudioPermissionRequestedKey, true).apply()
+        state = state.copy(hasRequestedAudioAccess = true)
     }
 
-    fun scanAll(admitNew: Boolean = true, audioOnly: Boolean = true) {
-        state = permissionState().copy(errorMessage = null, pendingImport = null)
-        startSystemScan(admitNew = admitNew, audioOnly = audioOnly)
+    fun scanDevice() {
+        state = permissionState().copy(errorMessage = null)
+        startSystemScan()
+    }
+
+    fun scanAll() {
+        state = permissionState().copy(errorMessage = null)
+        startSystemScan()
         scope.launch {
             repository.sourceDescriptors()
                 .filter { it.kind == LibrarySourceKind.Folder && it.rootUri != null }
-                .forEach { startFolderScan(it, admitNew = admitNew) }
+                .forEach(::startFolderScan)
         }
     }
 
     fun refreshSource(sourceId: String) {
-        state = state.copy(pendingImport = null, errorMessage = null)
+        state = state.copy(errorMessage = null)
         if (sourceId == LibrarySourceIds.SystemLibrary) {
-            state = permissionState().copy(errorMessage = null, pendingImport = null)
-            startSystemScan(admitNew = true, audioOnly = true)
+            state = permissionState().copy(errorMessage = null)
+            startSystemScan()
             return
         }
         scope.launch {
-            repository.sourceDescriptors().firstOrNull { it.sourceId == sourceId }?.let { startFolderScan(it, admitNew = true) }
+            repository.sourceDescriptors().firstOrNull { it.sourceId == sourceId }?.let(::startFolderScan)
         }
     }
 
@@ -98,7 +89,7 @@ class LibraryCoordinator(
     }
 
     fun addFolder(uri: Uri) {
-        state = state.copy(pendingImport = null, errorMessage = null)
+        state = state.copy(errorMessage = null)
         resolver.persistReadPermission(uri)
         scope.launch {
             val rootUri = uri.toString()
@@ -110,13 +101,12 @@ class LibraryCoordinator(
                     rootUri = rootUri,
                     displayName = resolver.treeDisplayName(uri),
                 ),
-                admitNew = true,
             )
         }
     }
 
     fun replaceFolder(sourceId: String, uri: Uri) {
-        state = state.copy(pendingImport = null, errorMessage = null)
+        state = state.copy(errorMessage = null)
         resolver.persistReadPermission(uri)
         scope.launch {
             val existing = repository.sourceDescriptorForRoot(uri.toString())
@@ -141,7 +131,6 @@ class LibraryCoordinator(
                     rootUri = uri.toString(),
                     displayName = resolver.treeDisplayName(uri),
                 ),
-                admitNew = true,
             )
         }
     }
@@ -161,28 +150,15 @@ class LibraryCoordinator(
         }
     }
 
-    fun clearPendingImport() {
-        state = state.copy(pendingImport = null)
-    }
-
-    private fun startSystemScan(admitNew: Boolean, audioOnly: Boolean) {
+    private fun startSystemScan() {
         val permissions = permissionState()
         state = permissions.copy(errorMessage = state.errorMessage)
-        if (!permissions.hasAudioAccess && permissions.videoAccess == VideoLibraryAccess.None) {
+        if (!permissions.hasAudioAccess) {
             cancelScan(LibrarySourceIds.SystemLibrary)
             return
         }
         launchScan(LibrarySourceIds.SystemLibrary) {
-            val undecidedBefore =
-                if (admitNew) repository.undecidedContentIdsForSource(LibrarySourceIds.SystemLibrary).toSet()
-                else emptySet()
-            val audio =
-                if (permissions.hasAudioAccess) runCatchingSuspend { scanner.scanSystemAudio() }
-                else Result.success(emptyList())
-            val video =
-                if (permissions.videoAccess != VideoLibraryAccess.None) runCatchingSuspend { scanner.scanSystemVideo() }
-                else Result.success(emptyList())
-            val media = audio.getOrDefault(emptyList()) + video.getOrDefault(emptyList())
+            val audio = runCatchingSuspend { scanner.scanSystemAudio() }
             val descriptor =
                 SourceScanDescriptor(
                     sourceId = LibrarySourceIds.SystemLibrary,
@@ -190,26 +166,17 @@ class LibraryCoordinator(
                     rootUri = null,
                     displayName = "设备媒体库",
                 )
-            val authoritative =
-                isAuthoritativeSystemScan(
-                    hasAudioAccess = permissions.hasAudioAccess,
-                    videoAccess = permissions.videoAccess,
-                    audioScanSucceeded = audio.isSuccess,
-                    videoScanSucceeded = video.isSuccess,
-                )
+            val authoritative = isAuthoritativeSystemAudioScan(permissions.hasAudioAccess, audio.isSuccess)
             when {
                 authoritative -> {
-                    repository.applySuccessfulScan(descriptor, media, emptyList())
-                    if (admitNew) publishNewDiscoveries(descriptor.sourceId, undecidedBefore, media, audioOnly)
+                    repository.applySuccessfulScan(descriptor, audio.getOrDefault(emptyList()), emptyList())
                 }
-                media.isNotEmpty() ->
+                audio.getOrDefault(emptyList()).isNotEmpty() ->
                     repository.applyIncrementalScan(
                         descriptor = descriptor,
-                        media = media,
-                        warning = "系统媒体授权不完整，已保留上次完整索引",
-                    ).also {
-                        if (admitNew) publishNewDiscoveries(descriptor.sourceId, undecidedBefore, media, audioOnly)
-                    }
+                        media = audio.getOrDefault(emptyList()),
+                        warning = "系统音频索引不完整，已保留上次结果",
+                    )
                 else ->
                     repository.recordSourceScanFailure(
                         descriptor = descriptor,
@@ -220,12 +187,9 @@ class LibraryCoordinator(
         }
     }
 
-    private fun startFolderScan(descriptor: SourceScanDescriptor, admitNew: Boolean) {
+    private fun startFolderScan(descriptor: SourceScanDescriptor) {
         val root = descriptor.rootUri?.let(Uri::parse) ?: return
         launchScan(descriptor.sourceId) {
-            val undecidedBefore =
-                if (admitNew) repository.undecidedContentIdsForSource(descriptor.sourceId).toSet()
-                else emptySet()
             val result = runCatchingSuspend {
                 scanner.scanFolder(
                     LibraryFolderRef(
@@ -242,7 +206,6 @@ class LibraryCoordinator(
                         media = batch.media,
                         textCandidates = batch.subtitleSuggestions,
                     )
-                    if (admitNew) publishNewDiscoveries(descriptor.sourceId, undecidedBefore, batch.media, audioOnly = false)
                 },
                 onFailure = { error ->
                     repository.recordSourceScanFailure(
@@ -279,38 +242,16 @@ class LibraryCoordinator(
             }
     }
 
-    private suspend fun publishNewDiscoveries(
-        sourceId: String,
-        undecidedBefore: Set<String>,
-        media: List<MediaSourceRef>,
-        audioOnly: Boolean,
-    ) {
-        val undecidedAfter = repository.undecidedContentIdsForSource(sourceId).toSet()
-        val discovered =
-            media.mapNotNull { item ->
-                repository.contentIdFor(item)?.let { contentId ->
-                    PendingImportItem(
-                        contentId = contentId,
-                        title = item.title?.takeIf(String::isNotBlank) ?: item.displayName,
-                        kind = item.kind,
-                    )
-                }
-            }.distinctBy { it.contentId }
-                .filter { it.contentId in undecidedAfter && it.contentId !in undecidedBefore }
-        if (discovered.isEmpty()) return
-        val previous = state.pendingImport
-        val items = (previous?.items.orEmpty() + discovered).distinctBy { it.contentId }
-        val selected =
-            previous?.defaultSelectedContentIds.orEmpty() +
-                discovered.filter { !audioOnly || it.kind == MediaKind.Audio }.map { it.contentId }
-        state = state.copy(pendingImport = PendingImportBatch(items, selected))
-    }
-
     private fun permissionState(): LibraryCoordinatorState =
         LibraryCoordinatorState(
             hasAudioAccess = appContext.hasAudioLibraryPermission(),
-            videoAccess = appContext.videoLibraryAccess(),
+            hasRequestedAudioAccess = permissionPreferences.getBoolean(AudioPermissionRequestedKey, false),
         )
+
+    private companion object {
+        const val PermissionPreferencesName = "library_permissions"
+        const val AudioPermissionRequestedKey = "audio_permission_requested"
+    }
 
     private suspend fun <T> runCatchingSuspend(block: suspend () -> T): Result<T> =
         try {

@@ -21,6 +21,8 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
         ContentDispositionEntity::class,
         PlaylistEntity::class,
         PlaylistItemEntity::class,
+        ImportSourcePreferenceEntity::class,
+        ImportSourceTargetEntity::class,
         RecentEntryEntity::class,
         CurrentDraftEntity::class,
         CurrentPlaybackSessionEntity::class,
@@ -46,7 +48,7 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
     ],
     // The new content model intentionally allows a destructive upgrade. Original
     // media remains in user storage; only app-owned indexes are rebuilt.
-    version = 9,
+    version = 10,
     autoMigrations = [
         AutoMigration(from = 2, to = 3),
         AutoMigration(from = 4, to = 5),
@@ -72,7 +74,7 @@ abstract class VortexDatabase : RoomDatabase() {
                 VortexDatabase::class.java,
                 DatabaseName,
             ).setDriver(AndroidSQLiteDriver())
-                .addMigrations(MIGRATION_8_9)
+                .addMigrations(MIGRATION_8_9, MIGRATION_9_10)
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
     }

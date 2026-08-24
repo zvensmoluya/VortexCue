@@ -95,6 +95,8 @@ internal fun PlaylistOverview(
     onReorderModeChanged: (Boolean) -> Unit,
     onMovePlaylist: (Int, Int) -> Unit,
 ) {
+    val defaultPlaylist = playlists.firstOrNull { it.isDefaultFavorite }
+    val userPlaylists = playlists.filterNot { it.isDefaultFavorite }
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().statusBarsPadding(),
@@ -159,12 +161,22 @@ internal fun PlaylistOverview(
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
-        itemsIndexed(playlists, key = { _, it -> it.playlistId }) { index, playlist ->
+        defaultPlaylist?.let { playlist ->
+            item(key = playlist.playlistId) {
+                PlaylistCard(
+                    name = playlist.name,
+                    itemCount = playlist.itemCount,
+                    onClick = { if (!reorderMode) onOpenPlaylist(playlist.playlistId) },
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+        }
+        itemsIndexed(userPlaylists, key = { _, it -> it.playlistId }) { index, playlist ->
             if (reorderMode) {
                 ReorderPlaylistCard(
                     playlist = playlist,
                     index = index,
-                    itemCount = playlists.size,
+                    itemCount = userPlaylists.size,
                     onMove = onMovePlaylist,
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
@@ -327,6 +339,7 @@ internal fun PlaylistDetail(
     onLongPress: (ContentSummary) -> Unit,
     onReorderModeChanged: (Boolean) -> Unit,
     onMove: (Int, Int) -> Unit,
+    onAddContent: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().background(AppBackground).statusBarsPadding()) {
         Row(
@@ -367,9 +380,7 @@ internal fun PlaylistDetail(
             }
         }
         if (content.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(if (isAllContent) "还没有内容" else "这个歌单还没有内容", color = AppSecondaryText)
-            }
+            EmptyContent(onAddContent)
         } else {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
                 itemsIndexed(content, key = { _, item -> item.contentId }) { index, item ->
@@ -437,8 +448,23 @@ internal fun PlaylistMembershipSheet(
     onDismiss: () -> Unit,
     onSave: (Set<String>, String?) -> Unit,
 ) {
-    var selectedIds by remember(initialSelection) { mutableStateOf(initialSelection) }
+    val defaultPlaylistId = playlists.firstOrNull { it.isDefaultFavorite }?.playlistId
+    var selectedIds by remember(initialSelection, defaultPlaylistId) {
+        mutableStateOf(initialSelection.ifEmpty { defaultPlaylistId?.let(::setOf).orEmpty() })
+    }
     var newPlaylistName by remember { mutableStateOf("") }
+    fun toggle(playlistId: String, checked: Boolean) {
+        selectedIds =
+            if (checked) {
+                if (playlistId != defaultPlaylistId && selectedIds == setOfNotNull(defaultPlaylistId)) {
+                    setOf(playlistId)
+                } else {
+                    selectedIds + playlistId
+                }
+            } else {
+                (selectedIds - playlistId).ifEmpty { defaultPlaylistId?.let(::setOf).orEmpty() }
+            }
+    }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AppSurfaceRaised) {
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 24.dp)) {
             Text(title, color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -447,13 +473,13 @@ internal fun PlaylistMembershipSheet(
                 items(playlists, key = { it.playlistId }) { playlist ->
                     Row(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable {
-                            selectedIds = if (playlist.playlistId in selectedIds) selectedIds - playlist.playlistId else selectedIds + playlist.playlistId
+                            toggle(playlist.playlistId, playlist.playlistId !in selectedIds)
                         },
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Checkbox(
                             checked = playlist.playlistId in selectedIds,
-                            onCheckedChange = { checked -> selectedIds = if (checked) selectedIds + playlist.playlistId else selectedIds - playlist.playlistId },
+                            onCheckedChange = { checked -> toggle(playlist.playlistId, checked) },
                         )
                         Text(playlist.name, color = AppPrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     }
@@ -467,6 +493,7 @@ internal fun PlaylistMembershipSheet(
                 singleLine = true,
             )
             Button(
+                enabled = selectedIds.isNotEmpty() || newPlaylistName.isNotBlank(),
                 onClick = { onSave(selectedIds, newPlaylistName.trim().takeIf(String::isNotEmpty)) },
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
             ) { Text("保存") }

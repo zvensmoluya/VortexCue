@@ -1,0 +1,693 @@
+package io.github.zvensmoluya.vortexcue.ui.main
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.AudioFile
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import io.github.zvensmoluya.vortexcue.data.ContentRepository
+import io.github.zvensmoluya.vortexcue.data.DiscoveryGroupSummary
+import io.github.zvensmoluya.vortexcue.data.DiscoveryItem
+import io.github.zvensmoluya.vortexcue.data.DiscoveryItemStatus
+import io.github.zvensmoluya.vortexcue.data.PlaylistSummary
+import io.github.zvensmoluya.vortexcue.data.SourceSummary
+import io.github.zvensmoluya.vortexcue.library.LibraryCoordinatorState
+import io.github.zvensmoluya.vortexcue.library.LibrarySourceKind
+import io.github.zvensmoluya.vortexcue.ui.theme.AppAccent
+import io.github.zvensmoluya.vortexcue.ui.theme.AppBackground
+import io.github.zvensmoluya.vortexcue.ui.theme.AppBoneLogo
+import io.github.zvensmoluya.vortexcue.ui.theme.AppError
+import io.github.zvensmoluya.vortexcue.ui.theme.AppHairline
+import io.github.zvensmoluya.vortexcue.ui.theme.AppMutedText
+import io.github.zvensmoluya.vortexcue.ui.theme.AppPrimaryText
+import io.github.zvensmoluya.vortexcue.ui.theme.AppSecondaryText
+import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceRaised
+import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceSelected
+import kotlinx.coroutines.launch
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun ImportHubScreen(
+    repository: ContentRepository,
+    sources: List<SourceSummary>,
+    playlists: List<PlaylistSummary>,
+    coordinator: LibraryCoordinatorState,
+    onDismiss: () -> Unit,
+    onPickMedia: () -> Unit,
+    onAddFolder: () -> Unit,
+    onRequestLibraryAccess: () -> Unit,
+    onRefreshLibrary: () -> Unit,
+    onRefreshSource: (String) -> Unit,
+    onRelinkSource: (String) -> Unit,
+    onCancelScan: () -> Unit,
+    onRemoveSource: (String) -> Unit,
+) {
+    val groups by repository.discoveryGroups.collectAsState(initial = emptyList())
+    val ignored by repository.ignoredContent.collectAsState(initial = emptyList())
+    var selectedSourceKey by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedGroup = groups.firstOrNull { it.sourceKey == selectedSourceKey }
+
+    LaunchedEffect(Unit) {
+        onRefreshLibrary()
+    }
+    LaunchedEffect(selectedSourceKey, selectedGroup) {
+        if (selectedSourceKey != null && selectedGroup == null) selectedSourceKey = null
+    }
+    BackHandler {
+        if (selectedSourceKey != null) selectedSourceKey = null else onDismiss()
+    }
+
+    Surface(modifier = Modifier.fillMaxSize(), color = AppBackground) {
+        if (selectedSourceKey != null && selectedGroup != null) {
+            ImportSourceDetail(
+                group = selectedGroup,
+                repository = repository,
+                playlists = playlists,
+                onBack = { selectedSourceKey = null },
+            )
+        } else {
+            ImportSourceOverview(
+                groups = groups,
+                sources = sources,
+                ignored = ignored,
+                repository = repository,
+                coordinator = coordinator,
+                onDismiss = onDismiss,
+                onOpenSource = { selectedSourceKey = it },
+                onPickMedia = onPickMedia,
+                onAddFolder = onAddFolder,
+                onRequestLibraryAccess = onRequestLibraryAccess,
+                onRefreshLibrary = onRefreshLibrary,
+                onRefreshSource = onRefreshSource,
+                onRelinkSource = onRelinkSource,
+                onCancelScan = onCancelScan,
+                onRemoveSource = onRemoveSource,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ImportSourceOverview(
+    groups: List<DiscoveryGroupSummary>,
+    sources: List<SourceSummary>,
+    ignored: List<io.github.zvensmoluya.vortexcue.data.ContentSummary>,
+    repository: ContentRepository,
+    coordinator: LibraryCoordinatorState,
+    onDismiss: () -> Unit,
+    onOpenSource: (String) -> Unit,
+    onPickMedia: () -> Unit,
+    onAddFolder: () -> Unit,
+    onRequestLibraryAccess: () -> Unit,
+    onRefreshLibrary: () -> Unit,
+    onRefreshSource: (String) -> Unit,
+    onRelinkSource: (String) -> Unit,
+    onCancelScan: () -> Unit,
+    onRemoveSource: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    val recommended = groups.filter(DiscoveryGroupSummary::isRecommended)
+    val visibleGroups = if (showAll || recommended.isEmpty()) groups else recommended
+    val brokenSources = sources.filter { !it.hasAccess || it.lastError != null }
+
+    Scaffold(
+        containerColor = AppBackground,
+        topBar = {
+            TopAppBar(
+                title = { Text("添加内容", color = AppBoneLogo, fontWeight = FontWeight.SemiBold) },
+                actions = {
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.semantics { contentDescription = "关闭添加内容" },
+                    ) { Icon(Icons.Outlined.Close, null, tint = AppPrimaryText) }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = AppBackground),
+            )
+        },
+    ) { insets ->
+        LazyColumn(
+            modifier = Modifier.padding(insets).fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (!coordinator.hasAudioAccess) {
+                item(key = "permission") {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().background(AppSurfaceRaised).padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text("查找设备中的音频", color = AppPrimaryText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (coordinator.hasRequestedAudioAccess) {
+                                "没有音频访问权限。你仍可以选择文件或从其他位置查找音频。"
+                            } else {
+                                "荧荧会把可能的内容整理出来，不会移动或删除原文件。"
+                            },
+                            color = AppSecondaryText,
+                        )
+                        Button(onClick = onRequestLibraryAccess, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                            Text(if (coordinator.hasRequestedAudioAccess) "再次允许" else "开始查找")
+                        }
+                    }
+                }
+            }
+            if (coordinator.hasAudioAccess || groups.isNotEmpty()) {
+                item(key = "discovery-title") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                if (showAll) "全部音频位置" else "发现的音频",
+                                color = AppPrimaryText,
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            if (coordinator.isLoading) Text("正在刷新，已发现的内容仍可浏览", color = AppSecondaryText, fontSize = 12.sp)
+                        }
+                        IconButton(
+                            onClick = onRefreshLibrary,
+                            modifier = Modifier.semantics { contentDescription = "刷新音频来源" },
+                        ) { Icon(Icons.Outlined.Refresh, null, tint = AppSecondaryText) }
+                    }
+                }
+                if (coordinator.isLoading) {
+                    item(key = "loading") {
+                        Column {
+                            LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = AppAccent,
+                                trackColor = AppHairline,
+                            )
+                            TextButton(onClick = onCancelScan, modifier = Modifier.fillMaxWidth()) { Text("取消刷新") }
+                        }
+                    }
+                }
+                coordinator.errorMessage?.let { message ->
+                    item(key = "scan-error") { Text(message, color = AppError, fontSize = 12.sp) }
+                }
+                if (visibleGroups.isEmpty() && !coordinator.isLoading) {
+                    item(key = "empty") {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 28.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text("没有发现音频", color = AppPrimaryText, fontSize = 18.sp)
+                            Text("仍可以主动选择文件或其他位置", color = AppSecondaryText, fontSize = 13.sp)
+                        }
+                    }
+                }
+                items(visibleGroups, key = DiscoveryGroupSummary::sourceKey) { group ->
+                    ImportSourceCard(
+                        group = group,
+                        source = sources.firstOrNull { it.sourceId == group.sourceId },
+                        onOpen = { onOpenSource(group.sourceKey) },
+                        onRefresh = { onRefreshSource(group.sourceId) },
+                        onRelink = { onRelinkSource(group.sourceId) },
+                        onRemove = { onRemoveSource(group.sourceId) },
+                    )
+                }
+                if (recommended.isNotEmpty() && groups.size > recommended.size) {
+                    item(key = "show-all") {
+                        TextButton(onClick = { showAll = !showAll }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                            Text(if (showAll) "只看推荐来源" else "查看全部位置", color = AppAccent)
+                        }
+                    }
+                }
+            }
+
+            if (brokenSources.isNotEmpty()) {
+                item(key = "broken-title") { Text("需要处理的来源", color = AppSecondaryText, fontSize = 12.sp) }
+                items(brokenSources, key = { "broken:${it.sourceId}" }) { source ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(source.displayName, color = AppPrimaryText)
+                            Text(source.lastError ?: "需要重新授权", color = AppError, fontSize = 11.sp)
+                        }
+                        if (source.kind == LibrarySourceKind.Folder) {
+                            TextButton(onClick = { onRelinkSource(source.sourceId) }) { Text("重新授权") }
+                        }
+                    }
+                }
+            }
+
+            item(key = "other-title") {
+                Text("其他方式", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+            }
+            item(key = "file") {
+                ImportActionRow(
+                    label = "选择音频或视频文件",
+                    icon = Icons.Outlined.AudioFile,
+                    onClick = onPickMedia,
+                )
+            }
+            item(key = "folder") {
+                ImportActionRow(
+                    label = "从其他位置查找音频",
+                    icon = Icons.Outlined.FolderOpen,
+                    onClick = onAddFolder,
+                )
+            }
+
+            if (ignored.isNotEmpty()) {
+                item(key = "ignored-title") {
+                    Text("已不再推荐", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                }
+                items(ignored.take(20), key = { "ignored:${it.contentId}" }) { item ->
+                    Row(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(item.media.displayName, color = AppPrimaryText, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        TextButton(onClick = { scope.launch { repository.collect(item.contentId) } }) { Text("恢复") }
+                    }
+                }
+            }
+            item { Spacer(Modifier.height(20.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun ImportSourceCard(
+    group: DiscoveryGroupSummary,
+    source: SourceSummary?,
+    onOpen: () -> Unit,
+    onRefresh: () -> Unit,
+    onRelink: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    var menuVisible by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth().background(AppSurfaceRaised).clickable(onClick = onOpen).padding(start = 16.dp, top = 14.dp, bottom = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(group.displayName, color = AppPrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (group.pendingCount > 0) {
+                    Spacer(Modifier.width(8.dp))
+                    Text("新增 ${group.pendingCount}", color = AppAccent, fontSize = 11.sp)
+                }
+            }
+            Text("${group.totalCount} 个音频", color = AppSecondaryText, fontSize = 12.sp)
+            if (group.sampleTitles.isNotEmpty()) {
+                Text(group.sampleTitles.joinToString("、"), color = AppMutedText, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            group.errorMessage?.let { Text(it, color = AppError, fontSize = 11.sp, maxLines = 1) }
+        }
+        Box {
+            IconButton(
+                onClick = { menuVisible = true },
+                modifier = Modifier.semantics { contentDescription = "${group.displayName} 更多操作" },
+            ) { Icon(Icons.Outlined.MoreVert, null, tint = AppSecondaryText) }
+            DropdownMenu(expanded = menuVisible, onDismissRequest = { menuVisible = false }) {
+                DropdownMenuItem(
+                    text = { Text("刷新") },
+                    onClick = { menuVisible = false; onRefresh() },
+                    leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
+                )
+                if (source?.kind == LibrarySourceKind.Folder) {
+                    if (!source.hasAccess) {
+                        DropdownMenuItem(text = { Text("重新授权") }, onClick = { menuVisible = false; onRelink() })
+                    }
+                    DropdownMenuItem(
+                        text = { Text("移除来源") },
+                        onClick = { menuVisible = false; onRemove() },
+                        leadingIcon = { Icon(Icons.Outlined.DeleteOutline, null) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ImportSourceDetail(
+    group: DiscoveryGroupSummary,
+    repository: ContentRepository,
+    playlists: List<PlaylistSummary>,
+    onBack: () -> Unit,
+) {
+    val items by remember(repository, group.sourceKey) { repository.observeDiscoveryItems(group.sourceKey) }
+        .collectAsState(initial = emptyList())
+    val preferredTargets by remember(repository, group.sourceKey) { repository.observeImportTargets(group.sourceKey) }
+        .collectAsState(initial = emptySet())
+    val scope = rememberCoroutineScope()
+    var range by rememberSaveable(group.sourceKey) { mutableStateOf(ImportRange.New) }
+    var selectedIds by remember(group.sourceKey) { mutableStateOf<Set<String>>(emptySet()) }
+    var selectionInitialized by remember(group.sourceKey) { mutableStateOf(false) }
+    var targetIds by remember(group.sourceKey) { mutableStateOf<Set<String>>(emptySet()) }
+    var targetsInitialized by remember(group.sourceKey) { mutableStateOf(false) }
+    var targetSheetVisible by rememberSaveable(group.sourceKey) { mutableStateOf(false) }
+    var notice by remember(group.sourceKey) { mutableStateOf<String?>(null) }
+    var importing by remember(group.sourceKey) { mutableStateOf(false) }
+
+    LaunchedEffect(items) {
+        if (!selectionInitialized && items.isNotEmpty()) {
+            selectedIds = items.filter { it.status == DiscoveryItemStatus.Pending }.mapTo(linkedSetOf()) { it.contentId }
+            selectionInitialized = true
+            if (selectedIds.isEmpty()) range = ImportRange.All
+        } else if (selectionInitialized) {
+            selectedIds = selectedIds.intersect(items.mapTo(hashSetOf(), DiscoveryItem::contentId))
+        }
+    }
+    LaunchedEffect(preferredTargets) {
+        if (!targetsInitialized && preferredTargets.isNotEmpty()) {
+            targetIds = preferredTargets
+            targetsInitialized = true
+        }
+    }
+
+    val visibleItems = if (range == ImportRange.New) items.filter { it.status == DiscoveryItemStatus.Pending } else items
+    val visibleSelectedCount = visibleItems.count { it.contentId in selectedIds }
+    val orderedSelected = items.filter { it.contentId in selectedIds }.map(DiscoveryItem::contentId)
+    val targetNames = playlists.filter { it.playlistId in targetIds }.map(PlaylistSummary::name)
+
+    Scaffold(
+        containerColor = AppBackground,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(group.displayName, color = AppPrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("${group.totalCount} 个音频", color = AppSecondaryText, fontSize = 11.sp)
+                    }
+                },
+                navigationIcon = {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.semantics { contentDescription = "返回内容来源" },
+                    ) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, tint = AppPrimaryText) }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = AppBackground),
+            )
+        },
+        bottomBar = {
+            Column(
+                modifier = Modifier.fillMaxWidth().background(AppSurfaceRaised).navigationBarsPadding().padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { targetSheetVisible = true },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("加入歌单", color = AppSecondaryText, fontSize = 11.sp)
+                        Text(
+                            targetNames.ifEmpty { listOf("默认收藏") }.joinToString("、"),
+                            color = AppPrimaryText,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text("选择", color = AppAccent)
+                }
+                notice?.let { Text(it, color = AppAccent, fontSize = 12.sp) }
+                Button(
+                    enabled = orderedSelected.isNotEmpty() && targetIds.isNotEmpty() && !importing,
+                    onClick = {
+                        scope.launch {
+                            importing = true
+                            runCatching {
+                                repository.importContent(orderedSelected, targetIds, group.sourceKey)
+                            }.onSuccess {
+                                notice = "已将 ${orderedSelected.size} 项加入 ${targetIds.size} 个歌单"
+                                selectedIds = emptySet()
+                            }.onFailure { notice = it.message ?: "添加失败" }
+                            importing = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) {
+                    Text("将 ${orderedSelected.size} 项加入 ${targetIds.size.coerceAtLeast(1)} 个歌单")
+                }
+            }
+        },
+    ) { insets ->
+        LazyColumn(
+            modifier = Modifier.padding(insets).fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 12.dp),
+        ) {
+            item(key = "controls") {
+                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
+                    Text("选择范围", color = AppSecondaryText, fontSize = 12.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
+                        ImportRangeButton(
+                            label = "新增 ${items.count { it.status == DiscoveryItemStatus.Pending }} 项",
+                            selected = range == ImportRange.New,
+                            onClick = { range = ImportRange.New },
+                        )
+                        ImportRangeButton(
+                            label = "全部 ${items.size} 项",
+                            selected = range == ImportRange.All,
+                            onClick = { range = ImportRange.All },
+                        )
+                    }
+                    Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (visibleSelectedCount == selectedIds.size) {
+                                "已选择 ${selectedIds.size} / ${visibleItems.size}"
+                            } else {
+                                "已选择 ${selectedIds.size} 项 · 当前范围 $visibleSelectedCount / ${visibleItems.size}"
+                            },
+                            color = AppSecondaryText,
+                            fontSize = 12.sp,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { selectedIds = selectedIds + visibleItems.map(DiscoveryItem::contentId) }) { Text("全选") }
+                        TextButton(onClick = { selectedIds = selectedIds - visibleItems.map(DiscoveryItem::contentId).toSet() }) { Text("取消全选") }
+                    }
+                }
+            }
+            items(visibleItems, key = DiscoveryItem::contentId) { item ->
+                ImportItemRow(
+                    item = item,
+                    checked = item.contentId in selectedIds,
+                    onChecked = { checked -> selectedIds = if (checked) selectedIds + item.contentId else selectedIds - item.contentId },
+                    onIgnore =
+                        if (item.status == DiscoveryItemStatus.Pending) {
+                            { scope.launch { repository.ignore(item.contentId) } }
+                        } else {
+                            null
+                        },
+                )
+            }
+        }
+    }
+
+    if (targetSheetVisible) {
+        ImportTargetSheet(
+            playlists = playlists,
+            initialSelection = targetIds,
+            onDismiss = { targetSheetVisible = false },
+            onConfirm = { selected, newName ->
+                scope.launch {
+                    runCatching {
+                        val created = newName?.let { repository.createPlaylist(it) }
+                        val defaultId = playlists.firstOrNull { it.isDefaultFavorite }?.playlistId
+                        val base = if (created != null && selected == setOfNotNull(defaultId)) emptySet() else selected
+                        (base + listOfNotNull(created?.playlistId)).ifEmpty { setOfNotNull(defaultId) }
+                    }.onSuccess {
+                        targetIds = it
+                        targetsInitialized = true
+                        targetSheetVisible = false
+                    }.onFailure { notice = it.message ?: "无法新建歌单" }
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun ImportRangeButton(label: String, selected: Boolean, onClick: () -> Unit) {
+    if (selected) {
+        Button(onClick = onClick, modifier = Modifier.heightIn(min = 48.dp)) { Text(label) }
+    } else {
+        OutlinedButton(onClick = onClick, modifier = Modifier.heightIn(min = 48.dp)) { Text(label) }
+    }
+}
+
+@Composable
+private fun ImportItemRow(
+    item: DiscoveryItem,
+    checked: Boolean,
+    onChecked: (Boolean) -> Unit,
+    onIgnore: (() -> Unit)?,
+) {
+    var menuVisible by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable { onChecked(!checked) }.padding(start = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(
+            checked = checked,
+            onCheckedChange = onChecked,
+            modifier = Modifier.semantics { contentDescription = "选择 ${item.title}" },
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(item.title, color = AppPrimaryText, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(formatDuration(item.durationMs), color = AppSecondaryText, fontSize = 11.sp)
+                if (item.status == DiscoveryItemStatus.Collected) Text("已收录", color = AppAccent, fontSize = 11.sp)
+            }
+        }
+        if (onIgnore != null) {
+            Box {
+                IconButton(
+                    onClick = { menuVisible = true },
+                    modifier = Modifier.semantics { contentDescription = "${item.title} 更多操作" },
+                ) { Icon(Icons.Outlined.MoreVert, null, tint = AppSecondaryText) }
+                DropdownMenu(expanded = menuVisible, onDismissRequest = { menuVisible = false }) {
+                    DropdownMenuItem(
+                        text = { Text("不再推荐") },
+                        onClick = { menuVisible = false; onIgnore() },
+                        leadingIcon = { Icon(Icons.Outlined.Close, null) },
+                    )
+                }
+            }
+        } else {
+            Spacer(Modifier.width(48.dp))
+        }
+    }
+    HorizontalDivider(color = AppHairline)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ImportTargetSheet(
+    playlists: List<PlaylistSummary>,
+    initialSelection: Set<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (Set<String>, String?) -> Unit,
+) {
+    val defaultId = playlists.firstOrNull { it.isDefaultFavorite }?.playlistId
+    var selected by remember(initialSelection, defaultId) {
+        mutableStateOf(initialSelection.ifEmpty { setOfNotNull(defaultId) })
+    }
+    var newName by remember { mutableStateOf("") }
+    fun toggle(id: String, checked: Boolean) {
+        selected =
+            if (checked) {
+                if (id != defaultId && selected == setOfNotNull(defaultId)) setOf(id) else selected + id
+            } else {
+                (selected - id).ifEmpty { setOfNotNull(defaultId) }
+            }
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AppSurfaceRaised) {
+        Column(modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp, vertical = 8.dp)) {
+            Text("加入歌单", color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            Text("至少选择一个落点", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
+            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
+                items(playlists, key = PlaylistSummary::playlistId) { playlist ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { toggle(playlist.playlistId, playlist.playlistId !in selected) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = playlist.playlistId in selected,
+                            onCheckedChange = { toggle(playlist.playlistId, it) },
+                        )
+                        Text(playlist.name, color = AppPrimaryText, modifier = Modifier.weight(1f))
+                        if (playlist.isDefaultFavorite) Icon(Icons.Outlined.Check, contentDescription = "默认落点", tint = AppMutedText, modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+            OutlinedTextField(
+                value = newName,
+                onValueChange = { newName = it },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                label = { Text("或新建歌单") },
+                singleLine = true,
+            )
+            Button(
+                enabled = selected.isNotEmpty() || newName.isNotBlank(),
+                onClick = { onConfirm(selected, newName.trim().takeIf(String::isNotBlank)) },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(top = 12.dp),
+            ) { Text("确定") }
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun ImportActionRow(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = AppSecondaryText)
+        Spacer(Modifier.width(12.dp))
+        Text(label, color = AppPrimaryText, modifier = Modifier.weight(1f))
+    }
+}
+
+private enum class ImportRange { New, All }
+
+private fun formatDuration(durationMs: Long): String {
+    val totalSeconds = (durationMs / 1_000L).coerceAtLeast(0L)
+    val hours = totalSeconds / 3_600L
+    val minutes = totalSeconds % 3_600L / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0) "%d:%02d:%02d".format(hours, minutes, seconds) else "%d:%02d".format(minutes, seconds)
+}

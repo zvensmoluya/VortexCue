@@ -86,23 +86,28 @@ interface ContentDao {
 
     @Query(
         "SELECT p.playlist_id AS playlistId, p.name AS name, COUNT(i.content_id) AS itemCount, " +
-            "p.sort_position AS sortPosition, p.last_played_at_ms AS lastPlayedAtMs " +
+            "p.sort_position AS sortPosition, p.last_played_at_ms AS lastPlayedAtMs, " +
+            "p.system_role AS systemRole " +
             "FROM playlist p LEFT JOIN playlist_item i ON i.playlist_id = p.playlist_id " +
-            "GROUP BY p.playlist_id ORDER BY p.sort_position, p.playlist_id",
+            "GROUP BY p.playlist_id ORDER BY CASE WHEN p.system_role = 'DefaultFavorite' THEN 0 ELSE 1 END, " +
+            "p.sort_position, p.playlist_id",
     )
     fun observePlaylists(): Flow<List<PlaylistSummaryRow>>
 
     @Query(
         "SELECT p.playlist_id AS playlistId, p.name AS name, COUNT(i.content_id) AS itemCount, " +
-            "p.sort_position AS sortPosition, p.last_played_at_ms AS lastPlayedAtMs " +
+            "p.sort_position AS sortPosition, p.last_played_at_ms AS lastPlayedAtMs, " +
+            "p.system_role AS systemRole " +
             "FROM playlist p LEFT JOIN playlist_item i ON i.playlist_id = p.playlist_id " +
-            "GROUP BY p.playlist_id ORDER BY p.sort_position, p.playlist_id",
+            "GROUP BY p.playlist_id ORDER BY CASE WHEN p.system_role = 'DefaultFavorite' THEN 0 ELSE 1 END, " +
+            "p.sort_position, p.playlist_id",
     )
     suspend fun playlists(): List<PlaylistSummaryRow>
 
     @Query(
         "SELECT p.playlist_id AS playlistId, p.name AS name, COUNT(i.content_id) AS itemCount, " +
-            "p.sort_position AS sortPosition, p.last_played_at_ms AS lastPlayedAtMs " +
+            "p.sort_position AS sortPosition, p.last_played_at_ms AS lastPlayedAtMs, " +
+            "p.system_role AS systemRole " +
             "FROM playlist p INNER JOIN playlist_item i ON i.playlist_id = p.playlist_id " +
             "WHERE p.last_played_at_ms IS NOT NULL GROUP BY p.playlist_id " +
             "ORDER BY p.last_played_at_ms DESC, p.playlist_id LIMIT :limit",
@@ -118,6 +123,9 @@ interface ContentDao {
     @Query("SELECT * FROM playlist WHERE name = :name COLLATE NOCASE LIMIT 1")
     suspend fun playlistByName(name: String): PlaylistEntity?
 
+    @Query("SELECT * FROM playlist WHERE system_role = :systemRole LIMIT 1")
+    suspend fun playlistBySystemRole(systemRole: String): PlaylistEntity?
+
     @Query("SELECT * FROM playlist_item WHERE playlist_id = :playlistId ORDER BY sort_position, content_id")
     suspend fun playlistItems(playlistId: String): List<PlaylistItemEntity>
 
@@ -129,7 +137,9 @@ interface ContentDao {
 
     @Query(
         SUMMARY_SELECT +
-            " WHERE d.is_collected = 1 ORDER BY d.decided_at_ms DESC, c.content_id",
+            " WHERE d.is_collected = 1 AND EXISTS " +
+            "(SELECT 1 FROM playlist_item member WHERE member.content_id = c.content_id) " +
+            "ORDER BY d.decided_at_ms DESC, c.content_id",
     )
     fun observeAllContent(): Flow<List<ContentSummaryRow>>
 
@@ -168,7 +178,21 @@ interface ContentDao {
     )
     fun observeSourceSummaries(): Flow<List<SourceSummaryRow>>
 
-    @Query(SUMMARY_SELECT + " WHERE d.is_collected = 1 ORDER BY l.date_added_seconds DESC, c.content_id")
+    @Query(
+        SUMMARY_SELECT +
+            " LEFT JOIN source s ON s.source_id = l.source_id " +
+            "WHERE l.kind = 'Audio' AND l.availability = 'Available' " +
+            "AND (l.source_id IS NULL OR s.removed_at_ms IS NULL) " +
+            "ORDER BY l.date_added_seconds DESC, c.content_id",
+    )
+    fun observeAvailableAudio(): Flow<List<ContentSummaryRow>>
+
+    @Query(
+        SUMMARY_SELECT +
+            " WHERE d.is_collected = 1 AND EXISTS " +
+            "(SELECT 1 FROM playlist_item member WHERE member.content_id = c.content_id) " +
+            "ORDER BY l.date_added_seconds DESC, c.content_id",
+    )
     fun pagedCollected(): PagingSource<Int, ContentSummaryRow>
 
     @Query(SUMMARY_SELECT + " WHERE r.content_id IS NOT NULL ORDER BY r.last_opened_at_ms DESC, c.content_id")
@@ -250,6 +274,24 @@ interface ContentDao {
     @Upsert
     suspend fun upsertPlaylistItem(entity: PlaylistItemEntity)
 
+    @Upsert
+    suspend fun upsertImportSourcePreference(entity: ImportSourcePreferenceEntity)
+
+    @Upsert
+    suspend fun upsertImportSourceTargets(entities: List<ImportSourceTargetEntity>)
+
+    @Query("SELECT * FROM import_source_preference ORDER BY source_key")
+    fun observeImportSourcePreferences(): Flow<List<ImportSourcePreferenceEntity>>
+
+    @Query("SELECT * FROM import_source_target ORDER BY source_key, playlist_id")
+    fun observeImportSourceTargets(): Flow<List<ImportSourceTargetEntity>>
+
+    @Query("SELECT playlist_id FROM import_source_target WHERE source_key = :sourceKey ORDER BY playlist_id")
+    suspend fun importSourceTargets(sourceKey: String): List<String>
+
+    @Query("DELETE FROM import_source_target WHERE source_key = :sourceKey")
+    suspend fun clearImportSourceTargets(sourceKey: String)
+
     @Query("DELETE FROM playlist_item WHERE content_id = :contentId")
     suspend fun clearPlaylistItemsForContent(contentId: String)
 
@@ -262,8 +304,19 @@ interface ContentDao {
     @Query("DELETE FROM playlist WHERE playlist_id = :playlistId")
     suspend fun deletePlaylist(playlistId: String)
 
+    @Query(
+        "SELECT item.content_id FROM playlist_item item " +
+            "WHERE item.playlist_id = :playlistId AND NOT EXISTS " +
+            "(SELECT 1 FROM playlist_item other WHERE other.content_id = item.content_id " +
+            "AND other.playlist_id != :playlistId) ORDER BY item.sort_position, item.content_id",
+    )
+    suspend fun exclusivelyOwnedContentIds(playlistId: String): List<String>
+
     @Query("UPDATE playlist SET name = :name, updated_at_ms = :updatedAtMs WHERE playlist_id = :playlistId")
     suspend fun renamePlaylist(playlistId: String, name: String, updatedAtMs: Long): Int
+
+    @Query("UPDATE playlist SET system_role = :systemRole WHERE playlist_id = :playlistId")
+    suspend fun updatePlaylistSystemRole(playlistId: String, systemRole: String): Int
 
     @Query("UPDATE playlist SET sort_position = :sortPosition, updated_at_ms = :updatedAtMs WHERE playlist_id = :playlistId")
     suspend fun updatePlaylistPosition(playlistId: String, sortPosition: Long, updatedAtMs: Long): Int
@@ -324,6 +377,16 @@ interface ContentDao {
             "WHERE source_id = :sourceId AND seen_generation < :generation",
     )
     suspend fun markOlderSourceLocatorsUnavailable(
+        sourceId: String,
+        generation: Long,
+        updatedAtMs: Long,
+    )
+
+    @Query(
+        "UPDATE media_locator SET availability = 'Unavailable', updated_at_ms = :updatedAtMs " +
+            "WHERE source_id = :sourceId AND kind = 'Audio' AND seen_generation < :generation",
+    )
+    suspend fun markOlderAudioLocatorsUnavailable(
         sourceId: String,
         generation: Long,
         updatedAtMs: Long,

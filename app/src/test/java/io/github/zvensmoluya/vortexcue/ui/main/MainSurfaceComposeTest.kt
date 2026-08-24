@@ -85,23 +85,17 @@ class MainSurfaceComposeTest {
     }
 
     @Test
-    fun emptyContentOffersAllImportEntrypoints() {
+    fun emptyContentOffersOneImportEntrypoint() {
         val calls = mutableListOf<String>()
         compose.setContent {
             VortexCueTheme {
-                EmptyContent(
-                    onPickMedia = { calls += "file" },
-                    onRequestLibraryAccess = { calls += "device" },
-                    onAddFolder = { calls += "folder" },
-                )
+                EmptyContent(onAddContent = { calls += "hub" })
             }
         }
 
-        compose.onNodeWithText("选择文件").performClick()
-        compose.onNodeWithText("从文件夹查找").performClick()
-        compose.onNodeWithText("扫描设备媒体").performClick()
+        compose.onNodeWithText("添加内容").performClick()
 
-        compose.runOnIdle { assertEquals(listOf("file", "folder", "device"), calls) }
+        compose.runOnIdle { assertEquals(listOf("hub"), calls) }
     }
 
     @Test
@@ -184,6 +178,7 @@ class MainSurfaceComposeTest {
                     onLongPress = {},
                     onReorderModeChanged = {},
                     onMove = { _, _ -> },
+                    onAddContent = {},
                 )
             }
         }
@@ -263,32 +258,4 @@ class MainSurfaceComposeTest {
             lastOpenedAtMs = null,
         )
 
-    @Test
-    fun importHubExposesSingleFileImportAction() {
-        var fileRequests = 0
-        compose.setContent {
-            VortexCueTheme {
-                ImportHub(
-                    sources = emptyList(),
-                    playlists = emptyList(),
-                    coordinator = LibraryCoordinatorState(),
-                    ignoredContent = emptyList(),
-                    onRestoreIgnored = {},
-                    onDismiss = {},
-                    onPickMedia = { fileRequests += 1 },
-                    onAddFolder = {},
-                    onScanDevice = {},
-                    onRefreshLibrary = {},
-                    onRefreshSource = {},
-                    onRelinkSource = {},
-                    onCancelScan = {},
-                    onRemoveSource = {},
-                    onImport = { _, _, _, _ -> },
-                )
-            }
-        }
-
-        compose.onNodeWithText("选择文件并播放").performClick()
-        compose.runOnIdle { assertEquals(1, fileRequests) }
-    }
 }

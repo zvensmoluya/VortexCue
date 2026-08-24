@@ -34,29 +34,23 @@ class LibraryScanScopeTest {
     }
 
     @Test
-    fun `only complete successful system coverage can remove unseen cached items`() {
+    fun `successful audio coverage can remove unseen cached audio independently`() {
         assertTrue(
-            isAuthoritativeSystemScan(
+            isAuthoritativeSystemAudioScan(
                 hasAudioAccess = true,
-                videoAccess = VideoLibraryAccess.Full,
                 audioScanSucceeded = true,
-                videoScanSucceeded = true,
             ),
         )
         assertFalse(
-            isAuthoritativeSystemScan(
-                hasAudioAccess = true,
-                videoAccess = VideoLibraryAccess.Partial,
+            isAuthoritativeSystemAudioScan(
+                hasAudioAccess = false,
                 audioScanSucceeded = true,
-                videoScanSucceeded = true,
             ),
         )
         assertFalse(
-            isAuthoritativeSystemScan(
+            isAuthoritativeSystemAudioScan(
                 hasAudioAccess = true,
-                videoAccess = VideoLibraryAccess.Full,
-                audioScanSucceeded = true,
-                videoScanSucceeded = false,
+                audioScanSucceeded = false,
             ),
         )
     }

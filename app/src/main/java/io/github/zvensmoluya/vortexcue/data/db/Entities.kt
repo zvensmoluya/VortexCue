@@ -315,10 +315,13 @@ data class ContentDispositionEntity(
     val decidedAtMs: Long,
 )
 
-/** A user-created playlist. It is independent from filesystem folders and media sources. */
+/** A playlist is independent from filesystem folders and media sources. */
 @Entity(
     tableName = "playlist",
-    indices = [Index(value = ["name"], unique = true)],
+    indices = [
+        Index(value = ["name"], unique = true),
+        Index(value = ["system_role"], unique = true),
+    ],
 )
 data class PlaylistEntity(
     @PrimaryKey
@@ -333,6 +336,8 @@ data class PlaylistEntity(
     val updatedAtMs: Long,
     @ColumnInfo(name = "last_played_at_ms")
     val lastPlayedAtMs: Long? = null,
+    @ColumnInfo(name = "system_role")
+    val systemRole: String? = null,
 )
 
 /** A content can belong to multiple playlists, but only once inside each playlist. */
@@ -366,6 +371,43 @@ data class PlaylistItemEntity(
     val sortPosition: Long,
     @ColumnInfo(name = "added_at_ms")
     val addedAtMs: Long,
+)
+
+@Entity(tableName = "import_source_preference")
+data class ImportSourcePreferenceEntity(
+    @PrimaryKey
+    @ColumnInfo(name = "source_key")
+    val sourceKey: String,
+    @ColumnInfo(name = "last_imported_at_ms")
+    val lastImportedAtMs: Long,
+)
+
+@Entity(
+    tableName = "import_source_target",
+    primaryKeys = ["source_key", "playlist_id"],
+    foreignKeys = [
+        ForeignKey(
+            entity = ImportSourcePreferenceEntity::class,
+            parentColumns = ["source_key"],
+            childColumns = ["source_key"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = PlaylistEntity::class,
+            parentColumns = ["playlist_id"],
+            childColumns = ["playlist_id"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("playlist_id")],
+)
+data class ImportSourceTargetEntity(
+    @ColumnInfo(name = "source_key")
+    val sourceKey: String,
+    @ColumnInfo(name = "playlist_id")
+    val playlistId: String,
 )
 
 @Entity(

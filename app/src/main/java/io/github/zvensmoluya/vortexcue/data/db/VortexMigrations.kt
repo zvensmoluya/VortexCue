@@ -78,3 +78,100 @@ internal val MIGRATION_8_9 =
             connection.execSQL("DROP TABLE `content_folder`")
         }
     }
+
+internal val MIGRATION_9_10 =
+    object : Migration(9, 10) {
+        override suspend fun migrate(connection: SQLiteConnection) {
+            connection.execSQL("ALTER TABLE `playlist` ADD COLUMN `system_role` TEXT")
+            connection.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_playlist_system_role` ON `playlist` (`system_role`)",
+            )
+            connection.execSQL(
+                "UPDATE `playlist` SET `system_role` = 'DefaultFavorite' " +
+                    "WHERE `playlist_id` = (SELECT `playlist_id` FROM `playlist` " +
+                    "WHERE `name` = '默认收藏' COLLATE NOCASE LIMIT 1)",
+            )
+            connection.execSQL(
+                """
+                INSERT INTO `playlist` (
+                    `playlist_id`, `name`, `sort_position`, `created_at_ms`, `updated_at_ms`,
+                    `last_played_at_ms`, `system_role`
+                )
+                SELECT 'playlist:default-favorite', '默认收藏', -1, 0, 0, NULL, 'DefaultFavorite'
+                WHERE NOT EXISTS (SELECT 1 FROM `playlist` WHERE `system_role` = 'DefaultFavorite')
+                """.trimIndent(),
+            )
+            connection.execSQL(
+                """
+                INSERT OR IGNORE INTO `playlist_item` (`playlist_id`, `content_id`, `sort_position`, `added_at_ms`)
+                SELECT p.`playlist_id`, d.`content_id`,
+                    (
+                        SELECT COUNT(*) FROM `content_disposition` before_d
+                        WHERE before_d.`is_collected` = 1
+                          AND NOT EXISTS (
+                              SELECT 1 FROM `playlist_item` before_i
+                              WHERE before_i.`content_id` = before_d.`content_id`
+                          )
+                          AND (
+                              before_d.`decided_at_ms` > d.`decided_at_ms`
+                              OR (before_d.`decided_at_ms` = d.`decided_at_ms`
+                                  AND before_d.`content_id` < d.`content_id`)
+                          )
+                    ),
+                    d.`decided_at_ms`
+                FROM `content_disposition` d
+                CROSS JOIN `playlist` p
+                WHERE p.`system_role` = 'DefaultFavorite'
+                  AND d.`is_collected` = 1
+                  AND NOT EXISTS (
+                      SELECT 1 FROM `playlist_item` i WHERE i.`content_id` = d.`content_id`
+                  )
+                """.trimIndent(),
+            )
+            connection.execSQL(
+                """
+                DELETE FROM `content`
+                WHERE `content_id` IN (
+                    SELECT c.`content_id`
+                    FROM `content` c
+                    JOIN `active_media_locator` a ON a.`content_id` = c.`content_id`
+                    JOIN `media_locator` l ON l.`locator_id` = a.`locator_id`
+                    LEFT JOIN `content_disposition` d ON d.`content_id` = c.`content_id`
+                    WHERE d.`content_id` IS NULL
+                      AND l.`kind` = 'Video'
+                      AND l.`origin` IN ('MediaStore', 'DocumentTree')
+                      AND NOT EXISTS (SELECT 1 FROM `playlist_item` i WHERE i.`content_id` = c.`content_id`)
+                      AND NOT EXISTS (SELECT 1 FROM `current_queue_entry` q WHERE q.`content_id` = c.`content_id`)
+                      AND NOT EXISTS (SELECT 1 FROM `recent_entry` r WHERE r.`content_id` = c.`content_id`)
+                      AND NOT EXISTS (SELECT 1 FROM `current_draft` x WHERE x.`content_id` = c.`content_id`)
+                )
+                """.trimIndent(),
+            )
+            connection.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `import_source_preference` (
+                    `source_key` TEXT NOT NULL,
+                    `last_imported_at_ms` INTEGER NOT NULL,
+                    PRIMARY KEY(`source_key`)
+                )
+                """.trimIndent(),
+            )
+            connection.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `import_source_target` (
+                    `source_key` TEXT NOT NULL,
+                    `playlist_id` TEXT NOT NULL,
+                    PRIMARY KEY(`source_key`, `playlist_id`),
+                    FOREIGN KEY(`source_key`) REFERENCES `import_source_preference`(`source_key`)
+                        ON UPDATE CASCADE ON DELETE CASCADE,
+                    FOREIGN KEY(`playlist_id`) REFERENCES `playlist`(`playlist_id`)
+                        ON UPDATE CASCADE ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            connection.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_import_source_target_playlist_id` " +
+                    "ON `import_source_target` (`playlist_id`)",
+            )
+        }
+    }

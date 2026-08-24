@@ -8,6 +8,7 @@ import androidx.paging.map
 import androidx.room3.withWriteTransaction
 import io.github.zvensmoluya.vortexcue.core.model.ActiveTextSelection
 import io.github.zvensmoluya.vortexcue.core.model.ContentAvailability
+import io.github.zvensmoluya.vortexcue.core.model.MediaKind
 import io.github.zvensmoluya.vortexcue.core.model.MediaOrigin
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
 import io.github.zvensmoluya.vortexcue.core.model.TextSelectionMode
@@ -17,6 +18,7 @@ import io.github.zvensmoluya.vortexcue.core.model.TimedTextMatchBasis
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextOrigin
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextRole
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextTrack
+import io.github.zvensmoluya.vortexcue.core.model.displayTitle
 import io.github.zvensmoluya.vortexcue.core.model.mediaIdentityKey
 import io.github.zvensmoluya.vortexcue.core.model.stableContentId
 import io.github.zvensmoluya.vortexcue.core.model.stableTimedTextTrackId
@@ -26,10 +28,13 @@ import io.github.zvensmoluya.vortexcue.data.db.ContentDispositionEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentIdentityEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentRedirectEntity
+import io.github.zvensmoluya.vortexcue.data.db.ContentSummaryRow
 import io.github.zvensmoluya.vortexcue.data.db.CurrentPlaybackSessionEntity
 import io.github.zvensmoluya.vortexcue.data.db.CurrentQueueEntryEntity
 import io.github.zvensmoluya.vortexcue.data.db.CurrentDraftEntity
 import io.github.zvensmoluya.vortexcue.data.db.DiscoveredTextCandidateEntity
+import io.github.zvensmoluya.vortexcue.data.db.ImportSourcePreferenceEntity
+import io.github.zvensmoluya.vortexcue.data.db.ImportSourceTargetEntity
 import io.github.zvensmoluya.vortexcue.data.db.RecentEntryEntity
 import io.github.zvensmoluya.vortexcue.data.db.PlaylistEntity
 import io.github.zvensmoluya.vortexcue.data.db.PlaylistItemEntity
@@ -45,6 +50,7 @@ import io.github.zvensmoluya.vortexcue.library.restoreAutomaticTrack
 import io.github.zvensmoluya.vortexcue.library.selectManualTrack
 import io.github.zvensmoluya.vortexcue.library.withTrackReadiness
 import java.util.UUID
+import java.util.Locale
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -72,11 +78,85 @@ class ContentRepository(
     val sources: Flow<List<SourceSummary>> =
         dao.observeSourceSummaries().map { rows -> rows.map { it.toDomain() } }
 
+    val discoveryGroups: Flow<List<DiscoveryGroupSummary>> =
+        combine(
+            dao.observeAvailableAudio(),
+            dao.observeSources(),
+            dao.observeImportSourcePreferences(),
+        ) { rows, sourceRows, preferences ->
+            val sourceMap = sourceRows.associateBy { it.sourceId }
+            val preferenceMap = preferences.associateBy { it.sourceKey }
+            val located = rows.mapNotNull { row -> row.toLocatedAudio(sourceMap) }
+            val names = located.groupBy { it.baseDisplayName.lowercase(Locale.ROOT) }
+            located.groupBy { it.sourceKey }.mapNotNull { (sourceKey, groupRows) ->
+                val visible = groupRows.filter { it.summary.disposition != ContentDisposition.Ignored }
+                if (visible.isEmpty()) return@mapNotNull null
+                val first = groupRows.first()
+                val pending = visible.filter { it.summary.disposition == null }
+                val lowSignalFolder = first.locationLeaf.lowercase(Locale.ROOT) in LowSignalAudioFolders
+                val allShort = visible.all { it.summary.media.durationMs < ShortAudioThresholdMs }
+                val displayName =
+                    if (names[first.baseDisplayName.lowercase(Locale.ROOT)].orEmpty().map { it.sourceKey }.distinct().size > 1) {
+                        first.disambiguatedDisplayName
+                    } else {
+                        first.baseDisplayName
+                    }
+                DiscoveryGroupSummary(
+                    sourceKey = sourceKey,
+                    sourceId = first.sourceId,
+                    displayName = displayName,
+                    totalCount = visible.size,
+                    pendingCount = pending.size,
+                    sampleTitles = visible.sortedWith(locatedAudioComparator).take(3).map { it.summary.media.displayTitle },
+                    newestAddedSeconds = pending.maxOfOrNull { it.summary.media.dateAddedSeconds }
+                        ?: visible.maxOfOrNull { it.summary.media.dateAddedSeconds } ?: 0L,
+                    totalDurationMs = visible.sumOf { it.summary.media.durationMs },
+                    isRecommended = pending.isNotEmpty() && !lowSignalFolder && !allShort,
+                    hasAccess = first.hasAccess,
+                    errorMessage = first.errorMessage,
+                    lastImportedAtMs = preferenceMap[sourceKey]?.lastImportedAtMs,
+                )
+            }.sortedWith(
+                compareByDescending<DiscoveryGroupSummary> { it.isRecommended }
+                    .thenByDescending { it.pendingCount > 0 }
+                    .thenByDescending { it.newestAddedSeconds }
+                    .thenByDescending { it.totalDurationMs }
+                    .thenComparator { left, right -> naturalCompare(left.displayName, right.displayName) },
+            )
+        }
+
     fun observePlaylistContent(playlistId: String): Flow<List<ContentSummary>> =
         dao.observePlaylistContent(playlistId).map { rows -> rows.map { it.toDomain() } }
 
     fun observePlaylistIdsForContent(contentId: String): Flow<List<String>> =
         dao.observePlaylistIdsForContent(contentId)
+
+    fun observeDiscoveryItems(sourceKey: String): Flow<List<DiscoveryItem>> =
+        combine(dao.observeAvailableAudio(), dao.observeSources()) { rows, sourceRows ->
+            val sourceMap = sourceRows.associateBy { it.sourceId }
+            rows.mapNotNull { it.toLocatedAudio(sourceMap) }
+                .filter { it.sourceKey == sourceKey && it.summary.disposition != ContentDisposition.Ignored }
+                .sortedWith(locatedAudioComparator)
+                .map {
+                    DiscoveryItem(
+                        contentId = it.summary.contentId,
+                        title = it.summary.media.displayTitle,
+                        displayName = it.summary.media.displayName,
+                        durationMs = it.summary.media.durationMs,
+                        status = if (it.summary.disposition == null) DiscoveryItemStatus.Pending else DiscoveryItemStatus.Collected,
+                        availability = it.summary.availability,
+                    )
+                }
+        }
+
+    fun observeImportTargets(sourceKey: String): Flow<Set<String>> =
+        combine(dao.observeImportSourceTargets(), dao.observePlaylists()) { targets, rows ->
+            val validIds = rows.mapTo(linkedSetOf()) { it.playlistId }
+            val saved = targets.filter { it.sourceKey == sourceKey && it.playlistId in validIds }
+                .mapTo(linkedSetOf()) { it.playlistId }
+            if (saved.isNotEmpty()) saved else rows.firstOrNull { it.systemRole == PlaylistSystemRole.DefaultFavorite.name }
+                ?.let { linkedSetOf(it.playlistId) }.orEmpty()
+        }
 
     fun pagedCollected(): Flow<PagingData<ContentSummary>> =
         pager(dao::pagedCollected)
@@ -97,13 +177,15 @@ class ContentRepository(
         pager { dao.pagedSearch(query.trim()) }
 
     suspend fun createPlaylist(name: String): PlaylistSummary {
+        ensureDefaultPlaylist()
         val normalized = name.trim().replace(Regex("\\s+"), " ")
         require(normalized.isNotBlank()) { "歌单名称不能为空" }
         require(normalized.length <= 80) { "歌单名称过长" }
         database.withWriteTransaction {
             require(dao.playlistByName(normalized) == null) { "歌单已存在" }
             val timestamp = nowMs()
-            val nextPosition = (dao.playlists().maxOfOrNull { it.sortPosition } ?: -1L) + 1L
+            val nextPosition =
+                (dao.playlists().filter { it.systemRole == null }.maxOfOrNull { it.sortPosition } ?: -1L) + 1L
             dao.upsertPlaylist(
                 PlaylistEntity(
                     playlistId = "playlist:${idFactory()}",
@@ -122,7 +204,8 @@ class ContentRepository(
         require(normalized.isNotBlank()) { "歌单名称不能为空" }
         require(normalized.length <= 80) { "歌单名称过长" }
         database.withWriteTransaction {
-            requireNotNull(dao.playlist(playlistId)) { "歌单不存在" }
+            val playlist = requireNotNull(dao.playlist(playlistId)) { "歌单不存在" }
+            require(playlist.systemRole == null) { "默认收藏不能改名" }
             val duplicate = dao.playlistByName(normalized)
             require(duplicate == null || duplicate.playlistId == playlistId) { "歌单已存在" }
             dao.renamePlaylist(playlistId, normalized, nowMs())
@@ -131,14 +214,21 @@ class ContentRepository(
 
     suspend fun deletePlaylist(playlistId: String) {
         database.withWriteTransaction {
-            requireNotNull(dao.playlist(playlistId)) { "歌单不存在" }
+            val fallback = ensureDefaultPlaylistInside()
+            val playlist = requireNotNull(dao.playlist(playlistId)) { "歌单不存在" }
+            require(playlist.systemRole == null) { "默认收藏不能删除" }
+            var nextPosition = (dao.playlistItems(fallback.playlistId).maxOfOrNull { it.sortPosition } ?: -1L) + 1L
+            val timestamp = nowMs()
+            dao.exclusivelyOwnedContentIds(playlistId).forEach { contentId ->
+                dao.upsertPlaylistItem(PlaylistItemEntity(fallback.playlistId, contentId, nextPosition++, timestamp))
+            }
             dao.deletePlaylist(playlistId)
         }
     }
 
     suspend fun reorderPlaylists(playlistIds: List<String>) {
         database.withWriteTransaction {
-            val existing = dao.playlists().map { it.playlistId }
+            val existing = dao.playlists().filter { it.systemRole == null }.map { it.playlistId }
             require(playlistIds.distinct().size == playlistIds.size && playlistIds.toSet() == existing.toSet()) {
                 "歌单顺序与当前歌单不一致"
             }
@@ -154,7 +244,7 @@ class ContentRepository(
         database.withWriteTransaction {
             val canonical = resolveRedirect(contentId)
             requireContent(canonical)
-            val normalized = playlistIds.toSet()
+            val normalized = playlistIds.ifEmpty { setOf(ensureDefaultPlaylistInside().playlistId) }
             normalized.forEach { requireNotNull(dao.playlist(it)) { "歌单不存在" } }
             val existing = dao.playlistItemsForContent(canonical).associateBy { it.playlistId }
             existing.keys.filterNot(normalized::contains).forEach { dao.deletePlaylistItem(it, canonical) }
@@ -169,8 +259,21 @@ class ContentRepository(
     suspend fun removeContentFromPlaylist(contentId: String, playlistId: String) {
         database.withWriteTransaction {
             val canonical = resolveRedirect(contentId)
+            val memberships = dao.playlistItemsForContent(canonical)
+            if (
+                memberships.size == 1 &&
+                memberships.single().playlistId == playlistId &&
+                dao.playlist(playlistId)?.systemRole == PlaylistSystemRole.DefaultFavorite.name
+            ) {
+                return@withWriteTransaction
+            }
             dao.deletePlaylistItem(playlistId, canonical)
             normalizePlaylistItemsInside(playlistId)
+            if (dao.playlistItemsForContent(canonical).isEmpty()) {
+                val fallback = ensureDefaultPlaylistInside()
+                val nextPosition = (dao.playlistItems(fallback.playlistId).maxOfOrNull { it.sortPosition } ?: -1L) + 1L
+                dao.upsertPlaylistItem(PlaylistItemEntity(fallback.playlistId, canonical, nextPosition, nowMs()))
+            }
         }
     }
 
@@ -299,7 +402,13 @@ class ContentRepository(
         database.withWriteTransaction {
             val canonical = resolveRedirect(contentId)
             requireContent(canonical)
-            dao.upsertDisposition(ContentDispositionEntity(canonical, true, nowMs()))
+            val timestamp = nowMs()
+            dao.upsertDisposition(ContentDispositionEntity(canonical, true, timestamp))
+            if (dao.playlistItemsForContent(canonical).isEmpty()) {
+                val fallback = ensureDefaultPlaylistInside()
+                val nextPosition = (dao.playlistItems(fallback.playlistId).maxOfOrNull { it.sortPosition } ?: -1L) + 1L
+                dao.upsertPlaylistItem(PlaylistItemEntity(fallback.playlistId, canonical, nextPosition, timestamp))
+            }
         }
     }
 
@@ -316,31 +425,40 @@ class ContentRepository(
         dao.undecidedContentIdsForSource(sourceId)
 
     suspend fun importContent(
-        contentIds: Collection<String>,
-        playlistId: String?,
-        ignoredContentIds: Collection<String> = emptyList(),
+        contentIds: List<String>,
+        playlistIds: Set<String>,
+        sourceKey: String? = null,
     ) {
+        require(playlistIds.isNotEmpty()) { "至少选择一个歌单" }
         database.withWriteTransaction {
-            if (playlistId != null) requireNotNull(dao.playlist(playlistId)) { "歌单不存在" }
-            var nextPosition =
-                playlistId?.let { id -> (dao.playlistItems(id).maxOfOrNull { it.sortPosition } ?: -1L) + 1L }
+            val targets = playlistIds
+            targets.forEach { requireNotNull(dao.playlist(it)) { "歌单不存在" } }
+            val nextPositions = targets.associateWith { id ->
+                (dao.playlistItems(id).maxOfOrNull { it.sortPosition } ?: -1L) + 1L
+            }.toMutableMap()
             contentIds.distinct().forEach { contentId ->
                 val canonical = resolveRedirect(contentId)
                 requireContent(canonical)
-                dao.upsertDisposition(ContentDispositionEntity(canonical, true, nowMs()))
-                if (playlistId != null && dao.playlistItemsForContent(canonical).none { it.playlistId == playlistId }) {
-                    val position = requireNotNull(nextPosition)
-                    dao.upsertPlaylistItem(PlaylistItemEntity(playlistId, canonical, position, nowMs()))
-                    nextPosition = position + 1L
+                val timestamp = nowMs()
+                dao.upsertDisposition(ContentDispositionEntity(canonical, true, timestamp))
+                val existing = dao.playlistItemsForContent(canonical).mapTo(hashSetOf()) { it.playlistId }
+                targets.filterNot(existing::contains).forEach { playlistId ->
+                    val position = requireNotNull(nextPositions[playlistId])
+                    dao.upsertPlaylistItem(PlaylistItemEntity(playlistId, canonical, position, timestamp))
+                    nextPositions[playlistId] = position + 1L
                 }
             }
-            (ignoredContentIds - contentIds.toSet()).distinct().forEach { contentId ->
-                val canonical = resolveRedirect(contentId)
-                requireContent(canonical)
-                dao.upsertDisposition(ContentDispositionEntity(canonical, false, nowMs()))
-                dao.clearPlaylistItemsForContent(canonical)
+            sourceKey?.let { key ->
+                dao.upsertImportSourcePreference(ImportSourcePreferenceEntity(key, nowMs()))
+                dao.clearImportSourceTargets(key)
+                dao.upsertImportSourceTargets(targets.map { ImportSourceTargetEntity(key, it) })
             }
         }
+    }
+
+    suspend fun ensureDefaultPlaylist(): PlaylistSummary {
+        val entity = database.withWriteTransaction { ensureDefaultPlaylistInside() }
+        return requireNotNull(dao.playlists().firstOrNull { it.playlistId == entity.playlistId }).toDomain()
     }
 
     suspend fun clearDisposition(contentId: String) {
@@ -417,7 +535,10 @@ class ContentRepository(
                 ),
             )
             val contentByUri = mutableMapOf<String, String>()
-            media.distinctBy { it.uri.toString() }.forEach { item ->
+            media.asSequence()
+                .filter { it.kind == MediaKind.Audio }
+                .distinctBy { it.uri.toString() }
+                .forEach { item ->
                 val normalized = item.copy(sourceId = descriptor.sourceId)
                 contentByUri[item.uri.toString()] =
                     upsertMediaInside(
@@ -459,7 +580,10 @@ class ContentRepository(
                 ),
             )
             val contentByUri = mutableMapOf<String, String>()
-            media.distinctBy { it.uri.toString() }.forEach { item ->
+            media.asSequence()
+                .filter { it.kind == MediaKind.Audio }
+                .distinctBy { it.uri.toString() }
+                .forEach { item ->
                 val normalized = if (item.sourceId == descriptor.sourceId) item else item.copy(sourceId = descriptor.sourceId)
                 contentByUri[item.uri.toString()] =
                     upsertMediaInside(
@@ -474,7 +598,7 @@ class ContentRepository(
                 persistDiscoveredCandidatesInside(descriptor.sourceId, generation, contentId, candidates)
             }
             textStorageDao.deleteOlderCandidates(descriptor.sourceId, generation)
-            dao.markOlderSourceLocatorsUnavailable(descriptor.sourceId, generation, timestamp)
+            dao.markOlderAudioLocatorsUnavailable(descriptor.sourceId, generation, timestamp)
             for (contentId in dao.contentIdsForSource(descriptor.sourceId)) {
                 selectAvailableLocatorInside(contentId)
             }
@@ -904,6 +1028,23 @@ class ContentRepository(
         }
     }
 
+    private suspend fun ensureDefaultPlaylistInside(): PlaylistEntity {
+        dao.playlistBySystemRole(PlaylistSystemRole.DefaultFavorite.name)?.let { return it }
+        val timestamp = nowMs()
+        dao.playlistByName(DefaultFavoriteName)?.let { existing ->
+            dao.updatePlaylistSystemRole(existing.playlistId, PlaylistSystemRole.DefaultFavorite.name)
+            return existing.copy(systemRole = PlaylistSystemRole.DefaultFavorite.name)
+        }
+        return PlaylistEntity(
+            playlistId = DefaultFavoritePlaylistId,
+            name = DefaultFavoriteName,
+            sortPosition = -1L,
+            createdAtMs = timestamp,
+            updatedAtMs = timestamp,
+            systemRole = PlaylistSystemRole.DefaultFavorite.name,
+        ).also { dao.upsertPlaylist(it) }
+    }
+
     private suspend fun requireContent(contentId: String): ContentEntity =
         requireNotNull(dao.content(contentId)) { "Unknown contentId: $contentId" }
 
@@ -926,6 +1067,10 @@ class ContentRepository(
         const val RecentLimit = 50
         const val RecentPlaylistLimit = 6
         const val IgnoredPreviewLimit = 100
+        const val DefaultFavoritePlaylistId = "playlist:default-favorite"
+        const val DefaultFavoriteName = "默认收藏"
+        const val ShortAudioThresholdMs = 60_000L
+        val LowSignalAudioFolders = setOf("alarms", "notifications", "ringtones")
     }
 }
 
@@ -968,3 +1113,79 @@ private fun TextTrackCatalogState.selectedTrack(slot: TextTrackSlot): TimedTextT
         }
     return tracks.firstOrNull { it.stableId == trackId }
 }
+
+private data class LocatedAudio(
+    val summary: ContentSummary,
+    val sourceKey: String,
+    val sourceId: String,
+    val baseDisplayName: String,
+    val disambiguatedDisplayName: String,
+    val locationLeaf: String,
+    val hasAccess: Boolean,
+    val errorMessage: String?,
+)
+
+private fun ContentSummaryRow.toLocatedAudio(
+    sources: Map<String, SourceEntity>,
+): LocatedAudio? {
+    val id = sourceId ?: return null
+    val source = sources[id] ?: return null
+    val kind = source.kind.enumValueOr(LibrarySourceKind.LooseFiles)
+    if (kind == LibrarySourceKind.LooseFiles || this.kind != MediaKind.Audio.name) return null
+    val normalizedFolder = folder?.replace('\\', '/')?.trim('/')?.takeIf(String::isNotBlank)
+    val pathParts = normalizedFolder?.split('/')?.filter(String::isNotBlank).orEmpty()
+    val leaf = pathParts.lastOrNull() ?: "其他音频"
+    val parentLeaf = pathParts.takeLast(2).joinToString(" / ").ifBlank { leaf }
+    val groupKey =
+        when (kind) {
+            LibrarySourceKind.SystemLibrary -> "system:$id:${normalizedFolder?.lowercase(Locale.ROOT) ?: "_other"}"
+            LibrarySourceKind.Folder -> "folder:$id"
+            LibrarySourceKind.LooseFiles -> return null
+        }
+    val baseName = if (kind == LibrarySourceKind.Folder) source.displayName else leaf
+    val disambiguatedName = if (kind == LibrarySourceKind.Folder) source.displayName else parentLeaf
+    return LocatedAudio(
+        summary = toDomain(),
+        sourceKey = groupKey,
+        sourceId = id,
+        baseDisplayName = baseName,
+        disambiguatedDisplayName = disambiguatedName,
+        locationLeaf = leaf,
+        hasAccess = source.hasAccess,
+        errorMessage = source.lastError,
+    )
+}
+
+private val locatedAudioComparator =
+    Comparator<LocatedAudio> { left, right ->
+        val title = naturalCompare(left.summary.media.displayTitle, right.summary.media.displayTitle)
+        if (title != 0) title else left.summary.contentId.compareTo(right.summary.contentId)
+    }
+
+internal fun naturalCompare(left: String, right: String): Int {
+    val leftTokens = NaturalToken.findAll(left).map { it.value }.toList()
+    val rightTokens = NaturalToken.findAll(right).map { it.value }.toList()
+    for (index in 0 until minOf(leftTokens.size, rightTokens.size)) {
+        val leftToken = leftTokens[index]
+        val rightToken = rightTokens[index]
+        val bothNumeric = leftToken.firstOrNull()?.isDigit() == true && rightToken.firstOrNull()?.isDigit() == true
+        val comparison =
+            if (bothNumeric) {
+                val normalizedLeft = leftToken.trimStart('0').ifEmpty { "0" }
+                val normalizedRight = rightToken.trimStart('0').ifEmpty { "0" }
+                normalizedLeft.length.compareTo(normalizedRight.length)
+                    .takeIf { it != 0 }
+                    ?: normalizedLeft.compareTo(normalizedRight)
+                        .takeIf { it != 0 }
+                    ?: leftToken.length.compareTo(rightToken.length)
+            } else {
+                leftToken.compareTo(rightToken, ignoreCase = true)
+            }
+        if (comparison != 0) return comparison
+    }
+    return leftTokens.size.compareTo(rightTokens.size)
+        .takeIf { it != 0 }
+        ?: left.compareTo(right, ignoreCase = true)
+}
+
+private val NaturalToken = Regex("\\d+|\\D+")

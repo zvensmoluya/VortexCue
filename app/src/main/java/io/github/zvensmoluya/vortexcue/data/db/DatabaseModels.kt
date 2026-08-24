@@ -41,6 +41,7 @@ data class PlaylistSummaryRow(
     val itemCount: Int,
     val sortPosition: Long,
     val lastPlayedAtMs: Long?,
+    val systemRole: String?,
 )
 
 data class QueueItemRow(

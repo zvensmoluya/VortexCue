@@ -152,10 +152,12 @@ class VortexDatabaseTest {
 
     @Test
     fun pagingReadsActiveLocatorMetadataWithoutContentCopy() = runBlocking {
+        contentDao.upsertPlaylist(PlaylistEntity("library", "Library", 0L, 1L, 1L))
         repeat(55) { index ->
             val id = "content-$index"
             insertContent(id, "content://media/$index", dateAdded = index.toLong())
             contentDao.upsertDisposition(ContentDispositionEntity(id, true, index.toLong()))
+            contentDao.upsertPlaylistItem(PlaylistItemEntity("library", id, index.toLong(), index.toLong()))
         }
 
         val result =
@@ -395,6 +397,122 @@ class VortexDatabaseTest {
             }
             connection.prepare("SELECT content_id FROM content WHERE content_id = 'preserved-content'").use { statement ->
                 assertTrue(statement.step())
+            }
+        }
+    }
+
+    @Test
+    fun versionNineMigrationCreatesDefaultMembershipAndPreservesDurableData() = runBlocking {
+        val helper =
+            MigrationTestHelper(
+                databasePath = temporaryFolder.root.resolve("migration-v9-v10.db").toPath(),
+                schemaDirectoryPath = File("schemas").toPath(),
+                driver = BundledSQLiteDriver(),
+                databaseClass = VortexDatabase::class,
+                databaseFactory = { VortexDatabase_Impl() },
+                autoMigrationSpecs = emptyList(),
+            )
+        helper.createDatabase(9).use { connection ->
+            connection.prepare(
+                "INSERT INTO playlist (playlist_id, name, sort_position, created_at_ms, updated_at_ms, last_played_at_ms) " +
+                    "VALUES ('existing-default', '默认收藏', 0, 1, 1, NULL), " +
+                    "('alpha', 'Alpha', 1, 2, 2, 99), ('beta', 'Beta', 2, 3, 3, NULL)",
+            ).use { it.step() }
+            val media =
+                listOf(
+                    Triple("orphan-audio", "Audio", true),
+                    Triple("shared-audio", "Audio", true),
+                    Triple("orphan-audio-older", "Audio", true),
+                    Triple("ignored-video", "Video", false),
+                    Triple("undecided-video", "Video", null),
+                    Triple("collected-video", "Video", true),
+                )
+            media.forEachIndexed { index, (contentId, kind, disposition) ->
+                connection.prepare(
+                    "INSERT INTO content (content_id, created_at_ms, subtitle_offset_ms) " +
+                        "VALUES ('$contentId', ${index + 10}, 0)",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO content_identity (identity_key, content_id) " +
+                        "VALUES ('identity-$contentId', '$contentId')",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO media_locator (locator_id, content_id, identity_key, source_id, uri_value, " +
+                        "display_name, mime_type, title, artist, album, duration_ms, folder, date_added_seconds, " +
+                        "origin, kind, size_bytes, video_width, video_height, availability, seen_generation, updated_at_ms) " +
+                        "VALUES ('locator-$contentId', '$contentId', 'identity-$contentId', NULL, " +
+                        "'content://media/$contentId', '$contentId', NULL, '$contentId', NULL, NULL, 1000, " +
+                        "'Music', ${index + 10}, 'MediaStore', '$kind', 10, 0, 0, 'Available', 1, 10)",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO active_media_locator (content_id, locator_id) " +
+                        "VALUES ('$contentId', 'locator-$contentId')",
+                ).use { it.step() }
+                disposition?.let { collected ->
+                    connection.prepare(
+                        "INSERT INTO content_disposition (content_id, is_collected, decided_at_ms) " +
+                            "VALUES ('$contentId', ${if (collected) 1 else 0}, ${100 - index})",
+                    ).use { it.step() }
+                }
+            }
+            connection.prepare(
+                "INSERT INTO playlist_item (playlist_id, content_id, sort_position, added_at_ms) VALUES " +
+                    "('alpha', 'shared-audio', 0, 20), ('beta', 'shared-audio', 0, 21), " +
+                    "('alpha', 'collected-video', 1, 22)",
+            ).use { it.step() }
+            connection.prepare(
+                "INSERT INTO timed_text_track (track_id, content_id, origin, locator_identity, revision_id, " +
+                    "embedded_track_id, display_name, mime_type, format, language, label, match_basis, readiness, " +
+                    "failure_message, is_rejected, generated_slot_id) VALUES " +
+                    "('track-shared', 'shared-audio', 'Sidecar', 'sidecar:shared', NULL, NULL, 'shared.srt', " +
+                    "'application/x-subrip', 'srt', NULL, NULL, 'ExactStem', 'Ready', NULL, 0, NULL)",
+            ).use { it.step() }
+        }
+
+        helper.runMigrationsAndValidate(10, listOf(MIGRATION_9_10)).use { connection ->
+            connection.prepare("SELECT playlist_id FROM playlist WHERE system_role = 'DefaultFavorite'").use { statement ->
+                assertTrue(statement.step())
+                assertEquals("existing-default", statement.getText(0))
+            }
+            connection.prepare(
+                "SELECT content_id FROM playlist_item WHERE playlist_id = 'existing-default' ORDER BY sort_position",
+            ).use { statement ->
+                assertTrue(statement.step())
+                assertEquals("orphan-audio", statement.getText(0))
+                assertTrue(statement.step())
+                assertEquals("orphan-audio-older", statement.getText(0))
+                assertFalse(statement.step())
+            }
+            connection.prepare(
+                "SELECT playlist_id FROM playlist_item WHERE content_id = 'shared-audio' ORDER BY playlist_id",
+            ).use { statement ->
+                assertTrue(statement.step())
+                assertEquals("alpha", statement.getText(0))
+                assertTrue(statement.step())
+                assertEquals("beta", statement.getText(0))
+                assertFalse(statement.step())
+            }
+            connection.prepare("SELECT last_played_at_ms FROM playlist WHERE playlist_id = 'alpha'").use { statement ->
+                assertTrue(statement.step())
+                assertEquals(99L, statement.getLong(0))
+            }
+            connection.prepare("SELECT track_id FROM timed_text_track WHERE content_id = 'shared-audio'").use { statement ->
+                assertTrue(statement.step())
+                assertEquals("track-shared", statement.getText(0))
+            }
+            connection.prepare(
+                "SELECT content_id FROM content WHERE content_id IN " +
+                    "('ignored-video', 'undecided-video', 'collected-video') ORDER BY content_id",
+            ).use { statement ->
+                assertTrue(statement.step())
+                assertEquals("collected-video", statement.getText(0))
+                assertTrue(statement.step())
+                assertEquals("ignored-video", statement.getText(0))
+                assertFalse(statement.step())
+            }
+            connection.prepare("SELECT is_collected FROM content_disposition WHERE content_id = 'ignored-video'").use { statement ->
+                assertTrue(statement.step())
+                assertEquals(0L, statement.getLong(0))
             }
         }
     }

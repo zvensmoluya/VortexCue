@@ -138,7 +138,6 @@ internal fun MainTabScreen(
     onCancelScan: () -> Unit,
     onAddFolder: () -> Unit,
     onRemoveSource: (String) -> Unit,
-    onPendingImportConsumed: () -> Unit,
     onPlaySingle: (String) -> Unit,
     onPlayPlaylist: (String, List<String>, Int) -> Unit,
     onQueueSelect: (Int) -> Unit,
@@ -155,7 +154,6 @@ internal fun MainTabScreen(
     val playlists by repository.playlists.collectAsState(initial = emptyList())
     val recentPlaylists by repository.recentPlaylists.collectAsState(initial = emptyList())
     val allContent by repository.allContent.collectAsState(initial = emptyList())
-    val ignoredContent by repository.ignoredContent.collectAsState(initial = emptyList())
     val sourceSummaries by repository.sources.collectAsState(initial = sources)
     val detailContentFlow = remember(repository, playlistViewId) {
         if (playlistViewId == null || playlistViewId == AllContentPlaylistId) repository.allContent
@@ -164,6 +162,7 @@ internal fun MainTabScreen(
     val detailContent by detailContentFlow.collectAsState(initial = emptyList())
     var importVisible by rememberSaveable { mutableStateOf(false) }
     var selectedItem by remember { mutableStateOf<ContentSummary?>(null) }
+    var selectedItemPlaylistIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var playlistDialogMode by remember { mutableStateOf<PlaylistDialogMode?>(null) }
     var playlistName by remember { mutableStateOf("") }
     var membershipItem by remember { mutableStateOf<ContentSummary?>(null) }
@@ -185,6 +184,10 @@ internal fun MainTabScreen(
             importVisible = true
             onImportHubRequestConsumed()
         }
+    }
+    LaunchedEffect(selectedItem?.contentId) {
+        selectedItemPlaylistIds =
+            selectedItem?.let { repository.playlistIdsForContent(it.contentId) }.orEmpty()
     }
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -269,7 +272,7 @@ internal fun MainTabScreen(
                             onDeletePlaylist = { playlistToDelete = it },
                             onReorderModeChanged = { playlistReorderMode = it },
                             onMovePlaylist = { from, to ->
-                                val ids = playlists.map { it.playlistId }.toMutableList()
+                                val ids = playlists.filterNot { it.isDefaultFavorite }.map { it.playlistId }.toMutableList()
                                 if (from in ids.indices && to in ids.indices) {
                                     ids.add(to, ids.removeAt(from))
                                     scope.launch { repository.reorderPlaylists(ids) }
@@ -307,6 +310,7 @@ internal fun MainTabScreen(
                                     scope.launch { repository.reorderPlaylistItems(playlistViewId, ids) }
                                 }
                             },
+                            onAddContent = { importVisible = true },
                         )
                     }
                 MainTab.Queue ->
@@ -374,7 +378,14 @@ internal fun MainTabScreen(
                     }
                 },
                 onRemoveFromPlaylist =
-                    playlistViewId?.takeIf { it != AllContentPlaylistId }?.let { currentPlaylistId ->
+                    playlistViewId
+                        ?.takeIf { it != AllContentPlaylistId }
+                        ?.takeIf { currentPlaylistId ->
+                            playlists.firstOrNull { it.playlistId == currentPlaylistId }?.let { playlist ->
+                                !playlist.isDefaultFavorite || selectedItemPlaylistIds.size > 1
+                            } == true
+                        }
+                        ?.let { currentPlaylistId ->
                         {
                             selectedItem = null
                             scope.launch {
@@ -420,8 +431,14 @@ internal fun MainTabScreen(
                 scope.launch {
                     runCatching {
                         val finalIds =
-                            newName?.let { selectedIds + repository.createPlaylist(it).playlistId }
-                                ?: selectedIds
+                            newName?.let {
+                                val createdId = repository.createPlaylist(it).playlistId
+                                val defaultId = playlists.firstOrNull { playlist -> playlist.isDefaultFavorite }?.playlistId
+                                val retained =
+                                    if (defaultId != null && selectedIds == setOf(defaultId)) emptySet()
+                                    else selectedIds
+                                retained + createdId
+                            } ?: selectedIds
                         repository.setContentPlaylists(item.contentId, finalIds)
                     }.onSuccess {
                         membershipItem = null
@@ -469,42 +486,20 @@ internal fun MainTabScreen(
     }
 
     if (importVisible) {
-        ImportHub(
+        ImportHubScreen(
+            repository = repository,
             sources = sourceSummaries,
             playlists = playlists,
             coordinator = coordinator,
             onDismiss = { importVisible = false },
             onPickMedia = { importVisible = false; onPickMedia() },
             onAddFolder = onAddFolder,
-            onScanDevice = onRequestLibraryAccess,
+            onRequestLibraryAccess = onRequestLibraryAccess,
             onRefreshLibrary = onRefreshLibrary,
             onRefreshSource = onRefreshSource,
             onRelinkSource = onRelinkSource,
             onCancelScan = onCancelScan,
             onRemoveSource = onRemoveSource,
-            ignoredContent = ignoredContent,
-            onRestoreIgnored = { id -> scope.launch { repository.collect(id) } },
-            onImport = { allIds, selectedIds, playlistId, newPlaylistName ->
-                scope.launch {
-                    runCatching {
-                        val targetPlaylistId =
-                            newPlaylistName?.trim()?.takeIf(String::isNotBlank)?.let {
-                                repository.createPlaylist(it).playlistId
-                            } ?: playlistId
-                        repository.importContent(
-                            contentIds = selectedIds,
-                            playlistId = targetPlaylistId,
-                            ignoredContentIds = allIds - selectedIds,
-                        )
-                    }.onSuccess {
-                        onPendingImportConsumed()
-                        importVisible = false
-                        notice = "已加入 ${selectedIds.size} 项内容"
-                    }.onFailure { error ->
-                        notice = error.message ?: "导入失败"
-                    }
-                }
-            },
         )
     }
 }
@@ -541,24 +536,18 @@ internal fun ContentRow(item: ContentSummary, status: String?, onClick: () -> Un
 }
 
 @Composable
-internal fun EmptyContent(onPickMedia: () -> Unit, onRequestLibraryAccess: () -> Unit, onAddFolder: () -> Unit) {
+internal fun EmptyContent(onAddContent: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 56.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("还没有内容", color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-        Button(onClick = onPickMedia, colors = ButtonDefaults.buttonColors(containerColor = AppSurfaceRaised, contentColor = AppPrimaryText)) {
-            Icon(Icons.Outlined.AudioFile, null)
+        Button(onClick = onAddContent, colors = ButtonDefaults.buttonColors(containerColor = AppSurfaceRaised, contentColor = AppPrimaryText)) {
+            Icon(Icons.Outlined.Add, null)
             Spacer(Modifier.width(8.dp))
-            Text("选择文件")
+            Text("添加内容")
         }
-        OutlinedButton(onClick = onAddFolder) {
-            Icon(Icons.Outlined.FolderOpen, null)
-            Spacer(Modifier.width(8.dp))
-            Text("从文件夹查找")
-        }
-        TextButton(onClick = onRequestLibraryAccess) { Text("扫描设备媒体", color = AppSecondaryText) }
     }
 }
 
@@ -669,7 +658,6 @@ private fun SettingsTab(
         item {
             Text("权限", color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
             Text(if (coordinator.hasAudioAccess) "设备音频：已授权" else "设备音频：未授权", color = AppSecondaryText)
-            Text(if (coordinator.videoAccess.name != "None") "设备视频：已授权" else "设备视频：未授权", color = AppSecondaryText)
         }
         item {
             Text("关于", color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
@@ -766,179 +754,6 @@ private fun ActionButton(label: String, icon: androidx.compose.ui.graphics.vecto
         Icon(icon, null, tint = AppSecondaryText)
         Spacer(Modifier.width(12.dp))
         Text(label, color = AppPrimaryText, modifier = Modifier.weight(1f))
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun ImportHub(
-    sources: List<SourceSummary>,
-    playlists: List<PlaylistSummary>,
-    coordinator: LibraryCoordinatorState,
-    ignoredContent: List<ContentSummary>,
-    onRestoreIgnored: (String) -> Unit,
-    onDismiss: () -> Unit,
-    onPickMedia: () -> Unit,
-    onAddFolder: () -> Unit,
-    onScanDevice: () -> Unit,
-    onRefreshLibrary: () -> Unit,
-    onRefreshSource: (String) -> Unit,
-    onRelinkSource: (String) -> Unit,
-    onCancelScan: () -> Unit,
-    onRemoveSource: (String) -> Unit,
-    onImport: (allIds: Set<String>, selectedIds: Set<String>, playlistId: String?, newPlaylistName: String?) -> Unit,
-) {
-    val pending = coordinator.pendingImport
-    var selectedIds by remember(pending?.contentIds) {
-        mutableStateOf(pending?.defaultSelectedContentIds.orEmpty())
-    }
-    var targetPlaylistId by remember(pending?.contentIds) { mutableStateOf<String?>(null) }
-    var playlistMenuVisible by remember { mutableStateOf(false) }
-    var newPlaylistName by remember(pending?.contentIds) { mutableStateOf("") }
-    val targetPlaylistName = playlists.firstOrNull { it.playlistId == targetPlaylistId }?.name ?: "仅加入全部内容"
-
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AppSurfaceRaised) {
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth().navigationBarsPadding(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 24.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            item {
-                Text("添加内容", color = AppBoneLogo, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 12.dp))
-                ActionButton("选择文件并播放", Icons.Outlined.AudioFile, onPickMedia)
-                ActionButton("从文件夹查找", Icons.Outlined.FolderOpen, onAddFolder)
-                ActionButton("扫描设备媒体", Icons.Outlined.Refresh, onScanDevice)
-                ActionButton("重新扫描已授权来源", Icons.Outlined.Refresh, onRefreshLibrary)
-            }
-            if (coordinator.isLoading) {
-                item {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), color = AppAccent, trackColor = AppHairline)
-                    TextButton(onClick = onCancelScan, modifier = Modifier.fillMaxWidth()) { Text("取消扫描") }
-                }
-            }
-            coordinator.errorMessage?.let { error ->
-                item { Text(error, color = AppError, fontSize = 12.sp, modifier = Modifier.padding(vertical = 6.dp)) }
-            }
-            pending?.let { batch ->
-                item {
-                    Text("本次新增", color = AppPrimaryText, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = selectedIds.size == batch.items.size && batch.items.isNotEmpty(),
-                            onCheckedChange = { checked ->
-                                selectedIds = if (checked) batch.contentIds.toSet() else emptySet()
-                            },
-                        )
-                        Text("已选择 ${selectedIds.size} / ${batch.items.size}", color = AppSecondaryText, fontSize = 12.sp)
-                    }
-                }
-                items(batch.items, key = { it.contentId }) { item ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).combinedClickable(
-                            onClick = {
-                                selectedIds =
-                                    if (item.contentId in selectedIds) selectedIds - item.contentId
-                                    else selectedIds + item.contentId
-                            },
-                            onLongClick = {},
-                        ),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Checkbox(
-                            checked = item.contentId in selectedIds,
-                            onCheckedChange = { checked ->
-                                selectedIds = if (checked) selectedIds + item.contentId else selectedIds - item.contentId
-                            },
-                        )
-                        Text(item.title, color = AppPrimaryText, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-                item {
-                    Text("加入歌单", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
-                    Box {
-                        OutlinedButton(onClick = { playlistMenuVisible = true }) {
-                            Icon(Icons.AutoMirrored.Outlined.QueueMusic, null)
-                            Spacer(Modifier.width(8.dp))
-                            Text(targetPlaylistName)
-                        }
-                        DropdownMenu(expanded = playlistMenuVisible, onDismissRequest = { playlistMenuVisible = false }) {
-                            DropdownMenuItem(
-                                text = { Text("仅加入全部内容") },
-                                onClick = { targetPlaylistId = null; playlistMenuVisible = false },
-                            )
-                            playlists.forEach { playlist ->
-                                DropdownMenuItem(
-                                    text = { Text(playlist.name) },
-                                    onClick = { targetPlaylistId = playlist.playlistId; playlistMenuVisible = false },
-                                )
-                            }
-                        }
-                    }
-                    OutlinedTextField(
-                        value = newPlaylistName,
-                        onValueChange = { newPlaylistName = it },
-                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                        label = { Text("或新建歌单") },
-                        singleLine = true,
-                    )
-                    Button(
-                        enabled = selectedIds.isNotEmpty(),
-                        onClick = {
-                            onImport(
-                                batch.contentIds.toSet(),
-                                selectedIds,
-                                targetPlaylistId,
-                                newPlaylistName.takeIf(String::isNotBlank),
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    ) { Text("加入内容") }
-                }
-            }
-            item {
-                Text("来源", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
-            }
-            items(sources, key = { it.sourceId }) { source ->
-                Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.Folder, null, tint = AppMutedText)
-                        Spacer(Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(source.displayName, color = AppPrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            if (!source.hasAccess || source.lastError != null) {
-                                Text(source.lastError ?: "需要重新授权", color = AppError, fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                        if (!source.hasAccess && source.kind == LibrarySourceKind.Folder) {
-                            TextButton(onClick = { onRelinkSource(source.sourceId) }) { Text("重新授权", color = AppAccent) }
-                        } else {
-                            IconButton(
-                                onClick = { onRefreshSource(source.sourceId) },
-                                modifier = Modifier.semantics { contentDescription = "重新扫描 ${source.displayName}" },
-                            ) { Icon(Icons.Outlined.Refresh, null, tint = AppSecondaryText) }
-                        }
-                        if (source.kind == LibrarySourceKind.Folder) {
-                            IconButton(
-                                onClick = { onRemoveSource(source.sourceId) },
-                                modifier = Modifier.semantics { contentDescription = "移除来源 ${source.displayName}" },
-                            ) { Icon(Icons.Outlined.DeleteOutline, null, tint = AppSecondaryText) }
-                        }
-                    }
-                }
-            }
-            if (ignoredContent.isNotEmpty()) {
-                item {
-                    Text("已移出内容", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
-                }
-                items(ignoredContent.take(20), key = { it.contentId }) { item ->
-                    Row(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(item.media.displayTitle, color = AppPrimaryText, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        TextButton(onClick = { onRestoreIgnored(item.contentId) }) { Text("恢复", color = AppAccent) }
-                    }
-                }
-            }
-            item { Spacer(Modifier.height(16.dp)) }
-        }
     }
 }
 

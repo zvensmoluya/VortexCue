@@ -548,7 +548,7 @@ internal fun VortexCueApp(
         }
     val libraryPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-            coordinator.scanDevice(admitNew = true, audioOnly = true)
+            coordinator.scanDevice()
         }
 
     LaunchedEffect(externalMediaRequest?.id) {
@@ -638,8 +638,9 @@ internal fun VortexCueApp(
                     mediaPicker.launch(arrayOf("audio/*", "video/*"))
                 },
                 onRequestLibraryAccess = {
+                    coordinator.noteAudioPermissionRequest()
                     val permissions = mediaLibraryPermissionsToRequest(context)
-                    if (permissions.isEmpty()) coordinator.scanDevice(admitNew = true, audioOnly = true)
+                    if (permissions.isEmpty()) coordinator.scanDevice()
                     else libraryPermissionLauncher.launch(permissions)
                 },
                 onRefreshLibrary = { coordinator.scanAll() },
@@ -654,7 +655,6 @@ internal fun VortexCueApp(
                     folderPicker.launch(null)
                 },
                 onRemoveSource = coordinator::removeSource,
-                onPendingImportConsumed = coordinator::clearPendingImport,
                 onPlaySingle = { id -> openContent(listOf(id), 0) },
                 onPlayPlaylist = { playlistId, contentIds, index ->
                     playerOriginTab = mainTab

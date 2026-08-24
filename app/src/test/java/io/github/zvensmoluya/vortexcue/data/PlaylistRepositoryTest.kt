@@ -83,36 +83,68 @@ class PlaylistRepositoryTest {
         repository.markPlaylistPlayed(alpha.playlistId)
         repository.markPlaylistPlayed(beta.playlistId)
 
-        assertEquals(listOf(beta.playlistId, alpha.playlistId), repository.playlists.first().map(PlaylistSummary::playlistId))
+        val ordered = repository.playlists.first()
+        assertTrue(ordered.first().isDefaultFavorite)
+        assertEquals(listOf(beta.playlistId, alpha.playlistId), ordered.drop(1).map(PlaylistSummary::playlistId))
         assertEquals(listOf(second, first), repository.playlistContentIds(alpha.playlistId))
         assertEquals(listOf(alpha.playlistId), repository.recentPlaylists.first().map(PlaylistSummary::playlistId))
     }
 
     @Test
-    fun importAddsOneInitialPlaylistAndIgnoreClearsEveryMembership() = runBlocking {
-        val selected = add("selected.mp3", 1L)
-        val unchecked = add("unchecked.mp4", 2L)
-        repository.clearDisposition(selected)
-        repository.clearDisposition(unchecked)
+    fun importAddsMultipleTargetsAndLeavesUncheckedContentPending() = runBlocking {
+        val selected = add("selected.mp3", 1L, collect = false)
+        val unchecked = add("unchecked.mp3", 2L, collect = false)
         val playlist = repository.createPlaylist("Imported")
+        val second = repository.createPlaylist("Also imported")
 
         repository.importContent(
-            contentIds = setOf(selected),
-            playlistId = playlist.playlistId,
-            ignoredContentIds = setOf(unchecked),
+            contentIds = listOf(selected),
+            playlistIds = setOf(playlist.playlistId, second.playlistId),
+            sourceKey = "system:test",
         )
 
         assertEquals(ContentDisposition.Collected, repository.details(selected)?.disposition)
-        assertEquals(setOf(playlist.playlistId), repository.playlistIdsForContent(selected))
-        assertEquals(ContentDisposition.Ignored, repository.details(unchecked)?.disposition)
+        assertEquals(setOf(playlist.playlistId, second.playlistId), repository.playlistIdsForContent(selected))
+        assertEquals(null, repository.details(unchecked)?.disposition)
         assertTrue(repository.playlistIdsForContent(unchecked).isEmpty())
+        assertEquals(setOf(playlist.playlistId, second.playlistId), repository.observeImportTargets("system:test").first())
+        repository.importContent(
+            contentIds = listOf(selected, selected),
+            playlistIds = setOf(playlist.playlistId, second.playlistId),
+            sourceKey = "system:test",
+        )
+        assertEquals(listOf(selected), repository.playlistContentIds(playlist.playlistId))
+        assertEquals(listOf(selected), repository.playlistContentIds(second.playlistId))
+        assertEquals(listOf(selected), repository.allContent.first().map(ContentSummary::contentId))
+
+        repository.deletePlaylist(playlist.playlistId)
+        repository.deletePlaylist(second.playlistId)
+        val defaultId = repository.playlists.first().first { it.isDefaultFavorite }.playlistId
+        assertEquals(setOf(defaultId), repository.observeImportTargets("system:test").first())
 
         repository.ignore(selected)
         assertTrue(repository.playlistIdsForContent(selected).isEmpty())
         assertFalse(repository.allContent.first().any { it.contentId == selected })
         repository.collect(selected)
         assertTrue(repository.allContent.first().any { it.contentId == selected })
-        assertTrue(repository.playlistIdsForContent(selected).isEmpty())
+        assertTrue(repository.playlistIdsForContent(selected).single() == repository.playlists.first().first { it.isDefaultFavorite }.playlistId)
+    }
+
+    @Test
+    fun removingLastMembershipAndDeletingExclusivePlaylistMoveContentToDefault() = runBlocking {
+        val first = add("first.mp3", 1L)
+        val second = add("second.mp3", 2L)
+        val playlist = repository.createPlaylist("Temporary")
+        repository.setContentPlaylists(first, setOf(playlist.playlistId))
+        repository.setContentPlaylists(second, setOf(playlist.playlistId))
+        val defaultId = repository.playlists.first().first { it.isDefaultFavorite }.playlistId
+
+        repository.removeContentFromPlaylist(first, playlist.playlistId)
+        assertEquals(setOf(defaultId), repository.playlistIdsForContent(first))
+
+        repository.deletePlaylist(playlist.playlistId)
+        assertEquals(setOf(defaultId), repository.playlistIdsForContent(second))
+        assertEquals(listOf(first, second), repository.playlistContentIds(defaultId))
     }
 
     @Test
@@ -129,7 +161,19 @@ class PlaylistRepositoryTest {
         assertFalse(recent.any { it.playlistId == created.first().playlistId })
     }
 
-    private suspend fun add(name: String, dateAddedSeconds: Long): String {
+    @Test
+    fun defaultFavoriteIsProtectedAndCanAppearInRecentPlaylists() = runBlocking {
+        add("favorite.mp3", 1L)
+        val default = repository.playlists.first().first { it.isDefaultFavorite }
+
+        repository.markPlaylistPlayed(default.playlistId)
+
+        assertEquals(default.playlistId, repository.recentPlaylists.first().single().playlistId)
+        assertTrue(runCatching { repository.renamePlaylist(default.playlistId, "Other") }.isFailure)
+        assertTrue(runCatching { repository.deletePlaylist(default.playlistId) }.isFailure)
+    }
+
+    private suspend fun add(name: String, dateAddedSeconds: Long, collect: Boolean = true): String {
         val id =
             repository.resolveOrCreate(
                 MediaSourceRef(
@@ -142,7 +186,7 @@ class PlaylistRepositoryTest {
                 ),
                 availability = ContentAvailability.Available,
             )
-        repository.collect(id)
+        if (collect) repository.collect(id)
         return id
     }
 }

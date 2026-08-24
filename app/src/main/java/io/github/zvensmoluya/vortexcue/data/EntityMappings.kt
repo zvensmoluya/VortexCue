@@ -199,6 +199,7 @@ internal fun PlaylistSummaryRow.toDomain(): PlaylistSummary =
         itemCount = itemCount,
         sortPosition = sortPosition,
         lastPlayedAtMs = lastPlayedAtMs,
+        systemRole = systemRole?.enumValueOrNull(),
     )
 
 private fun TimedTextTrackEntity.toDomainLocator(): TimedTextLocator =

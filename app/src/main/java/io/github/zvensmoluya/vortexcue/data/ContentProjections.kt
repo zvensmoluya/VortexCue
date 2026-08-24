@@ -116,12 +116,49 @@ data class SourceSummary(
     val itemCount: Int,
 )
 
+enum class PlaylistSystemRole {
+    DefaultFavorite,
+}
+
 data class PlaylistSummary(
     val playlistId: String,
     val name: String,
     val itemCount: Int = 0,
     val sortPosition: Long = 0L,
     val lastPlayedAtMs: Long? = null,
+    val systemRole: PlaylistSystemRole? = null,
+) {
+    val isDefaultFavorite: Boolean
+        get() = systemRole == PlaylistSystemRole.DefaultFavorite
+}
+
+enum class DiscoveryItemStatus {
+    Pending,
+    Collected,
+}
+
+data class DiscoveryGroupSummary(
+    val sourceKey: String,
+    val sourceId: String,
+    val displayName: String,
+    val totalCount: Int,
+    val pendingCount: Int,
+    val sampleTitles: List<String>,
+    val newestAddedSeconds: Long,
+    val totalDurationMs: Long,
+    val isRecommended: Boolean,
+    val hasAccess: Boolean,
+    val errorMessage: String?,
+    val lastImportedAtMs: Long?,
+)
+
+data class DiscoveryItem(
+    val contentId: String,
+    val title: String,
+    val displayName: String,
+    val durationMs: Long,
+    val status: DiscoveryItemStatus,
+    val availability: ContentAvailability,
 )
 
 

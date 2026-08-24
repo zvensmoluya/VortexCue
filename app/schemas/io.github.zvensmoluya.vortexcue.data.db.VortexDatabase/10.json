@@ -1,0 +1,3777 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 10,
+    "identityHash": "d038f6cd636ca09bd959a037a2ccf567",
+    "entities": [
+      {
+        "tableName": "content",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`content_id` TEXT NOT NULL, `created_at_ms` INTEGER NOT NULL, `subtitle_offset_ms` INTEGER NOT NULL, PRIMARY KEY(`content_id`))",
+        "fields": [
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "created_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "subtitleOffsetMs",
+            "columnName": "subtitle_offset_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "content_id"
+          ]
+        }
+      },
+      {
+        "tableName": "content_identity",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`identity_key` TEXT NOT NULL, `content_id` TEXT NOT NULL, PRIMARY KEY(`identity_key`), FOREIGN KEY(`content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "identityKey",
+            "columnName": "identity_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "identity_key"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_content_identity_content_id",
+            "unique": false,
+            "columnNames": [
+              "content_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_content_identity_content_id` ON `${TABLE_NAME}` (`content_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "content_redirect",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`alias_content_id` TEXT NOT NULL, `canonical_content_id` TEXT NOT NULL, `created_at_ms` INTEGER NOT NULL, PRIMARY KEY(`alias_content_id`), FOREIGN KEY(`canonical_content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "aliasContentId",
+            "columnName": "alias_content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "canonicalContentId",
+            "columnName": "canonical_content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "created_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "alias_content_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_content_redirect_canonical_content_id",
+            "unique": false,
+            "columnNames": [
+              "canonical_content_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_content_redirect_canonical_content_id` ON `${TABLE_NAME}` (`canonical_content_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "canonical_content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "source",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`source_id` TEXT NOT NULL, `kind` TEXT NOT NULL, `root_uri` TEXT, `display_name` TEXT NOT NULL, `has_access` INTEGER NOT NULL, `generation` INTEGER NOT NULL, `created_at_ms` INTEGER NOT NULL, `last_indexed_at_ms` INTEGER, `last_error` TEXT, `removed_at_ms` INTEGER, PRIMARY KEY(`source_id`))",
+        "fields": [
+          {
+            "fieldPath": "sourceId",
+            "columnName": "source_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rootUri",
+            "columnName": "root_uri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "display_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hasAccess",
+            "columnName": "has_access",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "generation",
+            "columnName": "generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "created_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastIndexedAtMs",
+            "columnName": "last_indexed_at_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "last_error",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "removedAtMs",
+            "columnName": "removed_at_ms",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "source_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_source_root_uri",
+            "unique": true,
+            "columnNames": [
+              "root_uri"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_source_root_uri` ON `${TABLE_NAME}` (`root_uri`)"
+          }
+        ]
+      },
+      {
+        "tableName": "media_locator",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`locator_id` TEXT NOT NULL, `content_id` TEXT NOT NULL, `identity_key` TEXT NOT NULL, `source_id` TEXT, `uri_value` TEXT NOT NULL, `display_name` TEXT NOT NULL, `mime_type` TEXT, `title` TEXT, `artist` TEXT, `album` TEXT, `duration_ms` INTEGER NOT NULL, `folder` TEXT, `date_added_seconds` INTEGER NOT NULL, `origin` TEXT NOT NULL, `kind` TEXT NOT NULL, `size_bytes` INTEGER NOT NULL, `video_width` INTEGER NOT NULL, `video_height` INTEGER NOT NULL, `availability` TEXT NOT NULL, `seen_generation` INTEGER NOT NULL, `updated_at_ms` INTEGER NOT NULL, PRIMARY KEY(`locator_id`), FOREIGN KEY(`content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`source_id`) REFERENCES `source`(`source_id`) ON UPDATE CASCADE ON DELETE SET NULL )",
+        "fields": [
+          {
+            "fieldPath": "locatorId",
+            "columnName": "locator_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "identityKey",
+            "columnName": "identity_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceId",
+            "columnName": "source_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "uriValue",
+            "columnName": "uri_value",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "display_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mimeType",
+            "columnName": "mime_type",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "artist",
+            "columnName": "artist",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "album",
+            "columnName": "album",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "durationMs",
+            "columnName": "duration_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "folder",
+            "columnName": "folder",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "dateAddedSeconds",
+            "columnName": "date_added_seconds",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "origin",
+            "columnName": "origin",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sizeBytes",
+            "columnName": "size_bytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "videoWidth",
+            "columnName": "video_width",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "videoHeight",
+            "columnName": "video_height",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "availability",
+            "columnName": "availability",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seenGeneration",
+            "columnName": "seen_generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMs",
+            "columnName": "updated_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "locator_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_media_locator_content_id",
+            "unique": false,
+            "columnNames": [
+              "content_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_locator_content_id` ON `${TABLE_NAME}` (`content_id`)"
+          },
+          {
+            "name": "index_media_locator_identity_key",
+            "unique": false,
+            "columnNames": [
+              "identity_key"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_locator_identity_key` ON `${TABLE_NAME}` (`identity_key`)"
+          },
+          {
+            "name": "index_media_locator_source_id",
+            "unique": false,
+            "columnNames": [
+              "source_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_locator_source_id` ON `${TABLE_NAME}` (`source_id`)"
+          },
+          {
+            "name": "index_media_locator_uri_value_source_id",
+            "unique": true,
+            "columnNames": [
+              "uri_value",
+              "source_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_locator_uri_value_source_id` ON `${TABLE_NAME}` (`uri_value`, `source_id`)"
+          },
+          {
+            "name": "index_media_locator_content_id_locator_id",
+            "unique": true,
+            "columnNames": [
+              "content_id",
+              "locator_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_locator_content_id_locator_id` ON `${TABLE_NAME}` (`content_id`, `locator_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          },
+          {
+            "table": "source",
+            "onDelete": "SET NULL",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "source_id"
+            ],
+            "referencedColumns": [
+              "source_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "active_media_locator",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`content_id` TEXT NOT NULL, `locator_id` TEXT NOT NULL, PRIMARY KEY(`content_id`), FOREIGN KEY(`content_id`, `locator_id`) REFERENCES `media_locator`(`content_id`, `locator_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "locatorId",
+            "columnName": "locator_id",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "content_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_active_media_locator_content_id_locator_id",
+            "unique": false,
+            "columnNames": [
+              "content_id",
+              "locator_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_active_media_locator_content_id_locator_id` ON `${TABLE_NAME}` (`content_id`, `locator_id`)"
+          },
+          {
+            "name": "index_active_media_locator_locator_id",
+            "unique": false,
+            "columnNames": [
+              "locator_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_active_media_locator_locator_id` ON `${TABLE_NAME}` (`locator_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "media_locator",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id",
+              "locator_id"
+            ],
+            "referencedColumns": [
+              "content_id",
+              "locator_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "timed_text_track",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`track_id` TEXT NOT NULL, `content_id` TEXT NOT NULL, `origin` TEXT NOT NULL, `locator_identity` TEXT NOT NULL, `revision_id` TEXT, `embedded_track_id` TEXT, `display_name` TEXT NOT NULL, `mime_type` TEXT, `format` TEXT, `language` TEXT, `label` TEXT, `match_basis` TEXT NOT NULL, `readiness` TEXT NOT NULL, `failure_message` TEXT, `is_rejected` INTEGER NOT NULL, `generated_slot_id` TEXT, PRIMARY KEY(`track_id`), FOREIGN KEY(`content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`content_id`, `generated_slot_id`) REFERENCES `generated_text_slot`(`content_id`, `slot_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`revision_id`) REFERENCES `timeline_revision`(`revision_id`) ON UPDATE CASCADE ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "trackId",
+            "columnName": "track_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "origin",
+            "columnName": "origin",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "locatorIdentity",
+            "columnName": "locator_identity",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "revisionId",
+            "columnName": "revision_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "embeddedTrackId",
+            "columnName": "embedded_track_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "display_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mimeType",
+            "columnName": "mime_type",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "format",
+            "columnName": "format",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "language",
+            "columnName": "language",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "label",
+            "columnName": "label",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "matchBasis",
+            "columnName": "match_basis",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "readiness",
+            "columnName": "readiness",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "failureMessage",
+            "columnName": "failure_message",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isRejected",
+            "columnName": "is_rejected",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "generatedSlotId",
+            "columnName": "generated_slot_id",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "track_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_timed_text_track_content_id",
+            "unique": false,
+            "columnNames": [
+              "content_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_timed_text_track_content_id` ON `${TABLE_NAME}` (`content_id`)"
+          },
+          {
+            "name": "index_timed_text_track_generated_slot_id",
+            "unique": false,
+            "columnNames": [
+              "generated_slot_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_timed_text_track_generated_slot_id` ON `${TABLE_NAME}` (`generated_slot_id`)"
+          },
+          {
+            "name": "index_timed_text_track_revision_id",
+            "unique": false,
+            "columnNames": [
+              "revision_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_timed_text_track_revision_id` ON `${TABLE_NAME}` (`revision_id`)"
+          },
+          {
+            "name": "index_timed_text_track_content_id_generated_slot_id",
+            "unique": false,
+            "columnNames": [
+              "content_id",
+              "generated_slot_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_timed_text_track_content_id_generated_slot_id` ON `${TABLE_NAME}` (`content_id`, `generated_slot_id`)"
+          },
+          {
+            "name": "index_timed_text_track_content_id_track_id",
+            "unique": true,
+            "columnNames": [
+              "content_id",
+              "track_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_timed_text_track_content_id_track_id` ON `${TABLE_NAME}` (`content_id`, `track_id`)"
+          },
+          {
+            "name": "index_timed_text_track_content_id_origin_locator_identity",
+            "unique": true,
+            "columnNames": [
+              "content_id",
+              "origin",
+              "locator_identity"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_timed_text_track_content_id_origin_locator_identity` ON `${TABLE_NAME}` (`content_id`, `origin`, `locator_identity`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          },
+          {
+            "table": "generated_text_slot",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id",
+              "generated_slot_id"
+            ],
+            "referencedColumns": [
+              "content_id",
+              "slot_id"
+            ]
+          },
+          {
+            "table": "timeline_revision",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "revision_id"
+            ],
+            "referencedColumns": [
+              "revision_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "timed_text_track_role",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`track_id` TEXT NOT NULL, `role` TEXT NOT NULL, PRIMARY KEY(`track_id`, `role`), FOREIGN KEY(`track_id`) REFERENCES `timed_text_track`(`track_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "trackId",
+            "columnName": "track_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "role",
+            "columnName": "role",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "track_id",
+            "role"
+          ]
+        },
+        "foreignKeys": [
+          {
+            "table": "timed_text_track",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "track_id"
+            ],
+            "referencedColumns": [
+              "track_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "text_selection",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`content_id` TEXT NOT NULL, `slot` TEXT NOT NULL, `selected_track_id` TEXT, `mode` TEXT NOT NULL, PRIMARY KEY(`content_id`, `slot`), FOREIGN KEY(`content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`content_id`, `selected_track_id`) REFERENCES `timed_text_track`(`content_id`, `track_id`) ON UPDATE CASCADE ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "slot",
+            "columnName": "slot",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "selectedTrackId",
+            "columnName": "selected_track_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "mode",
+            "columnName": "mode",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "content_id",
+            "slot"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_text_selection_selected_track_id",
+            "unique": false,
+            "columnNames": [
+              "selected_track_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_text_selection_selected_track_id` ON `${TABLE_NAME}` (`selected_track_id`)"
+          },
+          {
+            "name": "index_text_selection_content_id_selected_track_id",
+            "unique": false,
+            "columnNames": [
+              "content_id",
+              "selected_track_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_text_selection_content_id_selected_track_id` ON `${TABLE_NAME}` (`content_id`, `selected_track_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          },
+          {
+            "table": "timed_text_track",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id",
+              "selected_track_id"
+            ],
+            "referencedColumns": [
+              "content_id",
+              "track_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "content_disposition",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`content_id` TEXT NOT NULL, `is_collected` INTEGER NOT NULL, `decided_at_ms` INTEGER NOT NULL, PRIMARY KEY(`content_id`), FOREIGN KEY(`content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isCollected",
+            "columnName": "is_collected",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "decidedAtMs",
+            "columnName": "decided_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "content_id"
+          ]
+        },
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "playlist",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`playlist_id` TEXT NOT NULL, `name` TEXT NOT NULL, `sort_position` INTEGER NOT NULL, `created_at_ms` INTEGER NOT NULL, `updated_at_ms` INTEGER NOT NULL, `last_played_at_ms` INTEGER, `system_role` TEXT, PRIMARY KEY(`playlist_id`))",
+        "fields": [
+          {
+            "fieldPath": "playlistId",
+            "columnName": "playlist_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sortPosition",
+            "columnName": "sort_position",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "created_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMs",
+            "columnName": "updated_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastPlayedAtMs",
+            "columnName": "last_played_at_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "systemRole",
+            "columnName": "system_role",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "playlist_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_playlist_name",
+            "unique": true,
+            "columnNames": [
+              "name"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_playlist_name` ON `${TABLE_NAME}` (`name`)"
+          },
+          {
+            "name": "index_playlist_system_role",
+            "unique": true,
+            "columnNames": [
+              "system_role"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_playlist_system_role` ON `${TABLE_NAME}` (`system_role`)"
+          }
+        ]
+      },
+      {
+        "tableName": "playlist_item",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`playlist_id` TEXT NOT NULL, `content_id` TEXT NOT NULL, `sort_position` INTEGER NOT NULL, `added_at_ms` INTEGER NOT NULL, PRIMARY KEY(`playlist_id`, `content_id`), FOREIGN KEY(`content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`playlist_id`) REFERENCES `playlist`(`playlist_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "playlistId",
+            "columnName": "playlist_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sortPosition",
+            "columnName": "sort_position",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "addedAtMs",
+            "columnName": "added_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "playlist_id",
+            "content_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_playlist_item_content_id",
+            "unique": false,
+            "columnNames": [
+              "content_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_playlist_item_content_id` ON `${TABLE_NAME}` (`content_id`)"
+          },
+          {
+            "name": "index_playlist_item_playlist_id_sort_position",
+            "unique": false,
+            "columnNames": [
+              "playlist_id",
+              "sort_position"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_playlist_item_playlist_id_sort_position` ON `${TABLE_NAME}` (`playlist_id`, `sort_position`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          },
+          {
+            "table": "playlist",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "playlist_id"
+            ],
+            "referencedColumns": [
+              "playlist_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "import_source_preference",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`source_key` TEXT NOT NULL, `last_imported_at_ms` INTEGER NOT NULL, PRIMARY KEY(`source_key`))",
+        "fields": [
+          {
+            "fieldPath": "sourceKey",
+            "columnName": "source_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastImportedAtMs",
+            "columnName": "last_imported_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "source_key"
+          ]
+        }
+      },
+      {
+        "tableName": "import_source_target",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`source_key` TEXT NOT NULL, `playlist_id` TEXT NOT NULL, PRIMARY KEY(`source_key`, `playlist_id`), FOREIGN KEY(`source_key`) REFERENCES `import_source_preference`(`source_key`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`playlist_id`) REFERENCES `playlist`(`playlist_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "sourceKey",
+            "columnName": "source_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "playlistId",
+            "columnName": "playlist_id",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "source_key",
+            "playlist_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_import_source_target_playlist_id",
+            "unique": false,
+            "columnNames": [
+              "playlist_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_import_source_target_playlist_id` ON `${TABLE_NAME}` (`playlist_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "import_source_preference",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "source_key"
+            ],
+            "referencedColumns": [
+              "source_key"
+            ]
+          },
+          {
+            "table": "playlist",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "playlist_id"
+            ],
+            "referencedColumns": [
+              "playlist_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "recent_entry",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`content_id` TEXT NOT NULL, `last_opened_at_ms` INTEGER NOT NULL, PRIMARY KEY(`content_id`), FOREIGN KEY(`content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastOpenedAtMs",
+            "columnName": "last_opened_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "content_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_recent_entry_last_opened_at_ms",
+            "unique": false,
+            "columnNames": [
+              "last_opened_at_ms"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_recent_entry_last_opened_at_ms` ON `${TABLE_NAME}` (`last_opened_at_ms`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "current_draft",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`singleton_id` INTEGER NOT NULL, `content_id` TEXT NOT NULL, `updated_at_ms` INTEGER NOT NULL, PRIMARY KEY(`singleton_id`), FOREIGN KEY(`content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "singletonId",
+            "columnName": "singleton_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMs",
+            "columnName": "updated_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "singleton_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_current_draft_content_id",
+            "unique": false,
+            "columnNames": [
+              "content_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_current_draft_content_id` ON `${TABLE_NAME}` (`content_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "current_playback_session",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`singleton_id` INTEGER NOT NULL, `current_content_id` TEXT, `position_ms` INTEGER NOT NULL, `duration_ms` INTEGER NOT NULL, `playback_speed` REAL NOT NULL, `shuffle_enabled` INTEGER NOT NULL, `repeat_mode` INTEGER NOT NULL, `queue_revision` INTEGER NOT NULL, `updated_at_ms` INTEGER NOT NULL, PRIMARY KEY(`singleton_id`), FOREIGN KEY(`current_content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE SET NULL )",
+        "fields": [
+          {
+            "fieldPath": "singletonId",
+            "columnName": "singleton_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentContentId",
+            "columnName": "current_content_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "positionMs",
+            "columnName": "position_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationMs",
+            "columnName": "duration_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "playbackSpeed",
+            "columnName": "playback_speed",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "shuffleEnabled",
+            "columnName": "shuffle_enabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "repeatMode",
+            "columnName": "repeat_mode",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "queueRevision",
+            "columnName": "queue_revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMs",
+            "columnName": "updated_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "singleton_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_current_playback_session_current_content_id",
+            "unique": false,
+            "columnNames": [
+              "current_content_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_current_playback_session_current_content_id` ON `${TABLE_NAME}` (`current_content_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "SET NULL",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "current_content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "current_queue_entry",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`content_id` TEXT NOT NULL, `position` INTEGER NOT NULL, `added_at_ms` INTEGER NOT NULL, PRIMARY KEY(`content_id`), FOREIGN KEY(`content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "position",
+            "columnName": "position",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "addedAtMs",
+            "columnName": "added_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "content_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_current_queue_entry_position",
+            "unique": true,
+            "columnNames": [
+              "position"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_current_queue_entry_position` ON `${TABLE_NAME}` (`position`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "sync_text_credential",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`credential_id` TEXT NOT NULL, `name` TEXT NOT NULL, `purpose` TEXT NOT NULL, `masked_value` TEXT NOT NULL, `created_at_ms` INTEGER NOT NULL, `updated_at_ms` INTEGER NOT NULL, PRIMARY KEY(`credential_id`))",
+        "fields": [
+          {
+            "fieldPath": "credentialId",
+            "columnName": "credential_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "purpose",
+            "columnName": "purpose",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "maskedValue",
+            "columnName": "masked_value",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "created_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMs",
+            "columnName": "updated_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "credential_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sync_text_credential_name",
+            "unique": true,
+            "columnNames": [
+              "name"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_sync_text_credential_name` ON `${TABLE_NAME}` (`name`)"
+          }
+        ]
+      },
+      {
+        "tableName": "sync_text_scheme",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`scheme_id` TEXT NOT NULL, `name` TEXT NOT NULL, `asr_profile` TEXT NOT NULL, `asr_credential_id` TEXT NOT NULL, `translation_protocol` TEXT NOT NULL, `translation_endpoint` TEXT, `translation_user_agent` TEXT, `translation_model` TEXT, `translation_credential_id` TEXT, `default_target_language` TEXT NOT NULL, `default_presentation_mode` TEXT NOT NULL, `is_default` INTEGER NOT NULL, `created_at_ms` INTEGER NOT NULL, `updated_at_ms` INTEGER NOT NULL, `asr_endpoint` TEXT NOT NULL, PRIMARY KEY(`scheme_id`), FOREIGN KEY(`asr_credential_id`) REFERENCES `sync_text_credential`(`credential_id`) ON UPDATE CASCADE ON DELETE NO ACTION , FOREIGN KEY(`translation_credential_id`) REFERENCES `sync_text_credential`(`credential_id`) ON UPDATE CASCADE ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "schemeId",
+            "columnName": "scheme_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "asrProfile",
+            "columnName": "asr_profile",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "asrCredentialId",
+            "columnName": "asr_credential_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "translationProtocol",
+            "columnName": "translation_protocol",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "translationEndpoint",
+            "columnName": "translation_endpoint",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "translationUserAgent",
+            "columnName": "translation_user_agent",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "translationModel",
+            "columnName": "translation_model",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "translationCredentialId",
+            "columnName": "translation_credential_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "defaultTargetLanguage",
+            "columnName": "default_target_language",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "defaultPresentationMode",
+            "columnName": "default_presentation_mode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDefault",
+            "columnName": "is_default",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "created_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMs",
+            "columnName": "updated_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "asrEndpoint",
+            "columnName": "asr_endpoint",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "scheme_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sync_text_scheme_name",
+            "unique": true,
+            "columnNames": [
+              "name"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_sync_text_scheme_name` ON `${TABLE_NAME}` (`name`)"
+          },
+          {
+            "name": "index_sync_text_scheme_asr_credential_id",
+            "unique": false,
+            "columnNames": [
+              "asr_credential_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sync_text_scheme_asr_credential_id` ON `${TABLE_NAME}` (`asr_credential_id`)"
+          },
+          {
+            "name": "index_sync_text_scheme_translation_credential_id",
+            "unique": false,
+            "columnNames": [
+              "translation_credential_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sync_text_scheme_translation_credential_id` ON `${TABLE_NAME}` (`translation_credential_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "sync_text_credential",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "asr_credential_id"
+            ],
+            "referencedColumns": [
+              "credential_id"
+            ]
+          },
+          {
+            "table": "sync_text_credential",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "translation_credential_id"
+            ],
+            "referencedColumns": [
+              "credential_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "generation_task",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`task_id` TEXT NOT NULL, `content_id` TEXT NOT NULL, `scheme_id` TEXT NOT NULL, `kind` TEXT NOT NULL DEFAULT 'SourceGeneration', `active_dedupe_key` TEXT, `state` TEXT NOT NULL, `stage` TEXT NOT NULL, `queue_position` INTEGER NOT NULL, `progress` REAL NOT NULL, `target_language` TEXT, `waiting_for_network` INTEGER NOT NULL, `metered_network_allowed` INTEGER NOT NULL DEFAULT 0, `network_wait_reason` TEXT, `paused` INTEGER NOT NULL, `needs_attention` INTEGER NOT NULL, `scheme_blocked` INTEGER NOT NULL, `current_attempt_id` TEXT NOT NULL, `source_result_id` TEXT, `error_category` TEXT, `error_message` TEXT, `created_at_ms` INTEGER NOT NULL, `updated_at_ms` INTEGER NOT NULL, PRIMARY KEY(`task_id`), FOREIGN KEY(`content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`scheme_id`) REFERENCES `sync_text_scheme`(`scheme_id`) ON UPDATE CASCADE ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "taskId",
+            "columnName": "task_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "schemeId",
+            "columnName": "scheme_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'SourceGeneration'"
+          },
+          {
+            "fieldPath": "activeDedupeKey",
+            "columnName": "active_dedupe_key",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stage",
+            "columnName": "stage",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "queuePosition",
+            "columnName": "queue_position",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "progress",
+            "columnName": "progress",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetLanguage",
+            "columnName": "target_language",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "waitingForNetwork",
+            "columnName": "waiting_for_network",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "meteredNetworkAllowed",
+            "columnName": "metered_network_allowed",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "networkWaitReason",
+            "columnName": "network_wait_reason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "paused",
+            "columnName": "paused",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "needsAttention",
+            "columnName": "needs_attention",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "schemeBlocked",
+            "columnName": "scheme_blocked",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentAttemptId",
+            "columnName": "current_attempt_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceResultId",
+            "columnName": "source_result_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "errorCategory",
+            "columnName": "error_category",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "errorMessage",
+            "columnName": "error_message",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "created_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMs",
+            "columnName": "updated_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "task_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_generation_task_content_id",
+            "unique": false,
+            "columnNames": [
+              "content_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_generation_task_content_id` ON `${TABLE_NAME}` (`content_id`)"
+          },
+          {
+            "name": "index_generation_task_scheme_id",
+            "unique": false,
+            "columnNames": [
+              "scheme_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_generation_task_scheme_id` ON `${TABLE_NAME}` (`scheme_id`)"
+          },
+          {
+            "name": "index_generation_task_active_dedupe_key",
+            "unique": true,
+            "columnNames": [
+              "active_dedupe_key"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_generation_task_active_dedupe_key` ON `${TABLE_NAME}` (`active_dedupe_key`)"
+          },
+          {
+            "name": "index_generation_task_state_queue_position",
+            "unique": false,
+            "columnNames": [
+              "state",
+              "queue_position"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_generation_task_state_queue_position` ON `${TABLE_NAME}` (`state`, `queue_position`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          },
+          {
+            "table": "sync_text_scheme",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "scheme_id"
+            ],
+            "referencedColumns": [
+              "scheme_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "generation_task_snapshot",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`task_id` TEXT NOT NULL, `input_kind` TEXT NOT NULL, `source_track_id` TEXT, `embedded_track_id` TEXT, `audio_track_id` TEXT, `input_source_result_id` TEXT, `source_language` TEXT, `target_language` TEXT, `presentation_mode` TEXT NOT NULL, `allow_metered_network` INTEGER NOT NULL, `allow_asr_fallback` INTEGER NOT NULL DEFAULT 0, `submitted_at_ms` INTEGER NOT NULL, PRIMARY KEY(`task_id`), FOREIGN KEY(`task_id`) REFERENCES `generation_task`(`task_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "taskId",
+            "columnName": "task_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "inputKind",
+            "columnName": "input_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceTrackId",
+            "columnName": "source_track_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "embeddedTrackId",
+            "columnName": "embedded_track_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "audioTrackId",
+            "columnName": "audio_track_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "inputSourceResultId",
+            "columnName": "input_source_result_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sourceLanguage",
+            "columnName": "source_language",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "targetLanguage",
+            "columnName": "target_language",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "presentationMode",
+            "columnName": "presentation_mode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "allowMeteredNetwork",
+            "columnName": "allow_metered_network",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "allowAsrFallback",
+            "columnName": "allow_asr_fallback",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "submittedAtMs",
+            "columnName": "submitted_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "task_id"
+          ]
+        },
+        "foreignKeys": [
+          {
+            "table": "generation_task",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "task_id"
+            ],
+            "referencedColumns": [
+              "task_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "generation_attempt",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`attempt_id` TEXT NOT NULL, `task_id` TEXT NOT NULL, `ordinal` INTEGER NOT NULL, `scheme_id` TEXT NOT NULL, `asr_profile` TEXT NOT NULL, `asr_credential_id` TEXT NOT NULL, `translation_protocol` TEXT NOT NULL, `translation_endpoint` TEXT, `translation_user_agent` TEXT, `translation_model` TEXT, `translation_credential_id` TEXT, `policy_id` TEXT NOT NULL, `policy_version` INTEGER NOT NULL, `policy_revision` TEXT NOT NULL, `system_prompt_sha256` TEXT NOT NULL, `style_prompt_sha256` TEXT, `request_schema_version` INTEGER NOT NULL, `asr_window_ms` INTEGER NOT NULL, `asr_overlap_ms` INTEGER NOT NULL, `asr_max_encoded_bytes` INTEGER NOT NULL, `source_result_id` TEXT, `state` TEXT NOT NULL, `created_at_ms` INTEGER NOT NULL, `finished_at_ms` INTEGER, `asr_endpoint` TEXT NOT NULL, PRIMARY KEY(`attempt_id`), FOREIGN KEY(`task_id`) REFERENCES `generation_task`(`task_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`scheme_id`) REFERENCES `sync_text_scheme`(`scheme_id`) ON UPDATE CASCADE ON DELETE NO ACTION , FOREIGN KEY(`asr_credential_id`) REFERENCES `sync_text_credential`(`credential_id`) ON UPDATE CASCADE ON DELETE NO ACTION , FOREIGN KEY(`translation_credential_id`) REFERENCES `sync_text_credential`(`credential_id`) ON UPDATE CASCADE ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "attemptId",
+            "columnName": "attempt_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taskId",
+            "columnName": "task_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ordinal",
+            "columnName": "ordinal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "schemeId",
+            "columnName": "scheme_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "asrProfile",
+            "columnName": "asr_profile",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "asrCredentialId",
+            "columnName": "asr_credential_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "translationProtocol",
+            "columnName": "translation_protocol",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "translationEndpoint",
+            "columnName": "translation_endpoint",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "translationUserAgent",
+            "columnName": "translation_user_agent",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "translationModel",
+            "columnName": "translation_model",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "translationCredentialId",
+            "columnName": "translation_credential_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "policyId",
+            "columnName": "policy_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "policyVersion",
+            "columnName": "policy_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "policyRevision",
+            "columnName": "policy_revision",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "systemPromptSha256",
+            "columnName": "system_prompt_sha256",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stylePromptSha256",
+            "columnName": "style_prompt_sha256",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "requestSchemaVersion",
+            "columnName": "request_schema_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "asrWindowMs",
+            "columnName": "asr_window_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "asrOverlapMs",
+            "columnName": "asr_overlap_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "asrMaxEncodedBytes",
+            "columnName": "asr_max_encoded_bytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceResultId",
+            "columnName": "source_result_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "created_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "finishedAtMs",
+            "columnName": "finished_at_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "asrEndpoint",
+            "columnName": "asr_endpoint",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "attempt_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_generation_attempt_task_id",
+            "unique": false,
+            "columnNames": [
+              "task_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_generation_attempt_task_id` ON `${TABLE_NAME}` (`task_id`)"
+          },
+          {
+            "name": "index_generation_attempt_scheme_id",
+            "unique": false,
+            "columnNames": [
+              "scheme_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_generation_attempt_scheme_id` ON `${TABLE_NAME}` (`scheme_id`)"
+          },
+          {
+            "name": "index_generation_attempt_asr_credential_id",
+            "unique": false,
+            "columnNames": [
+              "asr_credential_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_generation_attempt_asr_credential_id` ON `${TABLE_NAME}` (`asr_credential_id`)"
+          },
+          {
+            "name": "index_generation_attempt_translation_credential_id",
+            "unique": false,
+            "columnNames": [
+              "translation_credential_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_generation_attempt_translation_credential_id` ON `${TABLE_NAME}` (`translation_credential_id`)"
+          },
+          {
+            "name": "index_generation_attempt_task_id_ordinal",
+            "unique": true,
+            "columnNames": [
+              "task_id",
+              "ordinal"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_generation_attempt_task_id_ordinal` ON `${TABLE_NAME}` (`task_id`, `ordinal`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "generation_task",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "task_id"
+            ],
+            "referencedColumns": [
+              "task_id"
+            ]
+          },
+          {
+            "table": "sync_text_scheme",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "scheme_id"
+            ],
+            "referencedColumns": [
+              "scheme_id"
+            ]
+          },
+          {
+            "table": "sync_text_credential",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "asr_credential_id"
+            ],
+            "referencedColumns": [
+              "credential_id"
+            ]
+          },
+          {
+            "table": "sync_text_credential",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "translation_credential_id"
+            ],
+            "referencedColumns": [
+              "credential_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "asr_window",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`window_id` TEXT NOT NULL, `attempt_id` TEXT NOT NULL, `ordinal` INTEGER NOT NULL, `owned_start_ms` INTEGER NOT NULL, `owned_end_ms` INTEGER NOT NULL, `upload_start_ms` INTEGER NOT NULL, `upload_end_ms` INTEGER NOT NULL, `pcm_start_frame` INTEGER NOT NULL, `pcm_end_frame` INTEGER NOT NULL, `cut_reason` TEXT NOT NULL, `planner_version` TEXT NOT NULL, `parent_window_id` TEXT, `state` TEXT NOT NULL, `encoded_bytes` INTEGER, `transcript_artifact_id` TEXT, `transcript_sha256` TEXT, `cue_count` INTEGER, `error_message` TEXT, `detected_language` TEXT, `input_tokens` INTEGER, `output_tokens` INTEGER, `total_tokens` INTEGER, `cost_usd` TEXT, PRIMARY KEY(`window_id`), FOREIGN KEY(`attempt_id`) REFERENCES `generation_attempt`(`attempt_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`transcript_artifact_id`) REFERENCES `text_artifact`(`artifact_id`) ON UPDATE CASCADE ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "windowId",
+            "columnName": "window_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attemptId",
+            "columnName": "attempt_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ordinal",
+            "columnName": "ordinal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ownedStartMs",
+            "columnName": "owned_start_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ownedEndMs",
+            "columnName": "owned_end_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "uploadStartMs",
+            "columnName": "upload_start_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "uploadEndMs",
+            "columnName": "upload_end_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pcmStartFrame",
+            "columnName": "pcm_start_frame",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pcmEndFrame",
+            "columnName": "pcm_end_frame",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cutReason",
+            "columnName": "cut_reason",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "plannerVersion",
+            "columnName": "planner_version",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "parentWindowId",
+            "columnName": "parent_window_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "encodedBytes",
+            "columnName": "encoded_bytes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "transcriptArtifactId",
+            "columnName": "transcript_artifact_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "transcriptSha256",
+            "columnName": "transcript_sha256",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "cueCount",
+            "columnName": "cue_count",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "errorMessage",
+            "columnName": "error_message",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "detectedLanguage",
+            "columnName": "detected_language",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "inputTokens",
+            "columnName": "input_tokens",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "outputTokens",
+            "columnName": "output_tokens",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "totalTokens",
+            "columnName": "total_tokens",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "costUsd",
+            "columnName": "cost_usd",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "window_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_asr_window_attempt_id",
+            "unique": false,
+            "columnNames": [
+              "attempt_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_asr_window_attempt_id` ON `${TABLE_NAME}` (`attempt_id`)"
+          },
+          {
+            "name": "index_asr_window_attempt_id_ordinal",
+            "unique": true,
+            "columnNames": [
+              "attempt_id",
+              "ordinal"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_asr_window_attempt_id_ordinal` ON `${TABLE_NAME}` (`attempt_id`, `ordinal`)"
+          },
+          {
+            "name": "index_asr_window_parent_window_id",
+            "unique": false,
+            "columnNames": [
+              "parent_window_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_asr_window_parent_window_id` ON `${TABLE_NAME}` (`parent_window_id`)"
+          },
+          {
+            "name": "index_asr_window_transcript_artifact_id",
+            "unique": false,
+            "columnNames": [
+              "transcript_artifact_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_asr_window_transcript_artifact_id` ON `${TABLE_NAME}` (`transcript_artifact_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "generation_attempt",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "attempt_id"
+            ],
+            "referencedColumns": [
+              "attempt_id"
+            ]
+          },
+          {
+            "table": "text_artifact",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "transcript_artifact_id"
+            ],
+            "referencedColumns": [
+              "artifact_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "translation_batch",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`batch_id` TEXT NOT NULL, `attempt_id` TEXT NOT NULL, `ordinal` INTEGER NOT NULL, `first_cue_index` INTEGER NOT NULL, `last_cue_index` INTEGER NOT NULL, `parent_batch_id` TEXT, `state` TEXT NOT NULL, `format_recovery_count` INTEGER NOT NULL, `repair_count` INTEGER NOT NULL, `result_artifact_id` TEXT, `result_sha256` TEXT, `cue_count` INTEGER, `input_tokens` INTEGER, `output_tokens` INTEGER, `total_tokens` INTEGER, `cost_usd` TEXT, `error_message` TEXT, PRIMARY KEY(`batch_id`), FOREIGN KEY(`attempt_id`) REFERENCES `generation_attempt`(`attempt_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`result_artifact_id`) REFERENCES `text_artifact`(`artifact_id`) ON UPDATE CASCADE ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "batchId",
+            "columnName": "batch_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attemptId",
+            "columnName": "attempt_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ordinal",
+            "columnName": "ordinal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "firstCueIndex",
+            "columnName": "first_cue_index",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastCueIndex",
+            "columnName": "last_cue_index",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "parentBatchId",
+            "columnName": "parent_batch_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "formatRecoveryCount",
+            "columnName": "format_recovery_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "repairCount",
+            "columnName": "repair_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "resultArtifactId",
+            "columnName": "result_artifact_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "resultSha256",
+            "columnName": "result_sha256",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "cueCount",
+            "columnName": "cue_count",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "inputTokens",
+            "columnName": "input_tokens",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "outputTokens",
+            "columnName": "output_tokens",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "totalTokens",
+            "columnName": "total_tokens",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "costUsd",
+            "columnName": "cost_usd",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "errorMessage",
+            "columnName": "error_message",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "batch_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_translation_batch_attempt_id",
+            "unique": false,
+            "columnNames": [
+              "attempt_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_translation_batch_attempt_id` ON `${TABLE_NAME}` (`attempt_id`)"
+          },
+          {
+            "name": "index_translation_batch_attempt_id_ordinal",
+            "unique": true,
+            "columnNames": [
+              "attempt_id",
+              "ordinal"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_translation_batch_attempt_id_ordinal` ON `${TABLE_NAME}` (`attempt_id`, `ordinal`)"
+          },
+          {
+            "name": "index_translation_batch_parent_batch_id",
+            "unique": false,
+            "columnNames": [
+              "parent_batch_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_translation_batch_parent_batch_id` ON `${TABLE_NAME}` (`parent_batch_id`)"
+          },
+          {
+            "name": "index_translation_batch_result_artifact_id",
+            "unique": false,
+            "columnNames": [
+              "result_artifact_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_translation_batch_result_artifact_id` ON `${TABLE_NAME}` (`result_artifact_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "generation_attempt",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "attempt_id"
+            ],
+            "referencedColumns": [
+              "attempt_id"
+            ]
+          },
+          {
+            "table": "text_artifact",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "result_artifact_id"
+            ],
+            "referencedColumns": [
+              "artifact_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "sync_text_request_attempt",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`request_attempt_id` TEXT NOT NULL, `attempt_id` TEXT NOT NULL, `sequence` INTEGER NOT NULL, `stage` TEXT NOT NULL, `provider` TEXT NOT NULL, `provider_request_id` TEXT, `work_unit_kind` TEXT, `work_unit_id` TEXT, `operation_ordinal` INTEGER, `retry_ordinal` INTEGER, `request_bytes` INTEGER, `response_bytes` INTEGER, `http_status` INTEGER, `input_tokens` INTEGER, `output_tokens` INTEGER, `total_tokens` INTEGER, `cost_usd` TEXT, `raw_response_file_name` TEXT, `error_category` TEXT, `error_message` TEXT, `started_at_ms` INTEGER NOT NULL, `finished_at_ms` INTEGER, `duration_ms` INTEGER, `retain_until_ms` INTEGER, PRIMARY KEY(`request_attempt_id`), FOREIGN KEY(`attempt_id`) REFERENCES `generation_attempt`(`attempt_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "requestAttemptId",
+            "columnName": "request_attempt_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attemptId",
+            "columnName": "attempt_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sequence",
+            "columnName": "sequence",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stage",
+            "columnName": "stage",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "provider",
+            "columnName": "provider",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "providerRequestId",
+            "columnName": "provider_request_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "workUnitKind",
+            "columnName": "work_unit_kind",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "workUnitId",
+            "columnName": "work_unit_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "operationOrdinal",
+            "columnName": "operation_ordinal",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "retryOrdinal",
+            "columnName": "retry_ordinal",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "requestBytes",
+            "columnName": "request_bytes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "responseBytes",
+            "columnName": "response_bytes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "httpStatus",
+            "columnName": "http_status",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "inputTokens",
+            "columnName": "input_tokens",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "outputTokens",
+            "columnName": "output_tokens",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "totalTokens",
+            "columnName": "total_tokens",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "costUsd",
+            "columnName": "cost_usd",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rawResponseFileName",
+            "columnName": "raw_response_file_name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "errorCategory",
+            "columnName": "error_category",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "errorMessage",
+            "columnName": "error_message",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "startedAtMs",
+            "columnName": "started_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "finishedAtMs",
+            "columnName": "finished_at_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "durationMs",
+            "columnName": "duration_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "retainUntilMs",
+            "columnName": "retain_until_ms",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "request_attempt_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sync_text_request_attempt_attempt_id",
+            "unique": false,
+            "columnNames": [
+              "attempt_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sync_text_request_attempt_attempt_id` ON `${TABLE_NAME}` (`attempt_id`)"
+          },
+          {
+            "name": "index_sync_text_request_attempt_attempt_id_sequence",
+            "unique": true,
+            "columnNames": [
+              "attempt_id",
+              "sequence"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_sync_text_request_attempt_attempt_id_sequence` ON `${TABLE_NAME}` (`attempt_id`, `sequence`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "generation_attempt",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "attempt_id"
+            ],
+            "referencedColumns": [
+              "attempt_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "sync_text_diagnostic_event",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`event_id` TEXT NOT NULL, `process_session_id` TEXT NOT NULL, `event_type` TEXT NOT NULL, `task_id` TEXT, `attempt_id` TEXT, `work_unit_kind` TEXT, `work_unit_id` TEXT, `stage` TEXT, `outcome` TEXT, `reason` TEXT, `value_ms` INTEGER, `value_bytes` INTEGER, `created_at_ms` INTEGER NOT NULL, `elapsed_realtime_ms` INTEGER NOT NULL, PRIMARY KEY(`event_id`))",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "event_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "processSessionId",
+            "columnName": "process_session_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventType",
+            "columnName": "event_type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taskId",
+            "columnName": "task_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "attemptId",
+            "columnName": "attempt_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "workUnitKind",
+            "columnName": "work_unit_kind",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "workUnitId",
+            "columnName": "work_unit_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "stage",
+            "columnName": "stage",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "outcome",
+            "columnName": "outcome",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "reason",
+            "columnName": "reason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "valueMs",
+            "columnName": "value_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "valueBytes",
+            "columnName": "value_bytes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "created_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elapsedRealtimeMs",
+            "columnName": "elapsed_realtime_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "event_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sync_text_diagnostic_event_task_id",
+            "unique": false,
+            "columnNames": [
+              "task_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sync_text_diagnostic_event_task_id` ON `${TABLE_NAME}` (`task_id`)"
+          },
+          {
+            "name": "index_sync_text_diagnostic_event_attempt_id",
+            "unique": false,
+            "columnNames": [
+              "attempt_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sync_text_diagnostic_event_attempt_id` ON `${TABLE_NAME}` (`attempt_id`)"
+          },
+          {
+            "name": "index_sync_text_diagnostic_event_created_at_ms",
+            "unique": false,
+            "columnNames": [
+              "created_at_ms"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sync_text_diagnostic_event_created_at_ms` ON `${TABLE_NAME}` (`created_at_ms`)"
+          }
+        ]
+      },
+      {
+        "tableName": "generated_text_slot",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`slot_id` TEXT NOT NULL, `content_id` TEXT NOT NULL, `target_key` TEXT NOT NULL, `target_language` TEXT, `presentation_mode` TEXT NOT NULL, `current_result_id` TEXT, `created_at_ms` INTEGER NOT NULL, `updated_at_ms` INTEGER NOT NULL, PRIMARY KEY(`slot_id`), FOREIGN KEY(`content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "slotId",
+            "columnName": "slot_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetKey",
+            "columnName": "target_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetLanguage",
+            "columnName": "target_language",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "presentationMode",
+            "columnName": "presentation_mode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentResultId",
+            "columnName": "current_result_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "created_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMs",
+            "columnName": "updated_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "slot_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_generated_text_slot_content_id",
+            "unique": false,
+            "columnNames": [
+              "content_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_generated_text_slot_content_id` ON `${TABLE_NAME}` (`content_id`)"
+          },
+          {
+            "name": "index_generated_text_slot_content_id_target_key",
+            "unique": true,
+            "columnNames": [
+              "content_id",
+              "target_key"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_generated_text_slot_content_id_target_key` ON `${TABLE_NAME}` (`content_id`, `target_key`)"
+          },
+          {
+            "name": "index_generated_text_slot_content_id_slot_id",
+            "unique": true,
+            "columnNames": [
+              "content_id",
+              "slot_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_generated_text_slot_content_id_slot_id` ON `${TABLE_NAME}` (`content_id`, `slot_id`)"
+          },
+          {
+            "name": "index_generated_text_slot_current_result_id",
+            "unique": true,
+            "columnNames": [
+              "current_result_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_generated_text_slot_current_result_id` ON `${TABLE_NAME}` (`current_result_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "generated_text_result",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`result_id` TEXT NOT NULL, `slot_id` TEXT NOT NULL, `content_id` TEXT NOT NULL, `task_id` TEXT, `attempt_id` TEXT, `source_language` TEXT, `target_language` TEXT, `presentation_mode` TEXT NOT NULL, `source_revision_id` TEXT NOT NULL, `target_revision_id` TEXT, `source_sha256` TEXT NOT NULL, `target_sha256` TEXT, `cue_count` INTEGER NOT NULL, `completeness` TEXT NOT NULL DEFAULT 'Final', `covered_end_ms` INTEGER, `completed_window_count` INTEGER, `total_window_count` INTEGER, `scheme_id` TEXT NOT NULL, `model` TEXT, `policy_id` TEXT, `policy_version` INTEGER, `policy_revision` TEXT, `system_prompt_sha256` TEXT, `style_prompt_sha256` TEXT, `input_tokens` INTEGER, `output_tokens` INTEGER, `total_tokens` INTEGER, `cost_usd` TEXT, `created_at_ms` INTEGER NOT NULL, PRIMARY KEY(`result_id`), FOREIGN KEY(`slot_id`) REFERENCES `generated_text_slot`(`slot_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`source_revision_id`) REFERENCES `timeline_revision`(`revision_id`) ON UPDATE CASCADE ON DELETE NO ACTION , FOREIGN KEY(`target_revision_id`) REFERENCES `timeline_revision`(`revision_id`) ON UPDATE CASCADE ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "resultId",
+            "columnName": "result_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "slotId",
+            "columnName": "slot_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "taskId",
+            "columnName": "task_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "attemptId",
+            "columnName": "attempt_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sourceLanguage",
+            "columnName": "source_language",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "targetLanguage",
+            "columnName": "target_language",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "presentationMode",
+            "columnName": "presentation_mode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceRevisionId",
+            "columnName": "source_revision_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetRevisionId",
+            "columnName": "target_revision_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sourceSha256",
+            "columnName": "source_sha256",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetSha256",
+            "columnName": "target_sha256",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "cueCount",
+            "columnName": "cue_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "completeness",
+            "columnName": "completeness",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'Final'"
+          },
+          {
+            "fieldPath": "coveredEndMs",
+            "columnName": "covered_end_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "completedWindowCount",
+            "columnName": "completed_window_count",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "totalWindowCount",
+            "columnName": "total_window_count",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "schemeId",
+            "columnName": "scheme_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "model",
+            "columnName": "model",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "policyId",
+            "columnName": "policy_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "policyVersion",
+            "columnName": "policy_version",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "policyRevision",
+            "columnName": "policy_revision",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "systemPromptSha256",
+            "columnName": "system_prompt_sha256",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "stylePromptSha256",
+            "columnName": "style_prompt_sha256",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "inputTokens",
+            "columnName": "input_tokens",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "outputTokens",
+            "columnName": "output_tokens",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "totalTokens",
+            "columnName": "total_tokens",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "costUsd",
+            "columnName": "cost_usd",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "created_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "result_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_generated_text_result_slot_id",
+            "unique": false,
+            "columnNames": [
+              "slot_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_generated_text_result_slot_id` ON `${TABLE_NAME}` (`slot_id`)"
+          },
+          {
+            "name": "index_generated_text_result_content_id",
+            "unique": false,
+            "columnNames": [
+              "content_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_generated_text_result_content_id` ON `${TABLE_NAME}` (`content_id`)"
+          },
+          {
+            "name": "index_generated_text_result_task_id",
+            "unique": false,
+            "columnNames": [
+              "task_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_generated_text_result_task_id` ON `${TABLE_NAME}` (`task_id`)"
+          },
+          {
+            "name": "index_generated_text_result_attempt_id",
+            "unique": false,
+            "columnNames": [
+              "attempt_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_generated_text_result_attempt_id` ON `${TABLE_NAME}` (`attempt_id`)"
+          },
+          {
+            "name": "index_generated_text_result_source_revision_id",
+            "unique": false,
+            "columnNames": [
+              "source_revision_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_generated_text_result_source_revision_id` ON `${TABLE_NAME}` (`source_revision_id`)"
+          },
+          {
+            "name": "index_generated_text_result_target_revision_id",
+            "unique": false,
+            "columnNames": [
+              "target_revision_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_generated_text_result_target_revision_id` ON `${TABLE_NAME}` (`target_revision_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "generated_text_slot",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "slot_id"
+            ],
+            "referencedColumns": [
+              "slot_id"
+            ]
+          },
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          },
+          {
+            "table": "timeline_revision",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "source_revision_id"
+            ],
+            "referencedColumns": [
+              "revision_id"
+            ]
+          },
+          {
+            "table": "timeline_revision",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "target_revision_id"
+            ],
+            "referencedColumns": [
+              "revision_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "sync_text_runner_lease",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`lease_key` TEXT NOT NULL, `owner_id` TEXT NOT NULL, `expires_at_ms` INTEGER NOT NULL, `generation` INTEGER NOT NULL, PRIMARY KEY(`lease_key`))",
+        "fields": [
+          {
+            "fieldPath": "leaseKey",
+            "columnName": "lease_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ownerId",
+            "columnName": "owner_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expiresAtMs",
+            "columnName": "expires_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "generation",
+            "columnName": "generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "lease_key"
+          ]
+        }
+      },
+      {
+        "tableName": "sync_text_queue_control",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `pause_all` INTEGER NOT NULL, `updated_at_ms` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pauseAll",
+            "columnName": "pause_all",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMs",
+            "columnName": "updated_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "text_artifact",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`artifact_id` TEXT NOT NULL, `kind` TEXT NOT NULL, `schema_version` INTEGER NOT NULL, `codec_version` INTEGER NOT NULL, `canonicalizer_version` INTEGER NOT NULL, `payload_sha256` TEXT NOT NULL, `byte_size` INTEGER NOT NULL, `cue_count` INTEGER, `created_at_ms` INTEGER NOT NULL, `gc_candidate_since_ms` INTEGER, PRIMARY KEY(`artifact_id`))",
+        "fields": [
+          {
+            "fieldPath": "artifactId",
+            "columnName": "artifact_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "schemaVersion",
+            "columnName": "schema_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "codecVersion",
+            "columnName": "codec_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "canonicalizerVersion",
+            "columnName": "canonicalizer_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payloadSha256",
+            "columnName": "payload_sha256",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "byteSize",
+            "columnName": "byte_size",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cueCount",
+            "columnName": "cue_count",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "created_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gcCandidateSinceMs",
+            "columnName": "gc_candidate_since_ms",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "artifact_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_text_artifact_kind",
+            "unique": false,
+            "columnNames": [
+              "kind"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_text_artifact_kind` ON `${TABLE_NAME}` (`kind`)"
+          },
+          {
+            "name": "index_text_artifact_gc_candidate_since_ms",
+            "unique": false,
+            "columnNames": [
+              "gc_candidate_since_ms"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_text_artifact_gc_candidate_since_ms` ON `${TABLE_NAME}` (`gc_candidate_since_ms`)"
+          }
+        ]
+      },
+      {
+        "tableName": "timeline_revision",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`revision_id` TEXT NOT NULL, `content_id` TEXT NOT NULL, `role` TEXT NOT NULL, `source_revision_id` TEXT, `source_revision_hash` TEXT, `completeness` TEXT NOT NULL, `covered_end_ms` INTEGER, `cue_count` INTEGER NOT NULL, `content_hash` TEXT NOT NULL, `assembler_version` INTEGER NOT NULL, `created_at_ms` INTEGER NOT NULL, PRIMARY KEY(`revision_id`), FOREIGN KEY(`content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`source_revision_id`) REFERENCES `timeline_revision`(`revision_id`) ON UPDATE CASCADE ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "revisionId",
+            "columnName": "revision_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "role",
+            "columnName": "role",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceRevisionId",
+            "columnName": "source_revision_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sourceRevisionHash",
+            "columnName": "source_revision_hash",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "completeness",
+            "columnName": "completeness",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "coveredEndMs",
+            "columnName": "covered_end_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "cueCount",
+            "columnName": "cue_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentHash",
+            "columnName": "content_hash",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assemblerVersion",
+            "columnName": "assembler_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "created_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "revision_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_timeline_revision_content_id",
+            "unique": false,
+            "columnNames": [
+              "content_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_timeline_revision_content_id` ON `${TABLE_NAME}` (`content_id`)"
+          },
+          {
+            "name": "index_timeline_revision_source_revision_id",
+            "unique": false,
+            "columnNames": [
+              "source_revision_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_timeline_revision_source_revision_id` ON `${TABLE_NAME}` (`source_revision_id`)"
+          },
+          {
+            "name": "index_timeline_revision_content_id_role_content_hash_completeness",
+            "unique": false,
+            "columnNames": [
+              "content_id",
+              "role",
+              "content_hash",
+              "completeness"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_timeline_revision_content_id_role_content_hash_completeness` ON `${TABLE_NAME}` (`content_id`, `role`, `content_hash`, `completeness`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          },
+          {
+            "table": "timeline_revision",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "source_revision_id"
+            ],
+            "referencedColumns": [
+              "revision_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "timeline_revision_artifact",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`revision_id` TEXT NOT NULL, `artifact_id` TEXT NOT NULL, `ordinal` INTEGER NOT NULL, `role` TEXT NOT NULL, PRIMARY KEY(`revision_id`, `role`, `ordinal`), FOREIGN KEY(`revision_id`) REFERENCES `timeline_revision`(`revision_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`artifact_id`) REFERENCES `text_artifact`(`artifact_id`) ON UPDATE CASCADE ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "revisionId",
+            "columnName": "revision_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "artifactId",
+            "columnName": "artifact_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ordinal",
+            "columnName": "ordinal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "role",
+            "columnName": "role",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "revision_id",
+            "role",
+            "ordinal"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_timeline_revision_artifact_artifact_id",
+            "unique": false,
+            "columnNames": [
+              "artifact_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_timeline_revision_artifact_artifact_id` ON `${TABLE_NAME}` (`artifact_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "timeline_revision",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "revision_id"
+            ],
+            "referencedColumns": [
+              "revision_id"
+            ]
+          },
+          {
+            "table": "text_artifact",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "artifact_id"
+            ],
+            "referencedColumns": [
+              "artifact_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "discovered_text_candidate",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`candidate_id` TEXT NOT NULL, `content_id` TEXT NOT NULL, `source_id` TEXT NOT NULL, `document_id` TEXT NOT NULL, `display_name` TEXT NOT NULL, `mime_type` TEXT, `format` TEXT, `language` TEXT, `label` TEXT, `roles_mask` INTEGER NOT NULL, `match_basis` TEXT NOT NULL, `source_generation` INTEGER NOT NULL, `failure_message` TEXT, PRIMARY KEY(`candidate_id`), FOREIGN KEY(`content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`source_id`) REFERENCES `source`(`source_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "candidateId",
+            "columnName": "candidate_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceId",
+            "columnName": "source_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "documentId",
+            "columnName": "document_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "display_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mimeType",
+            "columnName": "mime_type",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "format",
+            "columnName": "format",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "language",
+            "columnName": "language",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "label",
+            "columnName": "label",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rolesMask",
+            "columnName": "roles_mask",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "matchBasis",
+            "columnName": "match_basis",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceGeneration",
+            "columnName": "source_generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "failureMessage",
+            "columnName": "failure_message",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "candidate_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_discovered_text_candidate_content_id",
+            "unique": false,
+            "columnNames": [
+              "content_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_discovered_text_candidate_content_id` ON `${TABLE_NAME}` (`content_id`)"
+          },
+          {
+            "name": "index_discovered_text_candidate_source_id",
+            "unique": false,
+            "columnNames": [
+              "source_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_discovered_text_candidate_source_id` ON `${TABLE_NAME}` (`source_id`)"
+          },
+          {
+            "name": "index_discovered_text_candidate_content_id_source_id_document_id",
+            "unique": true,
+            "columnNames": [
+              "content_id",
+              "source_id",
+              "document_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_discovered_text_candidate_content_id_source_id_document_id` ON `${TABLE_NAME}` (`content_id`, `source_id`, `document_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          },
+          {
+            "table": "source",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "source_id"
+            ],
+            "referencedColumns": [
+              "source_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "text_import_operation",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`import_id` TEXT NOT NULL, `content_id` TEXT NOT NULL, `candidate_id` TEXT, `staging_uri` TEXT, `release_permission_on_commit` INTEGER NOT NULL, `source_display_name` TEXT NOT NULL, `mime_type` TEXT, `detected_format` TEXT, `requested_slot` TEXT, `selection_mode` TEXT, `state` TEXT NOT NULL, `artifact_id` TEXT, `revision_id` TEXT, `track_id` TEXT, `failure_category` TEXT, `failure_message` TEXT, `created_at_ms` INTEGER NOT NULL, `updated_at_ms` INTEGER NOT NULL, PRIMARY KEY(`import_id`), FOREIGN KEY(`content_id`) REFERENCES `content`(`content_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "importId",
+            "columnName": "import_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentId",
+            "columnName": "content_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "candidateId",
+            "columnName": "candidate_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "stagingUri",
+            "columnName": "staging_uri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "releasePermissionOnCommit",
+            "columnName": "release_permission_on_commit",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceDisplayName",
+            "columnName": "source_display_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mimeType",
+            "columnName": "mime_type",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "detectedFormat",
+            "columnName": "detected_format",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "requestedSlot",
+            "columnName": "requested_slot",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "selectionMode",
+            "columnName": "selection_mode",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "artifactId",
+            "columnName": "artifact_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "revisionId",
+            "columnName": "revision_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "trackId",
+            "columnName": "track_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "failureCategory",
+            "columnName": "failure_category",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "failureMessage",
+            "columnName": "failure_message",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "created_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMs",
+            "columnName": "updated_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "import_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_text_import_operation_content_id",
+            "unique": false,
+            "columnNames": [
+              "content_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_text_import_operation_content_id` ON `${TABLE_NAME}` (`content_id`)"
+          },
+          {
+            "name": "index_text_import_operation_candidate_id",
+            "unique": false,
+            "columnNames": [
+              "candidate_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_text_import_operation_candidate_id` ON `${TABLE_NAME}` (`candidate_id`)"
+          },
+          {
+            "name": "index_text_import_operation_state",
+            "unique": false,
+            "columnNames": [
+              "state"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_text_import_operation_state` ON `${TABLE_NAME}` (`state`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "content",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "content_id"
+            ],
+            "referencedColumns": [
+              "content_id"
+            ]
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'd038f6cd636ca09bd959a037a2ccf567')"
+    ]
+  }
+}
