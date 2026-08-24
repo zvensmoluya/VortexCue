@@ -151,6 +151,41 @@ class PlaylistRepositoryTest {
     }
 
     @Test
+    fun batchMembershipActionsAddMoveAndProtectDefaultFavorite() = runBlocking {
+        val source = repository.createPlaylist("Source")
+        val target = repository.createPlaylist("Target")
+        val other = repository.createPlaylist("Other")
+        val first = add("first-batch.mp3", 1L)
+        val second = add("second-batch.mp3", 2L)
+        val third = add("third-batch.mp3", 3L)
+        repository.setContentPlaylists(first, setOf(source.playlistId))
+        repository.setContentPlaylists(second, setOf(source.playlistId, target.playlistId))
+        repository.setContentPlaylists(third, setOf(source.playlistId, other.playlistId))
+
+        val added = repository.addContentsToPlaylists(listOf(first, second), setOf(target.playlistId))
+        assertEquals(PlaylistBatchResult(2, 1, 1, 0), added)
+
+        val moved = repository.moveContentsFromPlaylist(
+            listOf(first, second, third),
+            source.playlistId,
+            target.playlistId,
+        )
+        assertEquals(PlaylistBatchResult(3, 3, 1, 3), moved)
+        assertTrue(repository.playlistContentIds(source.playlistId).isEmpty())
+        assertEquals(setOf(first, second, third), repository.playlistContentIds(target.playlistId).toSet())
+        assertEquals(setOf(other.playlistId, target.playlistId), repository.playlistIdsForContent(third))
+
+        val removed = repository.removeContentsFromPlaylist(listOf(first), target.playlistId)
+        assertEquals(PlaylistBatchResult(1, 1, 1, 1), removed)
+        val defaultId = repository.playlists.first().first { it.isDefaultFavorite }.playlistId
+        assertEquals(setOf(defaultId), repository.playlistIdsForContent(first))
+
+        val protected = repository.removeContentsFromPlaylist(listOf(first), defaultId)
+        assertEquals(PlaylistBatchResult(1, 0, 0, 0, protectedContentCount = 1), protected)
+        assertEquals(setOf(defaultId), repository.playlistIdsForContent(first))
+    }
+
+    @Test
     fun recentPlaylistsAreLimitedToSixNewestPlayedLists() = runBlocking {
         val contentId = add("shared.mp3", 1L)
         val created = (1..7).map { repository.createPlaylist("List $it") }

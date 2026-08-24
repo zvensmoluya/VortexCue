@@ -142,6 +142,17 @@ data class ImportContentResult(
         get() = contentCount - changedContentCount
 }
 
+data class PlaylistBatchResult(
+    val contentCount: Int,
+    val changedContentCount: Int,
+    val addedPlaylistMembershipCount: Int,
+    val removedPlaylistMembershipCount: Int,
+    val protectedContentCount: Int = 0,
+) {
+    val unchangedContentCount: Int
+        get() = contentCount - changedContentCount
+}
+
 enum class DiscoveryItemStatus {
     Pending,
     Collected,

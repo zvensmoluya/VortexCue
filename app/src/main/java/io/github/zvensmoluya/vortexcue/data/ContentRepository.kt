@@ -256,6 +256,124 @@ class ContentRepository(
         }
     }
 
+    suspend fun addContentsToPlaylists(
+        contentIds: Collection<String>,
+        playlistIds: Set<String>,
+    ): PlaylistBatchResult {
+        require(playlistIds.isNotEmpty()) { "至少选择一个歌单" }
+        return database.withWriteTransaction {
+            playlistIds.forEach { requireNotNull(dao.playlist(it)) { "歌单不存在" } }
+            val canonicalIds = contentIds.map { resolveRedirect(it) }.distinct()
+            canonicalIds.forEach { requireContent(it) }
+            val nextPositions =
+                playlistIds.associateWith { playlistId ->
+                    (dao.playlistItems(playlistId).maxOfOrNull { it.sortPosition } ?: -1L) + 1L
+                }.toMutableMap()
+            var changedContentCount = 0
+            var addedMembershipCount = 0
+            canonicalIds.forEach { contentId ->
+                val existing = dao.playlistItemsForContent(contentId).mapTo(hashSetOf()) { it.playlistId }
+                val missingTargets = playlistIds.filterNot(existing::contains)
+                if (missingTargets.isNotEmpty()) changedContentCount += 1
+                missingTargets.forEach { playlistId ->
+                    val position = requireNotNull(nextPositions[playlistId])
+                    dao.upsertPlaylistItem(PlaylistItemEntity(playlistId, contentId, position, nowMs()))
+                    nextPositions[playlistId] = position + 1L
+                    addedMembershipCount += 1
+                }
+            }
+            PlaylistBatchResult(
+                contentCount = canonicalIds.size,
+                changedContentCount = changedContentCount,
+                addedPlaylistMembershipCount = addedMembershipCount,
+                removedPlaylistMembershipCount = 0,
+            )
+        }
+    }
+
+    suspend fun moveContentsFromPlaylist(
+        contentIds: Collection<String>,
+        sourcePlaylistId: String,
+        targetPlaylistId: String,
+    ): PlaylistBatchResult {
+        require(sourcePlaylistId != targetPlaylistId) { "目标歌单不能是当前歌单" }
+        return database.withWriteTransaction {
+            requireNotNull(dao.playlist(sourcePlaylistId)) { "当前歌单不存在" }
+            requireNotNull(dao.playlist(targetPlaylistId)) { "目标歌单不存在" }
+            val canonicalIds = contentIds.map { resolveRedirect(it) }.distinct()
+            canonicalIds.forEach { requireContent(it) }
+            var nextPosition = (dao.playlistItems(targetPlaylistId).maxOfOrNull { it.sortPosition } ?: -1L) + 1L
+            var movedContentCount = 0
+            var addedMembershipCount = 0
+            canonicalIds.forEach { contentId ->
+                val memberships = dao.playlistItemsForContent(contentId)
+                if (memberships.none { it.playlistId == sourcePlaylistId }) return@forEach
+                if (memberships.none { it.playlistId == targetPlaylistId }) {
+                    dao.upsertPlaylistItem(PlaylistItemEntity(targetPlaylistId, contentId, nextPosition++, nowMs()))
+                    addedMembershipCount += 1
+                }
+                dao.deletePlaylistItem(sourcePlaylistId, contentId)
+                movedContentCount += 1
+            }
+            normalizePlaylistItemsInside(sourcePlaylistId)
+            PlaylistBatchResult(
+                contentCount = canonicalIds.size,
+                changedContentCount = movedContentCount,
+                addedPlaylistMembershipCount = addedMembershipCount,
+                removedPlaylistMembershipCount = movedContentCount,
+            )
+        }
+    }
+
+    suspend fun removeContentsFromPlaylist(
+        contentIds: Collection<String>,
+        playlistId: String,
+    ): PlaylistBatchResult =
+        database.withWriteTransaction {
+            val source = requireNotNull(dao.playlist(playlistId)) { "当前歌单不存在" }
+            val canonicalIds = contentIds.map { resolveRedirect(it) }.distinct()
+            canonicalIds.forEach { requireContent(it) }
+            var fallback: PlaylistEntity? = null
+            var fallbackNextPosition = 0L
+            var removedContentCount = 0
+            var addedMembershipCount = 0
+            var protectedContentCount = 0
+            canonicalIds.forEach { contentId ->
+                val memberships = dao.playlistItemsForContent(contentId)
+                if (memberships.none { it.playlistId == playlistId }) return@forEach
+                if (source.systemRole == PlaylistSystemRole.DefaultFavorite.name && memberships.size == 1) {
+                    protectedContentCount += 1
+                    return@forEach
+                }
+                dao.deletePlaylistItem(playlistId, contentId)
+                removedContentCount += 1
+                if (memberships.size == 1) {
+                    if (fallback == null) {
+                        fallback = ensureDefaultPlaylistInside()
+                        fallbackNextPosition =
+                            (dao.playlistItems(requireNotNull(fallback).playlistId).maxOfOrNull { it.sortPosition } ?: -1L) + 1L
+                    }
+                    dao.upsertPlaylistItem(
+                        PlaylistItemEntity(
+                            requireNotNull(fallback).playlistId,
+                            contentId,
+                            fallbackNextPosition++,
+                            nowMs(),
+                        ),
+                    )
+                    addedMembershipCount += 1
+                }
+            }
+            normalizePlaylistItemsInside(playlistId)
+            PlaylistBatchResult(
+                contentCount = canonicalIds.size,
+                changedContentCount = removedContentCount,
+                addedPlaylistMembershipCount = addedMembershipCount,
+                removedPlaylistMembershipCount = removedContentCount,
+                protectedContentCount = protectedContentCount,
+            )
+        }
+
     suspend fun removeContentFromPlaylist(contentId: String, playlistId: String) {
         database.withWriteTransaction {
             val canonical = resolveRedirect(contentId)

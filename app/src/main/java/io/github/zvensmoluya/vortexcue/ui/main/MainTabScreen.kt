@@ -86,6 +86,7 @@ import io.github.zvensmoluya.vortexcue.core.model.displayArtist
 import io.github.zvensmoluya.vortexcue.core.model.displayTitle
 import io.github.zvensmoluya.vortexcue.data.ContentRepository
 import io.github.zvensmoluya.vortexcue.data.ContentSummary
+import io.github.zvensmoluya.vortexcue.data.PlaylistBatchResult
 import io.github.zvensmoluya.vortexcue.data.PlaylistSummary
 import io.github.zvensmoluya.vortexcue.data.PlaybackRecoveryProjection
 import io.github.zvensmoluya.vortexcue.data.SourceSummary
@@ -170,6 +171,9 @@ internal fun MainTabScreen(
     var playlistToDelete by remember { mutableStateOf<PlaylistSummary?>(null) }
     var playlistReorderMode by rememberSaveable { mutableStateOf(false) }
     var contentReorderMode by rememberSaveable { mutableStateOf(false) }
+    var contentOrganizeMode by rememberSaveable { mutableStateOf(false) }
+    var organizedContentIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var playlistBatchTargetMode by remember { mutableStateOf<PlaylistBatchTargetMode?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
     val queueListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val settingsListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
@@ -178,6 +182,15 @@ internal fun MainTabScreen(
         if (playlistViewId != null && playlistViewId != AllContentPlaylistId && playlists.none { it.playlistId == playlistViewId }) {
             onPlaylistViewChanged(null)
         }
+    }
+    LaunchedEffect(playlistViewId) {
+        contentReorderMode = false
+        contentOrganizeMode = false
+        organizedContentIds = emptySet()
+        playlistBatchTargetMode = null
+    }
+    LaunchedEffect(detailContent) {
+        organizedContentIds = organizedContentIds.intersect(detailContent.mapTo(hashSetOf(), ContentSummary::contentId))
     }
     LaunchedEffect(openImportHubRequest) {
         if (openImportHubRequest > 0) {
@@ -290,6 +303,8 @@ internal fun MainTabScreen(
                             listState = playlistDetailListState,
                             onBack = {
                                 contentReorderMode = false
+                                contentOrganizeMode = false
+                                organizedContentIds = emptySet()
                                 onPlaylistViewChanged(null)
                             },
                             onPlayAll = {
@@ -302,7 +317,13 @@ internal fun MainTabScreen(
                                 else onPlayPlaylist(playlistViewId, detailContent.map { it.contentId }, index)
                             },
                             onLongPress = { selectedItem = it },
-                            onReorderModeChanged = { contentReorderMode = it },
+                            onReorderModeChanged = {
+                                contentReorderMode = it
+                                if (it) {
+                                    contentOrganizeMode = false
+                                    organizedContentIds = emptySet()
+                                }
+                            },
                             onMove = { from, to ->
                                 val ids = detailContent.map { it.contentId }.toMutableList()
                                 if (!isAllContent && from in ids.indices && to in ids.indices) {
@@ -311,6 +332,30 @@ internal fun MainTabScreen(
                                 }
                             },
                             onAddContent = { importVisible = true },
+                            organizeMode = contentOrganizeMode,
+                            selectedContentIds = organizedContentIds,
+                            onOrganizeModeChanged = { enabled ->
+                                contentOrganizeMode = enabled
+                                if (enabled) contentReorderMode = false else organizedContentIds = emptySet()
+                            },
+                            onSelectionChanged = { organizedContentIds = it },
+                            onBatchAdd = { playlistBatchTargetMode = PlaylistBatchTargetMode.Add },
+                            onBatchMove = { playlistBatchTargetMode = PlaylistBatchTargetMode.Move },
+                            onBatchRemove = {
+                                val currentPlaylistId = playlistViewId.takeIf { it != AllContentPlaylistId }
+                                val selectedIds = organizedContentIds
+                                if (currentPlaylistId != null && selectedIds.isNotEmpty()) {
+                                    scope.launch {
+                                        runCatching {
+                                            repository.removeContentsFromPlaylist(selectedIds, currentPlaylistId)
+                                        }.onSuccess { result ->
+                                            notice = batchRemoveNotice(result)
+                                            contentOrganizeMode = false
+                                            organizedContentIds = emptySet()
+                                        }.onFailure { notice = it.message ?: "无法移除所选内容" }
+                                    }
+                                }
+                            },
                         )
                     }
                 MainTab.Queue ->
@@ -445,6 +490,50 @@ internal fun MainTabScreen(
                         notice = "歌单已更新"
                     }
                         .onFailure { notice = it.message ?: "无法更新歌单" }
+                }
+            },
+        )
+    }
+
+    playlistBatchTargetMode?.let { mode ->
+        val currentPlaylistId = playlistViewId?.takeIf { it != AllContentPlaylistId }
+        PlaylistBatchTargetSheet(
+            mode = mode,
+            selectedContentCount = organizedContentIds.size,
+            playlists = playlists,
+            excludedPlaylistId = currentPlaylistId,
+            onDismiss = { playlistBatchTargetMode = null },
+            onConfirm = { selectedTargetIds, newName ->
+                val selectedContentIds = organizedContentIds
+                scope.launch {
+                    runCatching {
+                        val created = newName?.let { repository.createPlaylist(it) }
+                        when (mode) {
+                            PlaylistBatchTargetMode.Add -> {
+                                val targets = selectedTargetIds + listOfNotNull(created?.playlistId)
+                                require(targets.isNotEmpty()) { "至少选择一个目标歌单" }
+                                val result = repository.addContentsToPlaylists(selectedContentIds, targets)
+                                Triple(result, targets.size, null)
+                            }
+                            PlaylistBatchTargetMode.Move -> {
+                                val source = requireNotNull(currentPlaylistId) { "全部内容不能执行移动" }
+                                val targetId = created?.playlistId ?: selectedTargetIds.singleOrNull()
+                                requireNotNull(targetId) { "请选择一个目标歌单" }
+                                val result = repository.moveContentsFromPlaylist(selectedContentIds, source, targetId)
+                                val targetName = created?.name ?: playlists.firstOrNull { it.playlistId == targetId }?.name
+                                Triple(result, 1, targetName)
+                            }
+                        }
+                    }.onSuccess { (result, targetCount, targetName) ->
+                        notice =
+                            when (mode) {
+                                PlaylistBatchTargetMode.Add -> batchAddNotice(result, targetCount)
+                                PlaylistBatchTargetMode.Move -> batchMoveNotice(result, targetName)
+                            }
+                        playlistBatchTargetMode = null
+                        contentOrganizeMode = false
+                        organizedContentIds = emptySet()
+                    }.onFailure { notice = it.message ?: "无法更新歌单" }
                 }
             },
         )
@@ -766,6 +855,34 @@ private fun Notice(message: String, onDismiss: () -> Unit, modifier: Modifier = 
         }
     }
 }
+
+private fun batchAddNotice(result: PlaylistBatchResult, targetCount: Int): String =
+    when {
+        result.changedContentCount == 0 -> "所选 ${result.contentCount} 项已在目标歌单"
+        result.unchangedContentCount > 0 ->
+            "已更新 ${result.changedContentCount} 项，另有 ${result.unchangedContentCount} 项已在目标歌单"
+        else -> "已将 ${result.changedContentCount} 项加入 $targetCount 个歌单"
+    }
+
+private fun batchMoveNotice(result: PlaylistBatchResult, targetName: String?): String {
+    val alreadyInTarget = result.removedPlaylistMembershipCount - result.addedPlaylistMembershipCount
+    return when {
+        result.changedContentCount == 0 -> "所选内容已不在当前歌单"
+        alreadyInTarget > 0 ->
+            "已移动 ${result.changedContentCount} 项，其中 $alreadyInTarget 项原已在目标歌单"
+        targetName != null -> "已移动 ${result.changedContentCount} 项到「$targetName」"
+        else -> "已移动 ${result.changedContentCount} 项"
+    }
+}
+
+private fun batchRemoveNotice(result: PlaylistBatchResult): String =
+    when {
+        result.protectedContentCount == result.contentCount ->
+            "默认收藏中的唯一归属不能移除，请先加入其他歌单"
+        result.protectedContentCount > 0 ->
+            "已移除 ${result.changedContentCount} 项，${result.protectedContentCount} 项仍保留在默认收藏"
+        else -> "已从当前歌单移除 ${result.changedContentCount} 项"
+    }
 
 private fun MainTab.label(): String =
     when (this) {

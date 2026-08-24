@@ -9,6 +9,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import io.github.zvensmoluya.vortexcue.core.model.ContentAvailability
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
 import io.github.zvensmoluya.vortexcue.data.ContentDisposition
@@ -192,6 +196,54 @@ class MainSurfaceComposeTest {
     }
 
     @Test
+    fun playlistDetailOffersBatchOrganizationActions() {
+        val content = listOf(summary("第一项.mp3"), summary("第二项.mp3"))
+        var addRequests = 0
+        var moveRequests = 0
+        var removeRequests = 0
+        compose.setContent {
+            VortexCueTheme {
+                var organizeMode by remember { mutableStateOf(false) }
+                var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+                PlaylistDetail(
+                    title = "睡前",
+                    content = content,
+                    isAllContent = false,
+                    reorderMode = false,
+                    listState = rememberLazyListState(),
+                    onBack = {},
+                    onPlayAll = {},
+                    onPlay = {},
+                    onLongPress = {},
+                    onReorderModeChanged = {},
+                    onMove = { _, _ -> },
+                    onAddContent = {},
+                    organizeMode = organizeMode,
+                    selectedContentIds = selectedIds,
+                    onOrganizeModeChanged = { organizeMode = it },
+                    onSelectionChanged = { selectedIds = it },
+                    onBatchAdd = { addRequests += 1 },
+                    onBatchMove = { moveRequests += 1 },
+                    onBatchRemove = { removeRequests += 1 },
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("歌单操作").performClick()
+        compose.onNodeWithText("整理内容").performClick()
+        compose.onNodeWithText("第一项").performClick()
+        compose.onNodeWithText("加入歌单").performClick()
+        compose.onNodeWithText("移动到").performClick()
+        compose.onNodeWithText("从此移除").performClick()
+
+        compose.runOnIdle {
+            assertEquals(1, addRequests)
+            assertEquals(1, moveRequests)
+            assertEquals(1, removeRequests)
+        }
+    }
+
+    @Test
     fun membershipSheetSavesMultiplePlaylistSelections() {
         var saved: Set<String>? = null
         compose.setContent {
@@ -209,6 +261,55 @@ class MainSurfaceComposeTest {
         compose.onNodeWithText("练习").performClick()
         compose.onNodeWithText("保存").performClick()
         compose.runOnIdle { assertEquals(setOf("first", "second"), saved) }
+    }
+
+    @Test
+    fun batchTargetSheetSupportsMultipleAddTargets() {
+        var saved: Set<String>? = null
+        compose.setContent {
+            VortexCueTheme {
+                PlaylistBatchTargetSheet(
+                    mode = PlaylistBatchTargetMode.Add,
+                    selectedContentCount = 2,
+                    playlists =
+                        listOf(
+                            PlaylistSummary("current", "当前歌单", 2),
+                            PlaylistSummary("first", "睡前", 1),
+                            PlaylistSummary("second", "练习", 1),
+                        ),
+                    excludedPlaylistId = "current",
+                    onDismiss = {},
+                    onConfirm = { ids, _ -> saved = ids },
+                )
+            }
+        }
+
+        compose.onNodeWithText("睡前").performClick()
+        compose.onNodeWithText("练习").performClick()
+        compose.onNodeWithText("加入").performClick()
+        compose.runOnIdle { assertEquals(setOf("first", "second"), saved) }
+    }
+
+    @Test
+    fun batchTargetSheetKeepsMoveDestinationSingle() {
+        var saved: Set<String>? = null
+        compose.setContent {
+            VortexCueTheme {
+                PlaylistBatchTargetSheet(
+                    mode = PlaylistBatchTargetMode.Move,
+                    selectedContentCount = 2,
+                    playlists = listOf(PlaylistSummary("first", "睡前", 1), PlaylistSummary("second", "练习", 1)),
+                    excludedPlaylistId = null,
+                    onDismiss = {},
+                    onConfirm = { ids, _ -> saved = ids },
+                )
+            }
+        }
+
+        compose.onNodeWithText("睡前").performClick()
+        compose.onNodeWithText("练习").performClick()
+        compose.onNodeWithText("移动").performClick()
+        compose.runOnIdle { assertEquals(setOf("second"), saved) }
     }
 
     @Test

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.DragHandle
 import androidx.compose.material.icons.outlined.Edit
@@ -340,15 +341,45 @@ internal fun PlaylistDetail(
     onReorderModeChanged: (Boolean) -> Unit,
     onMove: (Int, Int) -> Unit,
     onAddContent: () -> Unit,
+    organizeMode: Boolean = false,
+    selectedContentIds: Set<String> = emptySet(),
+    onOrganizeModeChanged: (Boolean) -> Unit = {},
+    onSelectionChanged: (Set<String>) -> Unit = {},
+    onBatchAdd: () -> Unit = {},
+    onBatchMove: () -> Unit = {},
+    onBatchRemove: () -> Unit = {},
 ) {
     Column(modifier = Modifier.fillMaxSize().background(AppBackground).statusBarsPadding()) {
         Row(
             modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回", tint = AppPrimaryText) }
-            Text(title, color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            if (!isAllContent) {
+            IconButton(onClick = { if (organizeMode) onOrganizeModeChanged(false) else onBack() }) {
+                Icon(
+                    if (organizeMode) Icons.Outlined.Close else Icons.AutoMirrored.Outlined.ArrowBack,
+                    contentDescription = if (organizeMode) "退出整理" else "返回",
+                    tint = AppPrimaryText,
+                )
+            }
+            Text(
+                if (organizeMode) "已选择 ${selectedContentIds.size} 项" else title,
+                color = AppPrimaryText,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (organizeMode) {
+                TextButton(
+                    onClick = {
+                        onSelectionChanged(
+                            if (selectedContentIds.size == content.size) emptySet()
+                            else content.mapTo(linkedSetOf(), ContentSummary::contentId),
+                        )
+                    },
+                ) { Text(if (selectedContentIds.size == content.size) "取消全选" else "全选", color = AppAccent) }
+            } else if (!isAllContent) {
                 if (reorderMode) {
                     TextButton(onClick = { onReorderModeChanged(false) }) { Text("完成", color = AppAccent) }
                 } else {
@@ -361,9 +392,17 @@ internal fun PlaylistDetail(
                                 leadingIcon = { Icon(Icons.Outlined.DragHandle, null) },
                                 onClick = { menuVisible = false; onReorderModeChanged(true) },
                             )
+                            DropdownMenuItem(
+                                text = { Text("整理内容") },
+                                leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                                enabled = content.isNotEmpty(),
+                                onClick = { menuVisible = false; onOrganizeModeChanged(true) },
+                            )
                         }
                     }
                 }
+            } else if (content.isNotEmpty()) {
+                TextButton(onClick = { onOrganizeModeChanged(true) }) { Text("整理", color = AppAccent) }
             }
         }
         Row(
@@ -371,7 +410,7 @@ internal fun PlaylistDetail(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("${content.size} 项内容", color = AppSecondaryText, modifier = Modifier.weight(1f))
-            if (!isAllContent) {
+            if (!isAllContent && !organizeMode) {
                 Button(enabled = content.isNotEmpty(), onClick = onPlayAll) {
                     Icon(Icons.Outlined.PlayArrow, null)
                     Spacer(Modifier.width(6.dp))
@@ -382,9 +421,20 @@ internal fun PlaylistDetail(
         if (content.isEmpty()) {
             EmptyContent(onAddContent)
         } else {
-            LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
+            LazyColumn(state = listState, modifier = Modifier.weight(1f), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
                 itemsIndexed(content, key = { _, item -> item.contentId }) { index, item ->
-                    if (reorderMode && !isAllContent) {
+                    if (organizeMode) {
+                        SelectableContentRow(
+                            item = item,
+                            checked = item.contentId in selectedContentIds,
+                            onChecked = { checked ->
+                                onSelectionChanged(
+                                    if (checked) selectedContentIds + item.contentId
+                                    else selectedContentIds - item.contentId,
+                                )
+                            },
+                        )
+                    } else if (reorderMode && !isAllContent) {
                         ReorderContentRow(item, index, content.size, onMove)
                     } else {
                         ContentRow(item = item, status = null, onClick = { onPlay(index) }, onLongPress = { onLongPress(item) })
@@ -392,7 +442,61 @@ internal fun PlaylistDetail(
                 }
             }
         }
+        if (organizeMode) {
+            HorizontalDivider(color = AppHairline)
+            Row(
+                modifier = Modifier.fillMaxWidth().background(AppSurfaceRaised).padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(
+                    enabled = selectedContentIds.isNotEmpty(),
+                    onClick = onBatchAdd,
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                ) { Text("加入歌单") }
+                if (!isAllContent) {
+                    TextButton(
+                        enabled = selectedContentIds.isNotEmpty(),
+                        onClick = onBatchMove,
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                    ) { Text("移动到") }
+                    TextButton(
+                        enabled = selectedContentIds.isNotEmpty(),
+                        onClick = onBatchRemove,
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                    ) { Text("从此移除") }
+                }
+            }
+        }
     }
+}
+
+@Composable
+private fun SelectableContentRow(
+    item: ContentSummary,
+    checked: Boolean,
+    onChecked: (Boolean) -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier.fillMaxWidth()
+                .background(if (checked) AppSurfaceRaised else AppBackground)
+                .clickable { onChecked(!checked) }
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(
+            checked = checked,
+            onCheckedChange = onChecked,
+            modifier = Modifier.semantics { contentDescription = "选择 ${item.media.displayTitle}" },
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(item.media.displayTitle, color = AppPrimaryText, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            item.media.displayArtist?.let {
+                Text(it, color = AppSecondaryText, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+    HorizontalDivider(color = AppHairline)
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -497,6 +601,88 @@ internal fun PlaylistMembershipSheet(
                 onClick = { onSave(selectedIds, newPlaylistName.trim().takeIf(String::isNotEmpty)) },
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
             ) { Text("保存") }
+        }
+    }
+}
+
+internal enum class PlaylistBatchTargetMode { Add, Move }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun PlaylistBatchTargetSheet(
+    mode: PlaylistBatchTargetMode,
+    selectedContentCount: Int,
+    playlists: List<PlaylistSummary>,
+    excludedPlaylistId: String?,
+    onDismiss: () -> Unit,
+    onConfirm: (Set<String>, String?) -> Unit,
+) {
+    val availablePlaylists = playlists.filterNot { it.playlistId == excludedPlaylistId }
+    var selectedIds by remember(mode, excludedPlaylistId) { mutableStateOf(emptySet<String>()) }
+    var newPlaylistName by remember(mode, excludedPlaylistId) { mutableStateOf("") }
+    fun toggle(playlistId: String, checked: Boolean) {
+        selectedIds =
+            when {
+                !checked -> selectedIds - playlistId
+                mode == PlaylistBatchTargetMode.Move -> setOf(playlistId)
+                else -> selectedIds + playlistId
+            }
+        if (checked && mode == PlaylistBatchTargetMode.Move) newPlaylistName = ""
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AppSurfaceRaised) {
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 24.dp)) {
+            Text(
+                if (mode == PlaylistBatchTargetMode.Add) "将 $selectedContentCount 项加入歌单" else "移动 $selectedContentCount 项",
+                color = AppPrimaryText,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                if (mode == PlaylistBatchTargetMode.Add) "可同时选择多个目标，原有归属保持不变" else "内容会从当前歌单移出，其他已有归属保持不变",
+                color = AppSecondaryText,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+            )
+            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
+                if (availablePlaylists.isEmpty()) {
+                    item {
+                        Text(
+                            "没有其他歌单，可以在下方新建",
+                            color = AppSecondaryText,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                        )
+                    }
+                }
+                items(availablePlaylists, key = PlaylistSummary::playlistId) { playlist ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable {
+                            toggle(playlist.playlistId, playlist.playlistId !in selectedIds)
+                        },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = playlist.playlistId in selectedIds,
+                            onCheckedChange = { toggle(playlist.playlistId, it) },
+                        )
+                        Text(playlist.name, color = AppPrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+            OutlinedTextField(
+                value = newPlaylistName,
+                onValueChange = { value ->
+                    newPlaylistName = value
+                    if (mode == PlaylistBatchTargetMode.Move && value.isNotBlank()) selectedIds = emptySet()
+                },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                label = { Text("或新建歌单") },
+                singleLine = true,
+            )
+            Button(
+                enabled = selectedIds.isNotEmpty() || newPlaylistName.isNotBlank(),
+                onClick = { onConfirm(selectedIds, newPlaylistName.trim().takeIf(String::isNotEmpty)) },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(top = 12.dp),
+            ) { Text(if (mode == PlaylistBatchTargetMode.Add) "加入" else "移动") }
         }
     }
 }
