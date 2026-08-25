@@ -179,6 +179,7 @@ data class DiscoveryItem(
     val displayName: String,
     val durationMs: Long,
     val status: DiscoveryItemStatus,
+    val isDefaultSelected: Boolean,
     val availability: ContentAvailability,
 )
 

@@ -171,6 +171,28 @@ class ImportHubComposeTest {
     }
 
     @Test
+    fun explicitWavAndMp3VariantsDefaultToWavButRemainSelectable() = runBlocking {
+        repository.applySuccessfulScan(
+            descriptor = systemDescriptor(),
+            media =
+                listOf(
+                    audio("01.wav", "WAV Track", folder = "Downloads/Work/WAV", mimeType = "audio/wav"),
+                    audio("01.mp3", "MP3 Track", folder = "Downloads/Work/MP3"),
+                ),
+            textCandidates = emptyList(),
+        )
+        setHub(coordinator = LibraryCoordinatorState(hasAudioAccess = true))
+
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Work").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Work").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("已选择 1 / 2").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("将 1 项加入「默认收藏」").assertExists()
+
+        compose.onNodeWithText("全选").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("已选择 2 / 2").fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    @Test
     fun overviewShowsFileErrorWithoutIgnoredRecoverySection() = runBlocking {
         val contentId = repository.resolveOrCreate(audio("ignored.mp3", "Ignored"))
         repository.ignore(contentId)
@@ -226,14 +248,19 @@ class ImportHubComposeTest {
             displayName = "设备媒体库",
         )
 
-    private fun audio(name: String, title: String) =
+    private fun audio(
+        name: String,
+        title: String,
+        folder: String = "Music",
+        mimeType: String = "audio/mpeg",
+    ) =
         MediaSourceRef(
             uri = Uri.parse("content://media/$name"),
             displayName = name,
-            mimeType = "audio/mpeg",
+            mimeType = mimeType,
             title = title,
             durationMs = 120_000L,
-            folder = "Music",
+            folder = folder,
             origin = MediaOrigin.MediaStore,
             sourceId = LibrarySourceIds.SystemLibrary,
             kind = MediaKind.Audio,

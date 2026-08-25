@@ -409,9 +409,9 @@ private fun ImportSourceDetail(
 
     LaunchedEffect(items) {
         if (!selectionInitialized && items.isNotEmpty()) {
-            selectedIds = items.filter { it.status == DiscoveryItemStatus.Pending }.mapTo(linkedSetOf()) { it.contentId }
+            selectedIds = items.filter(DiscoveryItem::isDefaultSelected).mapTo(linkedSetOf()) { it.contentId }
             selectionInitialized = true
-            if (selectedIds.isEmpty()) range = ImportRange.All
+            if (items.none { it.status == DiscoveryItemStatus.Pending }) range = ImportRange.All
         } else if (selectionInitialized) {
             selectedIds = selectedIds.intersect(items.mapTo(hashSetOf(), DiscoveryItem::contentId))
         }

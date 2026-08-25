@@ -41,16 +41,19 @@ import io.github.zvensmoluya.vortexcue.data.db.PlaylistItemEntity
 import io.github.zvensmoluya.vortexcue.data.db.SourceEntity
 import io.github.zvensmoluya.vortexcue.data.db.TextSelectionEntity
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase
+import io.github.zvensmoluya.vortexcue.library.DiscoverySelectionCandidate
 import io.github.zvensmoluya.vortexcue.library.LibrarySourceIds
 import io.github.zvensmoluya.vortexcue.library.LibrarySourceKind
 import io.github.zvensmoluya.vortexcue.library.TextTrackCatalogState
 import io.github.zvensmoluya.vortexcue.library.TimedTextTrackCandidate
+import io.github.zvensmoluya.vortexcue.library.defaultDiscoverySelection
 import io.github.zvensmoluya.vortexcue.library.mergeTracks
+import io.github.zvensmoluya.vortexcue.library.resolveDiscoveryWorkPath
 import io.github.zvensmoluya.vortexcue.library.restoreAutomaticTrack
 import io.github.zvensmoluya.vortexcue.library.selectManualTrack
 import io.github.zvensmoluya.vortexcue.library.withTrackReadiness
-import java.util.UUID
 import java.util.Locale
+import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -134,19 +137,36 @@ class ContentRepository(
     fun observeDiscoveryItems(sourceKey: String): Flow<List<DiscoveryItem>> =
         combine(dao.observeAvailableAudio(), dao.observeSources()) { rows, sourceRows ->
             val sourceMap = sourceRows.associateBy { it.sourceId }
-            rows.mapNotNull { it.toLocatedAudio(sourceMap) }
-                .filter { it.sourceKey == sourceKey && it.summary.disposition != ContentDisposition.Ignored }
-                .sortedWith(locatedAudioComparator)
-                .map {
-                    DiscoveryItem(
-                        contentId = it.summary.contentId,
-                        title = it.summary.media.displayTitle,
-                        displayName = it.summary.media.displayName,
-                        durationMs = it.summary.media.durationMs,
-                        status = if (it.summary.disposition == null) DiscoveryItemStatus.Pending else DiscoveryItemStatus.Collected,
-                        availability = it.summary.availability,
-                    )
-                }
+            val located =
+                rows.mapNotNull { it.toLocatedAudio(sourceMap) }
+                    .filter { it.sourceKey == sourceKey && it.summary.disposition != ContentDisposition.Ignored }
+                    .sortedWith(locatedAudioComparator)
+            val defaultSelection =
+                defaultDiscoverySelection(
+                    located.filter { it.summary.disposition == null }.map {
+                        DiscoverySelectionCandidate(
+                            contentId = it.summary.contentId,
+                            displayName = it.summary.media.displayName,
+                            folder = it.summary.media.folder,
+                        )
+                    },
+                )
+            located.map { locatedAudio ->
+                DiscoveryItem(
+                    contentId = locatedAudio.summary.contentId,
+                    title = locatedAudio.summary.media.displayTitle,
+                    displayName = locatedAudio.summary.media.displayName,
+                    durationMs = locatedAudio.summary.media.durationMs,
+                    status =
+                        if (locatedAudio.summary.disposition == null) {
+                            DiscoveryItemStatus.Pending
+                        } else {
+                            DiscoveryItemStatus.Collected
+                        },
+                    isDefaultSelected = locatedAudio.summary.contentId in defaultSelection,
+                    availability = locatedAudio.summary.availability,
+                )
+            }
         }
 
     fun observeImportTargets(sourceKey: String): Flow<Set<String>> =
@@ -1288,25 +1308,20 @@ private fun ContentSummaryRow.toLocatedAudio(
     val source = sources[id] ?: return null
     val kind = source.kind.enumValueOr(LibrarySourceKind.LooseFiles)
     if (kind == LibrarySourceKind.LooseFiles || this.kind != MediaKind.Audio.name) return null
-    val normalizedFolder = folder?.replace('\\', '/')?.trim('/')?.takeIf(String::isNotBlank)
-    val pathParts = normalizedFolder?.split('/')?.filter(String::isNotBlank).orEmpty()
-    val leaf = pathParts.lastOrNull() ?: "其他音频"
-    val parentLeaf = pathParts.takeLast(2).joinToString(" / ").ifBlank { leaf }
+    val workPath = resolveDiscoveryWorkPath(folder)
     val groupKey =
         when (kind) {
-            LibrarySourceKind.SystemLibrary -> "system:$id:${normalizedFolder?.lowercase(Locale.ROOT) ?: "_other"}"
-            LibrarySourceKind.Folder -> "folder:$id"
+            LibrarySourceKind.SystemLibrary -> "system:$id:${workPath.stablePath}"
+            LibrarySourceKind.Folder -> "folder:$id:${workPath.stablePath}"
             LibrarySourceKind.LooseFiles -> return null
         }
-    val baseName = if (kind == LibrarySourceKind.Folder) source.displayName else leaf
-    val disambiguatedName = if (kind == LibrarySourceKind.Folder) source.displayName else parentLeaf
     return LocatedAudio(
         summary = toDomain(),
         sourceKey = groupKey,
         sourceId = id,
-        baseDisplayName = baseName,
-        disambiguatedDisplayName = disambiguatedName,
-        locationLeaf = leaf,
+        baseDisplayName = workPath.displayName,
+        disambiguatedDisplayName = workPath.disambiguatedDisplayName,
+        locationLeaf = workPath.locationLeaf,
         hasAccess = source.hasAccess,
         errorMessage = source.lastError,
     )

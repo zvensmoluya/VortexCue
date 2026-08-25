@@ -85,6 +85,59 @@ class DiscoveryRepositoryTest {
     }
 
     @Test
+    fun systemFormatVariantsShareOneWorkGroup() = runBlocking {
+        repository.applySuccessfulScan(
+            descriptor = systemDescriptor(),
+            media =
+                listOf(
+                    audio("track.wav", "WAV Track", "Downloads/Work/WAV", 120_000L, 10L),
+                    audio("track.mp3", "MP3 Track", "Downloads/Work/MP3", 120_000L, 20L),
+                    audio("other.mp3", "Other Track", "Downloads/Other/WAV", 120_000L, 30L),
+                ),
+            textCandidates = emptyList(),
+        )
+
+        val groups = repository.discoveryGroups.first()
+        assertEquals(listOf("Other", "Work"), groups.map(DiscoveryGroupSummary::displayName).sorted())
+        val work = groups.single { it.displayName == "Work" }
+        assertEquals(2, work.totalCount)
+        assertEquals(
+            listOf("MP3 Track", "WAV Track"),
+            repository.observeDiscoveryItems(work.sourceKey).first().map(DiscoveryItem::title),
+        )
+        assertEquals(
+            listOf("WAV Track"),
+            repository.observeDiscoveryItems(work.sourceKey).first().filter(DiscoveryItem::isDefaultSelected).map(DiscoveryItem::title),
+        )
+    }
+
+    @Test
+    fun folderSourceSplitsWorksAndCollapsesTheirFormatVariants() = runBlocking {
+        val descriptor =
+            SourceScanDescriptor(
+                sourceId = "folder",
+                kind = LibrarySourceKind.Folder,
+                rootUri = "content://provider/tree/root",
+                displayName = "DLsite",
+            )
+        repository.applySuccessfulScan(
+            descriptor = descriptor,
+            media =
+                listOf(
+                    audio("a-wav.mp3", "A WAV", "DLsite/Work A/WAV", 120_000L, 10L, descriptor.sourceId),
+                    audio("a-mp3.mp3", "A MP3", "DLsite/Work A/MP3", 120_000L, 20L, descriptor.sourceId),
+                    audio("b.mp3", "B", "DLsite/Work B/WAV", 120_000L, 30L, descriptor.sourceId),
+                ),
+            textCandidates = emptyList(),
+        )
+
+        val groups = repository.discoveryGroups.first()
+        assertEquals(listOf("Work A", "Work B"), groups.map(DiscoveryGroupSummary::displayName).sorted())
+        assertEquals(2, groups.single { it.displayName == "Work A" }.totalCount)
+        assertTrue(groups.all { it.sourceKey.startsWith("folder:${descriptor.sourceId}:") })
+    }
+
+    @Test
     fun persistentScansRejectNewVideoAndDoNotInvalidateExplicitVideo() = runBlocking {
         val descriptor = systemDescriptor()
         val discoveredVideo = video("auto.mp4", MediaOrigin.MediaStore)
@@ -158,6 +211,7 @@ class DiscoveryRepositoryTest {
         folder: String,
         durationMs: Long,
         added: Long,
+        sourceId: String = LibrarySourceIds.SystemLibrary,
     ) =
         MediaSourceRef(
             uri = Uri.parse("content://media/audio/$name"),
@@ -167,8 +221,8 @@ class DiscoveryRepositoryTest {
             durationMs = durationMs,
             folder = folder,
             dateAddedSeconds = added,
-            origin = MediaOrigin.MediaStore,
-            sourceId = LibrarySourceIds.SystemLibrary,
+            origin = if (sourceId == LibrarySourceIds.SystemLibrary) MediaOrigin.MediaStore else MediaOrigin.DocumentTree,
+            sourceId = sourceId,
             kind = MediaKind.Audio,
         )
 
