@@ -193,6 +193,27 @@ class ImportHubComposeTest {
     }
 
     @Test
+    fun refreshUpdatesAutomaticSelectionUntilUserChangesIt() = runBlocking {
+        val first = audio("first.mp3", "First")
+        val second = audio("second.mp3", "Second")
+        val third = audio("third.mp3", "Third")
+        repository.applySuccessfulScan(systemDescriptor(), listOf(first), emptyList())
+        setHub(coordinator = LibraryCoordinatorState(hasAudioAccess = true))
+
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Music").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Music").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("已选择 1 / 1").fetchSemanticsNodes().isNotEmpty() }
+
+        repository.applySuccessfulScan(systemDescriptor(), listOf(first, second), emptyList())
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("已选择 2 / 2").fetchSemanticsNodes().isNotEmpty() }
+
+        compose.onNodeWithText("取消全选").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("已选择 0 / 2").fetchSemanticsNodes().isNotEmpty() }
+        repository.applySuccessfulScan(systemDescriptor(), listOf(first, second, third), emptyList())
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("已选择 0 / 3").fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    @Test
     fun overviewShowsFileErrorWithoutIgnoredRecoverySection() = runBlocking {
         val contentId = repository.resolveOrCreate(audio("ignored.mp3", "Ignored"))
         repository.ignore(contentId)

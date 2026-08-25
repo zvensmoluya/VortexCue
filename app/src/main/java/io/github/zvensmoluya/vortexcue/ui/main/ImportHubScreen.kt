@@ -399,6 +399,7 @@ private fun ImportSourceDetail(
     var range by rememberSaveable(group.sourceKey) { mutableStateOf(ImportRange.New) }
     var selectedIds by remember(group.sourceKey) { mutableStateOf<Set<String>>(emptySet()) }
     var selectionInitialized by remember(group.sourceKey) { mutableStateOf(false) }
+    var automaticSelection by remember(group.sourceKey) { mutableStateOf(true) }
     var targetIds by remember(group.sourceKey, initialTargetPlaylistId) { mutableStateOf<Set<String>>(emptySet()) }
     var targetsInitialized by remember(group.sourceKey, initialTargetPlaylistId) { mutableStateOf(false) }
     var targetSheetVisible by rememberSaveable(group.sourceKey) { mutableStateOf(false) }
@@ -413,7 +414,12 @@ private fun ImportSourceDetail(
             selectionInitialized = true
             if (items.none { it.status == DiscoveryItemStatus.Pending }) range = ImportRange.All
         } else if (selectionInitialized) {
-            selectedIds = selectedIds.intersect(items.mapTo(hashSetOf(), DiscoveryItem::contentId))
+            selectedIds =
+                if (automaticSelection) {
+                    items.filter(DiscoveryItem::isDefaultSelected).mapTo(linkedSetOf()) { it.contentId }
+                } else {
+                    selectedIds.intersect(items.mapTo(hashSetOf(), DiscoveryItem::contentId))
+                }
         }
     }
     LaunchedEffect(preferredTargets, contextualTargetId) {
@@ -493,6 +499,7 @@ private fun ImportSourceDetail(
                 Button(
                     enabled = orderedSelected.isNotEmpty() && targetIds.isNotEmpty() && !importing,
                     onClick = {
+                        automaticSelection = false
                         scope.launch {
                             importing = true
                             runCatching {
@@ -568,8 +575,18 @@ private fun ImportSourceDetail(
                             fontSize = 12.sp,
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(onClick = { selectedIds = selectedIds + visibleItems.map(DiscoveryItem::contentId) }) { Text("全选") }
-                        TextButton(onClick = { selectedIds = selectedIds - visibleItems.map(DiscoveryItem::contentId).toSet() }) { Text("取消全选") }
+                        TextButton(
+                            onClick = {
+                                automaticSelection = false
+                                selectedIds = selectedIds + visibleItems.map(DiscoveryItem::contentId)
+                            },
+                        ) { Text("全选") }
+                        TextButton(
+                            onClick = {
+                                automaticSelection = false
+                                selectedIds = selectedIds - visibleItems.map(DiscoveryItem::contentId).toSet()
+                            },
+                        ) { Text("取消全选") }
                     }
                 }
             }
@@ -595,7 +612,10 @@ private fun ImportSourceDetail(
                 ImportItemRow(
                     item = item,
                     checked = item.contentId in selectedIds,
-                    onChecked = { checked -> selectedIds = if (checked) selectedIds + item.contentId else selectedIds - item.contentId },
+                    onChecked = { checked ->
+                        automaticSelection = false
+                        selectedIds = if (checked) selectedIds + item.contentId else selectedIds - item.contentId
+                    },
                     onIgnore =
                         if (item.status == DiscoveryItemStatus.Pending) {
                             { scope.launch { repository.ignore(item.contentId) } }
