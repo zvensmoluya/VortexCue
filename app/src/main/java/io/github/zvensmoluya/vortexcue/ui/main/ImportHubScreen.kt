@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.AudioFile
@@ -91,6 +92,8 @@ internal fun ImportHubScreen(
     sources: List<SourceSummary>,
     playlists: List<PlaylistSummary>,
     coordinator: LibraryCoordinatorState,
+    initialTargetPlaylistId: String? = null,
+    singleFileImportError: String? = null,
     onDismiss: () -> Unit,
     onPickMedia: () -> Unit,
     onAddFolder: () -> Unit,
@@ -102,7 +105,6 @@ internal fun ImportHubScreen(
     onRemoveSource: (String) -> Unit,
 ) {
     val groups by repository.discoveryGroups.collectAsState(initial = emptyList())
-    val ignored by repository.ignoredContent.collectAsState(initial = emptyList())
     var selectedSourceKey by rememberSaveable { mutableStateOf<String?>(null) }
     val selectedGroup = groups.firstOrNull { it.sourceKey == selectedSourceKey }
 
@@ -122,15 +124,16 @@ internal fun ImportHubScreen(
                 group = selectedGroup,
                 repository = repository,
                 playlists = playlists,
+                initialTargetPlaylistId = initialTargetPlaylistId,
                 onBack = { selectedSourceKey = null },
+                onDone = onDismiss,
             )
         } else {
             ImportSourceOverview(
                 groups = groups,
                 sources = sources,
-                ignored = ignored,
-                repository = repository,
                 coordinator = coordinator,
+                singleFileImportError = singleFileImportError,
                 onDismiss = onDismiss,
                 onOpenSource = { selectedSourceKey = it },
                 onPickMedia = onPickMedia,
@@ -151,9 +154,8 @@ internal fun ImportHubScreen(
 private fun ImportSourceOverview(
     groups: List<DiscoveryGroupSummary>,
     sources: List<SourceSummary>,
-    ignored: List<io.github.zvensmoluya.vortexcue.data.ContentSummary>,
-    repository: ContentRepository,
     coordinator: LibraryCoordinatorState,
+    singleFileImportError: String?,
     onDismiss: () -> Unit,
     onOpenSource: (String) -> Unit,
     onPickMedia: () -> Unit,
@@ -165,7 +167,6 @@ private fun ImportSourceOverview(
     onCancelScan: () -> Unit,
     onRemoveSource: (String) -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
     var showAll by rememberSaveable { mutableStateOf(false) }
     val recommended = groups.filter(DiscoveryGroupSummary::isRecommended)
     val visibleGroups = if (showAll || recommended.isEmpty()) groups else recommended
@@ -297,6 +298,11 @@ private fun ImportSourceOverview(
             item(key = "other-title") {
                 Text("其他方式", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
             }
+            singleFileImportError?.let { message ->
+                item(key = "single-file-error") {
+                    Text(message, color = AppError, fontSize = 12.sp)
+                }
+            }
             item(key = "file") {
                 ImportActionRow(
                     label = "选择音频或视频文件",
@@ -312,17 +318,6 @@ private fun ImportSourceOverview(
                 )
             }
 
-            if (ignored.isNotEmpty()) {
-                item(key = "ignored-title") {
-                    Text("已不再推荐", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
-                }
-                items(ignored.take(20), key = { "ignored:${it.contentId}" }) { item ->
-                    Row(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(item.media.displayName, color = AppPrimaryText, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        TextButton(onClick = { scope.launch { repository.collect(item.contentId) } }) { Text("恢复") }
-                    }
-                }
-            }
             item { Spacer(Modifier.height(20.dp)) }
         }
     }
@@ -388,21 +383,26 @@ private fun ImportSourceDetail(
     group: DiscoveryGroupSummary,
     repository: ContentRepository,
     playlists: List<PlaylistSummary>,
+    initialTargetPlaylistId: String?,
     onBack: () -> Unit,
+    onDone: () -> Unit,
 ) {
     val items by remember(repository, group.sourceKey) { repository.observeDiscoveryItems(group.sourceKey) }
         .collectAsState(initial = emptyList())
     val preferredTargets by remember(repository, group.sourceKey) { repository.observeImportTargets(group.sourceKey) }
         .collectAsState(initial = emptySet())
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
     var range by rememberSaveable(group.sourceKey) { mutableStateOf(ImportRange.New) }
     var selectedIds by remember(group.sourceKey) { mutableStateOf<Set<String>>(emptySet()) }
     var selectionInitialized by remember(group.sourceKey) { mutableStateOf(false) }
-    var targetIds by remember(group.sourceKey) { mutableStateOf<Set<String>>(emptySet()) }
-    var targetsInitialized by remember(group.sourceKey) { mutableStateOf(false) }
+    var targetIds by remember(group.sourceKey, initialTargetPlaylistId) { mutableStateOf<Set<String>>(emptySet()) }
+    var targetsInitialized by remember(group.sourceKey, initialTargetPlaylistId) { mutableStateOf(false) }
     var targetSheetVisible by rememberSaveable(group.sourceKey) { mutableStateOf(false) }
     var notice by remember(group.sourceKey) { mutableStateOf<String?>(null) }
+    var completion by remember(group.sourceKey) { mutableStateOf<ImportCompletion?>(null) }
     var importing by remember(group.sourceKey) { mutableStateOf(false) }
+    val contextualTargetId = initialTargetPlaylistId?.takeIf { id -> playlists.any { it.playlistId == id } }
 
     LaunchedEffect(items) {
         if (!selectionInitialized && items.isNotEmpty()) {
@@ -413,10 +413,13 @@ private fun ImportSourceDetail(
             selectedIds = selectedIds.intersect(items.mapTo(hashSetOf(), DiscoveryItem::contentId))
         }
     }
-    LaunchedEffect(preferredTargets) {
-        if (!targetsInitialized && preferredTargets.isNotEmpty()) {
-            targetIds = preferredTargets
-            targetsInitialized = true
+    LaunchedEffect(preferredTargets, contextualTargetId) {
+        if (!targetsInitialized) {
+            val initialTargets = contextualTargetId?.let(::setOf) ?: preferredTargets
+            if (initialTargets.isNotEmpty()) {
+                targetIds = initialTargets
+                targetsInitialized = true
+            }
         }
     }
 
@@ -490,10 +493,16 @@ private fun ImportSourceDetail(
                         scope.launch {
                             importing = true
                             runCatching {
-                                repository.importContent(orderedSelected, targetIds, group.sourceKey)
+                                repository.importContent(
+                                    orderedSelected,
+                                    targetIds,
+                                    group.sourceKey.takeIf { contextualTargetId == null },
+                                )
                             }.onSuccess { result ->
-                                notice = importResultNotice(result, targetNames, targetIds.size)
+                                completion = ImportCompletion(importResultNotice(result, targetNames, targetIds.size))
+                                notice = null
                                 selectedIds = emptySet()
+                                scope.launch { listState.scrollToItem(0) }
                             }.onFailure { notice = it.message ?: "添加失败" }
                             importing = false
                         }
@@ -506,9 +515,27 @@ private fun ImportSourceDetail(
         },
     ) { insets ->
         LazyColumn(
+            state = listState,
             modifier = Modifier.padding(insets).fillMaxSize(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 12.dp),
         ) {
+            completion?.let { result ->
+                item(key = "import-completion") {
+                    Surface(color = AppSurfaceSelected, modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text("添加完成", color = AppPrimaryText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                            Text(result.message, color = AppSecondaryText, fontSize = 13.sp)
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                TextButton(onClick = { range = ImportRange.All }) { Text("查看全部") }
+                                Button(onClick = onDone) { Text("完成") }
+                            }
+                        }
+                    }
+                }
+            }
             item(key = "controls") {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
                     Text("选择范围", color = AppSecondaryText, fontSize = 12.sp)
@@ -537,6 +564,24 @@ private fun ImportSourceDetail(
                         )
                         TextButton(onClick = { selectedIds = selectedIds + visibleItems.map(DiscoveryItem::contentId) }) { Text("全选") }
                         TextButton(onClick = { selectedIds = selectedIds - visibleItems.map(DiscoveryItem::contentId).toSet() }) { Text("取消全选") }
+                    }
+                }
+            }
+            if (visibleItems.isEmpty()) {
+                item(key = "range-empty") {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 28.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            if (range == ImportRange.New) "这个来源暂时没有新内容" else "这个来源没有可用内容",
+                            color = AppPrimaryText,
+                            fontSize = 16.sp,
+                        )
+                        if (range == ImportRange.New && items.isNotEmpty()) {
+                            Text("可以查看已经收录的全部内容", color = AppSecondaryText, fontSize = 12.sp)
+                        }
                     }
                 }
             }
@@ -646,6 +691,12 @@ private fun ImportTargetSheet(
         mutableStateOf(initialSelection.ifEmpty { setOfNotNull(defaultId) })
     }
     var newName by remember { mutableStateOf("") }
+    val confirmedTargetCount =
+        when {
+            newName.isBlank() -> selected.size
+            selected == setOfNotNull(defaultId) -> 1
+            else -> selected.size + 1
+        }
     fun toggle(id: String, checked: Boolean) {
         selected =
             if (checked) {
@@ -657,7 +708,7 @@ private fun ImportTargetSheet(
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AppSurfaceRaised) {
         Column(modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp, vertical = 8.dp)) {
             Text("加入歌单", color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            Text("至少选择一个落点", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
+            Text("可以同时选择多个歌单", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
             LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
                 items(playlists, key = PlaylistSummary::playlistId) { playlist ->
                     Row(
@@ -668,7 +719,16 @@ private fun ImportTargetSheet(
                             checked = playlist.playlistId in selected,
                             onCheckedChange = { toggle(playlist.playlistId, it) },
                         )
-                        Text(playlist.name, color = AppPrimaryText, modifier = Modifier.weight(1f))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(playlist.name, color = AppPrimaryText)
+                            if (playlist.isDefaultFavorite) {
+                                Text(
+                                    "默认落点；选择其他歌单时自动让位",
+                                    color = AppSecondaryText,
+                                    fontSize = 11.sp,
+                                )
+                            }
+                        }
                         if (playlist.isDefaultFavorite) Icon(Icons.Outlined.Check, contentDescription = "默认落点", tint = AppMutedText, modifier = Modifier.size(18.dp))
                     }
                 }
@@ -684,7 +744,7 @@ private fun ImportTargetSheet(
                 enabled = selected.isNotEmpty() || newName.isNotBlank(),
                 onClick = { onConfirm(selected, newName.trim().takeIf(String::isNotBlank)) },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(top = 12.dp),
-            ) { Text("确定") }
+            ) { Text("加入 $confirmedTargetCount 个歌单") }
             Spacer(Modifier.height(12.dp))
         }
     }
@@ -703,6 +763,8 @@ private fun ImportActionRow(label: String, icon: androidx.compose.ui.graphics.ve
 }
 
 private enum class ImportRange { New, All }
+
+private data class ImportCompletion(val message: String)
 
 private fun importResultNotice(
     result: ImportContentResult,

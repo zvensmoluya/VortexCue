@@ -79,6 +79,7 @@ import io.github.zvensmoluya.vortexcue.ui.player.GlowCalibrationScreen
 import io.github.zvensmoluya.vortexcue.ui.player.rememberPlaybackSnapshot
 import io.github.zvensmoluya.vortexcue.ui.main.MainTab
 import io.github.zvensmoluya.vortexcue.ui.main.MainTabScreen
+import io.github.zvensmoluya.vortexcue.ui.main.SingleFileImportResult
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextAction
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextUiHost
 import java.io.FileNotFoundException
@@ -177,6 +178,8 @@ internal fun VortexCueApp(
     var importHubRequest by rememberSaveable { mutableIntStateOf(0) }
     var playerSurface by rememberSaveable { mutableStateOf(PlayerSurface.Normal) }
     var mediaPickTarget by remember { mutableStateOf(MediaPickTarget.Import) }
+    var mediaImportPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
+    var singleFileImportResult by remember { mutableStateOf<SingleFileImportResult?>(null) }
     var relinkContentId by remember { mutableStateOf<String?>(null) }
     var subtitlePickTarget by remember { mutableStateOf<SubtitlePickTarget?>(null) }
     var folderRelinkSourceId by remember { mutableStateOf<String?>(null) }
@@ -450,7 +453,12 @@ internal fun VortexCueApp(
         return coordinator.inspect(initial).copy(sourceId = LibrarySourceIds.LooseFiles)
     }
 
-    suspend fun handleMediaUri(uri: Uri, target: MediaPickTarget, playImmediately: Boolean) {
+    suspend fun handleMediaUri(
+        uri: Uri,
+        target: MediaPickTarget,
+        playImmediately: Boolean,
+        importPlaylistId: String? = null,
+    ): Throwable? {
         diagnostics.record(
             SyncTextDiagnosticEventType.UiAction,
             workUnitKind = "ContentImport",
@@ -458,15 +466,18 @@ internal fun VortexCueApp(
             outcome = "Started",
             reason = target.name,
         )
-        runCatchingSuspend { inspectOpenedMedia(uri) }
-            .onSuccess { replacement ->
+        val result =
+            runCatchingSuspend {
+                val replacement = inspectOpenedMedia(uri)
                 when (target) {
                     MediaPickTarget.Import,
                     MediaPickTarget.External,
                     -> {
                         val contentId = repository.resolveOrCreate(replacement)
-                        if (target.collectsIntoContent) repository.collect(contentId)
-                        if (playImmediately) openContentNow(listOf(contentId), 0)
+                        if (target.collectsIntoContent) repository.collect(contentId, importPlaylistId)
+                        if (playImmediately) {
+                            check(openContentNow(listOf(contentId), 0)) { "内容已添加，但无法开始播放" }
+                        }
                         diagnostics.record(
                             SyncTextDiagnosticEventType.UiAction,
                             workUnitKind = "ContentImport",
@@ -477,7 +488,7 @@ internal fun VortexCueApp(
                         )
                     }
                     MediaPickTarget.Relink -> {
-                        val targetId = relinkContentId ?: return@onSuccess
+                        val targetId = relinkContentId ?: return@runCatchingSuspend
                         gateway.relink(targetId, replacement)
                         relinkContentId = null
                         diagnostics.record(
@@ -489,30 +500,46 @@ internal fun VortexCueApp(
                         )
                     }
                 }
-            }.onFailure { error ->
-                if (target == MediaPickTarget.Relink) relinkContentId = null
-                if (error is CancellationException) throw error
-                diagnostics.record(
-                    SyncTextDiagnosticEventType.UiAction,
-                    workUnitKind = "ContentImport",
-                    stage = "Import",
-                    outcome = "Failed",
-                    reason = error::class.simpleName,
-                )
             }
+        result.exceptionOrNull()?.let { error ->
+            if (target == MediaPickTarget.Relink) relinkContentId = null
+            diagnostics.record(
+                SyncTextDiagnosticEventType.UiAction,
+                workUnitKind = "ContentImport",
+                stage = "Import",
+                outcome = "Failed",
+                reason = error::class.simpleName,
+            )
+        }
+        return result.exceptionOrNull()
     }
 
-    fun consumeMediaUri(uri: Uri, target: MediaPickTarget, playImmediately: Boolean) {
-        scope.launch { handleMediaUri(uri, target, playImmediately) }
+    fun consumeMediaUri(
+        uri: Uri,
+        target: MediaPickTarget,
+        playImmediately: Boolean,
+        importPlaylistId: String? = null,
+    ) {
+        scope.launch {
+            val error = handleMediaUri(uri, target, playImmediately, importPlaylistId)
+            if (target == MediaPickTarget.Import) {
+                singleFileImportResult =
+                    error?.let { SingleFileImportResult.Failure(singleFileImportFailureMessage(it)) }
+                        ?: SingleFileImportResult.Success
+            }
+        }
     }
 
     val mediaPicker =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            val importPlaylistId = mediaImportPlaylistId
+            mediaImportPlaylistId = null
             uri?.let {
                 consumeMediaUri(
                     it,
                     mediaPickTarget,
                     playImmediately = mediaPickTarget == MediaPickTarget.Import,
+                    importPlaylistId = importPlaylistId,
                 )
             }
         }
@@ -633,8 +660,12 @@ internal fun VortexCueApp(
                 onPlaylistViewChanged = { playlistViewId = it },
                 playlistListState = playlistListState,
                 playlistDetailListState = playlistDetailListState,
-                onPickMedia = {
+                singleFileImportResult = singleFileImportResult,
+                onSingleFileImportResultConsumed = { singleFileImportResult = null },
+                onPickMedia = { targetPlaylistId ->
                     mediaPickTarget = MediaPickTarget.Import
+                    mediaImportPlaylistId = targetPlaylistId
+                    singleFileImportResult = null
                     mediaPicker.launch(arrayOf("audio/*", "video/*"))
                 },
                 onRequestLibraryAccess = {
@@ -961,6 +992,14 @@ private suspend inline fun <T> runCatchingSuspend(
         throw cancelled
     } catch (error: Throwable) {
         Result.failure(error)
+    }
+
+private fun singleFileImportFailureMessage(error: Throwable): String =
+    when (error) {
+        is SecurityException -> "无法读取所选文件，请重新选择并允许访问"
+        is FileNotFoundException -> "所选文件已不可用，请重新选择"
+        is IllegalStateException -> error.message ?: "无法导入所选文件"
+        else -> "无法导入所选文件，请确认文件仍然可用"
     }
 
 private suspend fun ensureMediaReadable(

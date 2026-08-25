@@ -516,16 +516,20 @@ class ContentRepository(
             targetId
         }
 
-    suspend fun collect(contentId: String) {
+    suspend fun collect(contentId: String, targetPlaylistId: String? = null) {
         database.withWriteTransaction {
             val canonical = resolveRedirect(contentId)
             requireContent(canonical)
             val timestamp = nowMs()
             dao.upsertDisposition(ContentDispositionEntity(canonical, true, timestamp))
-            if (dao.playlistItemsForContent(canonical).isEmpty()) {
-                val fallback = ensureDefaultPlaylistInside()
-                val nextPosition = (dao.playlistItems(fallback.playlistId).maxOfOrNull { it.sortPosition } ?: -1L) + 1L
-                dao.upsertPlaylistItem(PlaylistItemEntity(fallback.playlistId, canonical, nextPosition, timestamp))
+            val memberships = dao.playlistItemsForContent(canonical)
+            val target =
+                targetPlaylistId?.let { playlistId ->
+                    requireNotNull(dao.playlist(playlistId)) { "目标歌单不存在" }
+                } ?: if (memberships.isEmpty()) ensureDefaultPlaylistInside() else null
+            if (target != null && memberships.none { it.playlistId == target.playlistId }) {
+                val nextPosition = (dao.playlistItems(target.playlistId).maxOfOrNull { it.sortPosition } ?: -1L) + 1L
+                dao.upsertPlaylistItem(PlaylistItemEntity(target.playlistId, canonical, nextPosition, timestamp))
             }
         }
     }

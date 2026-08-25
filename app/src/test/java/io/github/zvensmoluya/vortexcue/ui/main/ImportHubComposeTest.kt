@@ -6,6 +6,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.room3.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
@@ -92,10 +93,11 @@ class ImportHubComposeTest {
             compose.onAllNodesWithText("将 2 项加入「默认收藏」").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithText("默认收藏").performClick()
+        compose.onNodeWithText("默认落点；选择其他歌单时自动让位").assertExists()
         compose.onNodeWithText("练习").performClick()
         compose.onNodeWithText("睡前").performClick()
         compose.onNodeWithText("或新建歌单").performTextInput("新建目标")
-        compose.onNodeWithText("确定").performClick()
+        compose.onNodeWithText("加入 3 个歌单").performClick()
         compose.waitUntil(5_000) {
             compose.onAllNodesWithText("将 2 项加入 3 个歌单").fetchSemanticsNodes().isNotEmpty()
         }
@@ -103,9 +105,14 @@ class ImportHubComposeTest {
         compose.waitUntil(5_000) {
             compose.onAllNodesWithText("已将 2 项加入 3 个歌单").fetchSemanticsNodes().isNotEmpty()
         }
+        compose.onNodeWithText("添加完成").assertExists()
+        compose.onNodeWithText("完成").assertExists()
 
-        compose.onNodeWithText("全部 2 项").performClick()
-        compose.onNodeWithText("全选").performClick()
+        compose.onNodeWithText("查看全部").performClick()
+        compose.onNodeWithText("全选").performScrollTo().performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("将 2 项加入 3 个歌单").fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithText("将 2 项加入 3 个歌单").performClick()
         compose.waitUntil(5_000) {
             compose.onAllNodesWithText("所选 2 项已在目标歌单").fetchSemanticsNodes().isNotEmpty()
@@ -123,8 +130,57 @@ class ImportHubComposeTest {
         assertTrue(repository.observeImportTargets("system:${LibrarySourceIds.SystemLibrary}:music").first().contains(newPlaylist.playlistId))
     }
 
+    @Test
+    fun playlistContextOverridesRememberedTargetForThisImport() = runBlocking {
+        val remembered = repository.createPlaylist("之前使用")
+        val contextual = repository.createPlaylist("睡前")
+        val alreadyImported = audio("remembered.mp3", "Remembered")
+        val pending = audio("context.mp3", "Context")
+        repository.applySuccessfulScan(
+            descriptor = systemDescriptor(),
+            media = listOf(alreadyImported, pending),
+            textCandidates = emptyList(),
+        )
+        val sourceKey = "system:${LibrarySourceIds.SystemLibrary}:music"
+        val rememberedContentId = requireNotNull(repository.contentIdFor(alreadyImported))
+        val contentId = requireNotNull(repository.contentIdFor(pending))
+        repository.importContent(listOf(rememberedContentId), setOf(remembered.playlistId), sourceKey)
+
+        setHub(
+            coordinator = LibraryCoordinatorState(hasAudioAccess = true),
+            initialTargetPlaylistId = contextual.playlistId,
+        )
+
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Music").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Music").performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("将 1 项加入「睡前」").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("将 1 项加入「睡前」").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("添加完成").fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(setOf(contextual.playlistId), repository.playlistIdsForContent(contentId))
+        assertEquals(setOf(remembered.playlistId), repository.observeImportTargets(sourceKey).first())
+    }
+
+    @Test
+    fun overviewShowsFileErrorWithoutIgnoredRecoverySection() = runBlocking {
+        val contentId = repository.resolveOrCreate(audio("ignored.mp3", "Ignored"))
+        repository.ignore(contentId)
+
+        setHub(
+            coordinator = LibraryCoordinatorState(),
+            singleFileImportError = "所选文件已不可用，请重新选择",
+        )
+
+        compose.onNodeWithText("所选文件已不可用，请重新选择").assertExists()
+        compose.onNodeWithText("已不再推荐").assertDoesNotExist()
+        compose.onNodeWithText("恢复").assertDoesNotExist()
+    }
+
     private fun setHub(
         coordinator: LibraryCoordinatorState,
+        initialTargetPlaylistId: String? = null,
+        singleFileImportError: String? = null,
         onRequestLibraryAccess: () -> Unit = {},
     ) {
         val playlists = runBlocking { repository.playlists.first() }
@@ -136,6 +192,8 @@ class ImportHubComposeTest {
                     sources = sources,
                     playlists = playlists,
                     coordinator = coordinator,
+                    initialTargetPlaylistId = initialTargetPlaylistId,
+                    singleFileImportError = singleFileImportError,
                     onDismiss = {},
                     onPickMedia = {},
                     onAddFolder = {},

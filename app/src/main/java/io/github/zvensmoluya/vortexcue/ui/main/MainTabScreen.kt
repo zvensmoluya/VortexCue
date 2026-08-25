@@ -131,7 +131,9 @@ internal fun MainTabScreen(
     onPlaylistViewChanged: (String?) -> Unit,
     playlistListState: LazyListState,
     playlistDetailListState: LazyListState,
-    onPickMedia: () -> Unit,
+    singleFileImportResult: SingleFileImportResult? = null,
+    onSingleFileImportResultConsumed: () -> Unit = {},
+    onPickMedia: (String?) -> Unit,
     onRequestLibraryAccess: () -> Unit,
     onRefreshLibrary: () -> Unit,
     onRefreshSource: (String) -> Unit,
@@ -162,6 +164,8 @@ internal fun MainTabScreen(
     }
     val detailContent by detailContentFlow.collectAsState(initial = emptyList())
     var importVisible by rememberSaveable { mutableStateOf(false) }
+    var importTargetPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
+    var singleFileImportError by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedItem by remember { mutableStateOf<ContentSummary?>(null) }
     var selectedItemPlaylistIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var playlistDialogMode by remember { mutableStateOf<PlaylistDialogMode?>(null) }
@@ -194,8 +198,25 @@ internal fun MainTabScreen(
     }
     LaunchedEffect(openImportHubRequest) {
         if (openImportHubRequest > 0) {
+            importTargetPlaylistId = null
+            singleFileImportError = null
             importVisible = true
             onImportHubRequestConsumed()
+        }
+    }
+    LaunchedEffect(singleFileImportResult) {
+        when (val result = singleFileImportResult) {
+            SingleFileImportResult.Success -> {
+                importVisible = false
+                importTargetPlaylistId = null
+                singleFileImportError = null
+                onSingleFileImportResultConsumed()
+            }
+            is SingleFileImportResult.Failure -> {
+                singleFileImportError = result.message
+                onSingleFileImportResultConsumed()
+            }
+            null -> Unit
         }
     }
     LaunchedEffect(selectedItem?.contentId) {
@@ -256,7 +277,11 @@ internal fun MainTabScreen(
                 MainNavigationBar(
                     selectedTab = selectedTab,
                     onTabChanged = onTabChanged,
-                    onOpenImport = { importVisible = true },
+                    onOpenImport = {
+                        importTargetPlaylistId = null
+                        singleFileImportError = null
+                        importVisible = true
+                    },
                     modifier = Modifier.navigationBarsPadding(),
                 )
             }
@@ -331,7 +356,11 @@ internal fun MainTabScreen(
                                     scope.launch { repository.reorderPlaylistItems(playlistViewId, ids) }
                                 }
                             },
-                            onAddContent = { importVisible = true },
+                            onAddContent = {
+                                importTargetPlaylistId = playlistViewId.takeIf { it != AllContentPlaylistId }
+                                singleFileImportError = null
+                                importVisible = true
+                            },
                             organizeMode = contentOrganizeMode,
                             selectedContentIds = organizedContentIds,
                             onOrganizeModeChanged = { enabled ->
@@ -580,8 +609,17 @@ internal fun MainTabScreen(
             sources = sourceSummaries,
             playlists = playlists,
             coordinator = coordinator,
-            onDismiss = { importVisible = false },
-            onPickMedia = { importVisible = false; onPickMedia() },
+            initialTargetPlaylistId = importTargetPlaylistId,
+            singleFileImportError = singleFileImportError,
+            onDismiss = {
+                importVisible = false
+                importTargetPlaylistId = null
+                singleFileImportError = null
+            },
+            onPickMedia = {
+                singleFileImportError = null
+                onPickMedia(importTargetPlaylistId)
+            },
             onAddFolder = onAddFolder,
             onRequestLibraryAccess = onRequestLibraryAccess,
             onRefreshLibrary = onRefreshLibrary,
@@ -591,6 +629,12 @@ internal fun MainTabScreen(
             onRemoveSource = onRemoveSource,
         )
     }
+}
+
+internal sealed interface SingleFileImportResult {
+    data object Success : SingleFileImportResult
+
+    data class Failure(val message: String) : SingleFileImportResult
 }
 
 private sealed interface PlaylistDialogMode {

@@ -131,6 +131,14 @@ class PlaylistRepositoryTest {
         repository.collect(selected)
         assertTrue(repository.allContent.first().any { it.contentId == selected })
         assertTrue(repository.playlistIdsForContent(selected).single() == repository.playlists.first().first { it.isDefaultFavorite }.playlistId)
+
+        val contextual = repository.createPlaylist("Contextual import")
+        repository.ignore(selected)
+        val explicitlyReselected = repository.resolveOrCreate(media("selected.mp3", 1L))
+        assertEquals(selected, explicitlyReselected)
+        repository.collect(explicitlyReselected, contextual.playlistId)
+        assertEquals(ContentDisposition.Collected, repository.details(selected)?.disposition)
+        assertEquals(setOf(contextual.playlistId), repository.playlistIdsForContent(selected))
     }
 
     @Test
@@ -214,17 +222,20 @@ class PlaylistRepositoryTest {
     private suspend fun add(name: String, dateAddedSeconds: Long, collect: Boolean = true): String {
         val id =
             repository.resolveOrCreate(
-                MediaSourceRef(
-                    uri = Uri.parse("content://test/$name"),
-                    displayName = name,
-                    mimeType = "audio/mpeg",
-                    dateAddedSeconds = dateAddedSeconds,
-                    origin = MediaOrigin.OpenDocument,
-                    kind = MediaKind.Audio,
-                ),
+                media(name, dateAddedSeconds),
                 availability = ContentAvailability.Available,
             )
         if (collect) repository.collect(id)
         return id
     }
+
+    private fun media(name: String, dateAddedSeconds: Long) =
+        MediaSourceRef(
+            uri = Uri.parse("content://test/$name"),
+            displayName = name,
+            mimeType = "audio/mpeg",
+            dateAddedSeconds = dateAddedSeconds,
+            origin = MediaOrigin.OpenDocument,
+            kind = MediaKind.Audio,
+        )
 }
