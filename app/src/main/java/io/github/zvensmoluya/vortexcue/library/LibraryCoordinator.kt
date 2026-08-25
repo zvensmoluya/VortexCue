@@ -12,6 +12,7 @@ import io.github.zvensmoluya.vortexcue.core.storage.persistReadPermission
 import io.github.zvensmoluya.vortexcue.core.storage.treeDisplayName
 import io.github.zvensmoluya.vortexcue.data.ContentRepository
 import io.github.zvensmoluya.vortexcue.data.SourceScanDescriptor
+import io.github.zvensmoluya.vortexcue.text.TextImportCoordinator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -32,6 +33,7 @@ class LibraryCoordinator(
     context: Context,
     private val scope: CoroutineScope,
     private val repository: ContentRepository,
+    private val textImportCoordinator: TextImportCoordinator,
     private val scanner: LocalMediaScanner = LocalMediaScanner(context),
 ) {
     private val appContext = context.applicationContext
@@ -201,11 +203,14 @@ class LibraryCoordinator(
             }
             result.fold(
                 onSuccess = { batch ->
-                    repository.applySuccessfulScan(
-                        descriptor = descriptor,
-                        media = batch.media,
-                        textCandidates = batch.subtitleSuggestions,
-                    )
+                    val candidateIds =
+                        repository.applySuccessfulScan(
+                            descriptor = descriptor,
+                            media = batch.media,
+                            textCandidates = batch.subtitleSuggestions,
+                        )
+                    val materializedContentIds = textImportCoordinator.materializeCandidates(candidateIds)
+                    repository.reconcileAutomaticTextSelection(materializedContentIds)
                 },
                 onFailure = { error ->
                     repository.recordSourceScanFailure(

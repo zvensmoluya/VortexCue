@@ -7,7 +7,9 @@ import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import io.github.zvensmoluya.vortexcue.core.model.SubtitleSourceRef
 import io.github.zvensmoluya.vortexcue.core.model.TextSelectionMode
 import io.github.zvensmoluya.vortexcue.core.model.TextTrackSlot
+import io.github.zvensmoluya.vortexcue.data.ContentRepository
 import io.github.zvensmoluya.vortexcue.data.db.ActiveMediaLocatorEntity
+import io.github.zvensmoluya.vortexcue.data.db.ContentDispositionEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentEntity
 import io.github.zvensmoluya.vortexcue.data.db.DiscoveredTextCandidateEntity
 import io.github.zvensmoluya.vortexcue.data.db.MediaLocatorEntity
@@ -183,6 +185,109 @@ class TextImportCoordinatorTest {
 
     @Test
     fun `candidate is source relative until consumption and is then removed`() = runBlocking {
+        seedCandidate()
+
+        val track = coordinator().importCandidate("candidate", TextTrackSlot.Primary, TextSelectionMode.Automatic)
+
+        assertNull(database.textStorageDao().candidate("candidate"))
+        assertEquals("en", track.language)
+        assertEquals("Automatic", database.contentDao().textSelections(ContentId).single().mode)
+    }
+
+    @Test
+    fun `only collected content materializes candidates without choosing a slot`() = runBlocking {
+        seedCandidate(matchBasis = "ExactStem")
+        val coordinator = coordinator()
+
+        assertTrue(coordinator.materializeCollectedCandidates().isEmpty())
+        assertNotNull(database.textStorageDao().candidate("candidate"))
+        assertTrue(database.contentDao().textTracks(ContentId).isEmpty())
+
+        database.contentDao().upsertDisposition(ContentDispositionEntity(ContentId, true, clock++))
+        assertEquals(setOf(ContentId), coordinator.materializeCollectedCandidates())
+
+        assertNull(database.textStorageDao().candidate("candidate"))
+        assertEquals(1, database.contentDao().textTracks(ContentId).size)
+        assertTrue(database.contentDao().textSelections(ContentId).isEmpty())
+    }
+
+    @Test
+    fun `a rediscovered owned candidate is cleared without reading the source again`() = runBlocking {
+        seedCandidate()
+        val firstTrack = coordinator().materializeCandidates(listOf("candidate"))
+        assertEquals(setOf(ContentId), firstTrack)
+        seedCandidate()
+        val coordinator =
+            TextImportCoordinator(
+                context = RuntimeEnvironment.getApplication(),
+                database = database,
+                storage = storage,
+                nowMs = { clock++ },
+                newId = { "unused" },
+                inputReader = { error("an already owned candidate must not be read again") },
+            )
+
+        assertEquals(setOf(ContentId), coordinator.materializeCandidates(listOf("candidate")))
+        assertNull(database.textStorageDao().candidate("candidate"))
+        assertEquals(1, database.contentDao().textTracks(ContentId).size)
+    }
+
+    @Test
+    fun `automatic selection is reconciled after ownership is established`() = runBlocking {
+        seedCandidate(matchBasis = "ExactStem")
+        database.contentDao().upsertDisposition(ContentDispositionEntity(ContentId, true, clock++))
+        val contentIds = coordinator().materializeCandidatesForContents(listOf(ContentId))
+
+        ContentRepository(database, nowMs = { clock++ }).reconcileAutomaticTextSelection(contentIds)
+
+        val track = database.contentDao().textTracks(ContentId).single()
+        val selection = database.contentDao().textSelections(ContentId).first { it.slot == TextTrackSlot.Primary.name }
+        assertEquals(track.trackId, selection.selectedTrackId)
+        assertEquals(TextSelectionMode.Automatic.name, selection.mode)
+    }
+
+    @Test
+    fun `one broken candidate does not block other owned subtitles`() = runBlocking {
+        seedCandidate(candidateId = "good", documentId = "root/item.srt", matchBasis = "ExactStem")
+        seedCandidate(candidateId = "bad", documentId = "root/item.bad.srt")
+        val coordinator =
+            TextImportCoordinator(
+                context = RuntimeEnvironment.getApplication(),
+                database = database,
+                storage = storage,
+                nowMs = { clock++ },
+                newId = { "import-${nextId++}" },
+                inputReader = { uri ->
+                    if (uri.toString().contains("bad")) {
+                        "1\n00:00:10,000 --> 00:00:11,000\nOutside\n".encodeToByteArray()
+                    } else {
+                        input
+                    }
+                },
+            )
+
+        assertEquals(setOf(ContentId), coordinator.materializeCandidates(listOf("bad", "good")))
+
+        assertNull(database.textStorageDao().candidate("good"))
+        assertNotNull(database.textStorageDao().candidate("bad")?.failureMessage)
+        assertEquals(1, database.contentDao().textTracks(ContentId).size)
+    }
+
+    private fun coordinator() =
+        TextImportCoordinator(
+            context = RuntimeEnvironment.getApplication(),
+            database = database,
+            storage = storage,
+            nowMs = { clock++ },
+            newId = { "import-${nextId++}" },
+            inputReader = { input },
+        )
+
+    private suspend fun seedCandidate(
+        candidateId: String = "candidate",
+        documentId: String = "root/item.en.srt",
+        matchBasis: String = "LanguageSuffix",
+    ) {
         database.contentDao().upsertSource(
             SourceEntity(
                 sourceId = "folder",
@@ -195,38 +300,22 @@ class TextImportCoordinatorTest {
         database.textStorageDao().upsertCandidates(
             listOf(
                 DiscoveredTextCandidateEntity(
-                    candidateId = "candidate",
+                    candidateId = candidateId,
                     contentId = ContentId,
                     sourceId = "folder",
-                    documentId = "root/item.en.srt",
-                    displayName = "item.en.srt",
+                    documentId = documentId,
+                    displayName = documentId.substringAfterLast('/'),
                     mimeType = "application/x-subrip",
                     format = "srt",
                     language = "en",
                     label = "en",
                     rolesMask = 1,
-                    matchBasis = "LanguageSuffix",
+                    matchBasis = matchBasis,
                     sourceGeneration = 1L,
                 ),
             ),
         )
-
-        val track = coordinator().importCandidate("candidate", TextTrackSlot.Primary, TextSelectionMode.Automatic)
-
-        assertNull(database.textStorageDao().candidate("candidate"))
-        assertEquals("en", track.language)
-        assertEquals("Automatic", database.contentDao().textSelections(ContentId).single().mode)
     }
-
-    private fun coordinator() =
-        TextImportCoordinator(
-            context = RuntimeEnvironment.getApplication(),
-            database = database,
-            storage = storage,
-            nowMs = { clock++ },
-            newId = { "import-${nextId++}" },
-            inputReader = { input },
-        )
 
     private suspend fun seedContent() {
         database.contentDao().upsertContent(ContentEntity(ContentId, 1L))

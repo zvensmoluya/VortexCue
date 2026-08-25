@@ -44,7 +44,6 @@ import io.github.zvensmoluya.vortexcue.core.model.PlayerSurface
 import io.github.zvensmoluya.vortexcue.core.model.SubtitleSourceRef
 import io.github.zvensmoluya.vortexcue.core.model.TextTrackSlot
 import io.github.zvensmoluya.vortexcue.core.model.TextSelectionMode
-import io.github.zvensmoluya.vortexcue.core.model.TimedTextMatchBasis
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextOrigin
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextReadiness
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextTrack
@@ -158,8 +157,8 @@ internal fun VortexCueApp(
     val contentResolver = context.contentResolver
     val gateway = remember(player) { PlaybackGateway(player) }
     val coordinator =
-        remember(context, scope, repository) {
-            LibraryCoordinator(context, scope, repository)
+        remember(context, scope, repository, textImportCoordinator) {
+            LibraryCoordinator(context, scope, repository, textImportCoordinator)
         }
 
     val sourceSummaries by repository.sources.collectAsState(initial = emptyList())
@@ -218,26 +217,6 @@ internal fun VortexCueApp(
     val currentUnit = currentDetails?.contentUnit
     val selectedPrimaryTrack = currentDetails?.selectedTrack(TextTrackSlot.Primary)
     val selectedSecondaryTrack = currentDetails?.selectedTrack(TextTrackSlot.Secondary)
-    val automaticCandidate =
-        currentDetails
-            ?.takeIf {
-                it.activeText.primaryMode == TextSelectionMode.Automatic &&
-                    it.activeText.primaryTrackId == null
-            }
-            ?.discoveredTextCandidates
-            ?.filter { it.failureMessage == null && it.matchBasis == TimedTextMatchBasis.ExactStem }
-            ?.singleOrNull()
-
-    LaunchedEffect(currentContentId, automaticCandidate?.candidateId) {
-        val candidate = automaticCandidate ?: return@LaunchedEffect
-        runCatchingSuspend {
-            textImportCoordinator.importCandidate(
-                candidateId = candidate.candidateId,
-                slot = TextTrackSlot.Primary,
-                selectionMode = TextSelectionMode.Automatic,
-            )
-        }
-    }
     val generatedSlotId = selectedPrimaryTrack?.locator?.generatedSlotId
     val generatedPresentationFlow =
         remember(container.syncTextRepository, generatedSlotId) {
@@ -662,6 +641,11 @@ internal fun VortexCueApp(
                 playlistDetailListState = playlistDetailListState,
                 singleFileImportResult = singleFileImportResult,
                 onSingleFileImportResultConsumed = { singleFileImportResult = null },
+                onContentImported = { contentIds ->
+                    val canonicalIds = repository.canonicalContentIds(contentIds)
+                    val materializedIds = textImportCoordinator.materializeCandidatesForContents(canonicalIds)
+                    repository.reconcileAutomaticTextSelection(materializedIds)
+                },
                 onPickMedia = { targetPlaylistId ->
                     mediaPickTarget = MediaPickTarget.Import
                     mediaImportPlaylistId = targetPlaylistId

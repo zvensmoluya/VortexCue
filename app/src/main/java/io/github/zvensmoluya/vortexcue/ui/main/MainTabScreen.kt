@@ -133,6 +133,7 @@ internal fun MainTabScreen(
     playlistDetailListState: LazyListState,
     singleFileImportResult: SingleFileImportResult? = null,
     onSingleFileImportResultConsumed: () -> Unit = {},
+    onContentImported: suspend (List<String>) -> Unit = {},
     onPickMedia: (String?) -> Unit,
     onRequestLibraryAccess: () -> Unit,
     onRefreshLibrary: () -> Unit,
@@ -611,6 +612,7 @@ internal fun MainTabScreen(
             coordinator = coordinator,
             initialTargetPlaylistId = importTargetPlaylistId,
             singleFileImportError = singleFileImportError,
+            onContentImported = onContentImported,
             onDismiss = {
                 importVisible = false
                 importTargetPlaylistId = null

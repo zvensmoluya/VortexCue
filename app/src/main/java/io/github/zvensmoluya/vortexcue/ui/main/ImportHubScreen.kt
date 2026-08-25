@@ -94,6 +94,7 @@ internal fun ImportHubScreen(
     coordinator: LibraryCoordinatorState,
     initialTargetPlaylistId: String? = null,
     singleFileImportError: String? = null,
+    onContentImported: suspend (List<String>) -> Unit = {},
     onDismiss: () -> Unit,
     onPickMedia: () -> Unit,
     onAddFolder: () -> Unit,
@@ -125,6 +126,7 @@ internal fun ImportHubScreen(
                 repository = repository,
                 playlists = playlists,
                 initialTargetPlaylistId = initialTargetPlaylistId,
+                onContentImported = onContentImported,
                 onBack = { selectedSourceKey = null },
                 onDone = onDismiss,
             )
@@ -384,6 +386,7 @@ private fun ImportSourceDetail(
     repository: ContentRepository,
     playlists: List<PlaylistSummary>,
     initialTargetPlaylistId: String?,
+    onContentImported: suspend (List<String>) -> Unit,
     onBack: () -> Unit,
     onDone: () -> Unit,
 ) {
@@ -493,11 +496,14 @@ private fun ImportSourceDetail(
                         scope.launch {
                             importing = true
                             runCatching {
-                                repository.importContent(
-                                    orderedSelected,
-                                    targetIds,
-                                    group.sourceKey.takeIf { contextualTargetId == null },
-                                )
+                                val result =
+                                    repository.importContent(
+                                        orderedSelected,
+                                        targetIds,
+                                        group.sourceKey.takeIf { contextualTargetId == null },
+                                    )
+                                onContentImported(orderedSelected)
+                                result
                             }.onSuccess { result ->
                                 completion = ImportCompletion(importResultNotice(result, targetNames, targetIds.size))
                                 notice = null

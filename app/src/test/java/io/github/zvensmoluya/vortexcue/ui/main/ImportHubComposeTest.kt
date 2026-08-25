@@ -77,6 +77,7 @@ class ImportHubComposeTest {
 
     @Test
     fun sourceImportDefaultsToPendingAndStaysInDetailAfterMultiTargetImport() = runBlocking {
+        val importedBatches = mutableListOf<List<String>>()
         val first = repository.createPlaylist("练习")
         val second = repository.createPlaylist("睡前")
         repository.applySuccessfulScan(
@@ -84,7 +85,10 @@ class ImportHubComposeTest {
             media = listOf(audio("episode-10.mp3", "Episode 10"), audio("episode-2.mp3", "Episode 2")),
             textCandidates = emptyList(),
         )
-        setHub(coordinator = LibraryCoordinatorState(hasAudioAccess = true))
+        setHub(
+            coordinator = LibraryCoordinatorState(hasAudioAccess = true),
+            onContentImported = { importedBatches += it },
+        )
 
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Music").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Music").performClick()
@@ -128,6 +132,10 @@ class ImportHubComposeTest {
             )
         }
         assertTrue(repository.observeImportTargets("system:${LibrarySourceIds.SystemLibrary}:music").first().contains(newPlaylist.playlistId))
+        compose.runOnIdle {
+            assertEquals(2, importedBatches.size)
+            assertTrue(importedBatches.all { it.size == 2 })
+        }
     }
 
     @Test
@@ -182,6 +190,7 @@ class ImportHubComposeTest {
         initialTargetPlaylistId: String? = null,
         singleFileImportError: String? = null,
         onRequestLibraryAccess: () -> Unit = {},
+        onContentImported: suspend (List<String>) -> Unit = {},
     ) {
         val playlists = runBlocking { repository.playlists.first() }
         val sources = runBlocking { repository.sources.first() }
@@ -194,6 +203,7 @@ class ImportHubComposeTest {
                     coordinator = coordinator,
                     initialTargetPlaylistId = initialTargetPlaylistId,
                     singleFileImportError = singleFileImportError,
+                    onContentImported = onContentImported,
                     onDismiss = {},
                     onPickMedia = {},
                     onAddFolder = {},

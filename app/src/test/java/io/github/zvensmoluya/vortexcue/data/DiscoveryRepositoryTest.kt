@@ -2,16 +2,19 @@ package io.github.zvensmoluya.vortexcue.data
 
 import android.app.Application
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.room3.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import io.github.zvensmoluya.vortexcue.core.model.ContentAvailability
 import io.github.zvensmoluya.vortexcue.core.model.MediaKind
 import io.github.zvensmoluya.vortexcue.core.model.MediaOrigin
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
+import io.github.zvensmoluya.vortexcue.core.model.SubtitleSourceRef
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase_Impl
 import io.github.zvensmoluya.vortexcue.library.LibrarySourceIds
 import io.github.zvensmoluya.vortexcue.library.LibrarySourceKind
+import io.github.zvensmoluya.vortexcue.library.buildSidecarTextTrackCandidate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -99,6 +102,46 @@ class DiscoveryRepositoryTest {
 
         assertEquals(ContentAvailability.Available, repository.details(explicitVideoId)?.contentUnit?.availability)
         assertEquals(ContentAvailability.Unavailable, repository.details(audioId)?.contentUnit?.availability)
+    }
+
+    @Test
+    fun folderScanOnlyOffersSubtitleOwnershipAfterContentIsCollected() = runBlocking {
+        val root = Uri.parse("content://provider/tree/root")
+        val descriptor =
+            SourceScanDescriptor(
+                sourceId = "folder",
+                kind = LibrarySourceKind.Folder,
+                rootUri = root.toString(),
+                displayName = "Folder",
+            )
+        val media =
+            MediaSourceRef(
+                uri = DocumentsContract.buildDocumentUriUsingTree(root, "root/episode.mp3"),
+                displayName = "episode.mp3",
+                mimeType = "audio/mpeg",
+                durationMs = 120_000L,
+                folder = "Folder",
+                origin = MediaOrigin.DocumentTree,
+                sourceId = descriptor.sourceId,
+                kind = MediaKind.Audio,
+            )
+        val subtitle =
+            SubtitleSourceRef(
+                uri = DocumentsContract.buildDocumentUriUsingTree(root, "root/episode.srt"),
+                displayName = "episode.srt",
+                mimeType = "application/x-subrip",
+            )
+        val candidate = requireNotNull(buildSidecarTextTrackCandidate(media, subtitle))
+
+        assertTrue(repository.applySuccessfulScan(descriptor, listOf(media), listOf(candidate)).isEmpty())
+        val contentId = requireNotNull(repository.contentIdFor(media))
+        assertEquals(1, repository.details(contentId)?.discoveredTextCandidates?.size)
+
+        repository.collect(contentId)
+        val materializationIds = repository.applySuccessfulScan(descriptor, listOf(media), listOf(candidate))
+
+        assertEquals(1, materializationIds.size)
+        assertEquals(materializationIds.single(), repository.details(contentId)?.discoveredTextCandidates?.single()?.candidateId)
     }
 
     private fun systemDescriptor() =

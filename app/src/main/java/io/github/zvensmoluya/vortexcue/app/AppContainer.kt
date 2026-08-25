@@ -201,7 +201,10 @@ class AppContainer(context: Context) {
         scope.launch {
             playbackStateRepository.initialize()
             settingsStore.initializeFromLegacyAndCleanDomainStores()
-            textImportCoordinator.recoverPending()
+            val recoveredContentIds = textImportCoordinator.recoverPending()
+            val materializedContentIds =
+                recoveredContentIds + textImportCoordinator.materializeCollectedCandidates()
+            contentRepository.reconcileAutomaticTextSelection(materializedContentIds)
             textStorageMaintenance.recoverAuditAndCollect()
             val retainedCredentials = database.syncTextDao().credentialIds().toSet()
             credentialStore.pruneExcept(retainedCredentials)

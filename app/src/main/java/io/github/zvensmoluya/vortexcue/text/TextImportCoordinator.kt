@@ -25,6 +25,8 @@ import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 enum class TextImportState {
@@ -48,6 +50,7 @@ class TextImportCoordinator(
     private val resolver: ContentResolver = context.applicationContext.contentResolver
     private val contentDao = database.contentDao()
     private val textDao = database.textStorageDao()
+    private val candidateImportMutex = Mutex()
 
     suspend fun importManual(
         contentId: String,
@@ -84,6 +87,42 @@ class TextImportCoordinator(
         candidateId: String,
         slot: TextTrackSlot,
         selectionMode: TextSelectionMode = TextSelectionMode.Manual,
+    ): TimedTextTrackEntity =
+        candidateImportMutex.withLock {
+            importCandidateLocked(candidateId, slot, selectionMode)
+        }
+
+    suspend fun materializeCandidates(candidateIds: Collection<String>): Set<String> {
+        val contentIds = linkedSetOf<String>()
+        candidateIds.distinct().forEach { candidateId ->
+            try {
+                val track =
+                    candidateImportMutex.withLock {
+                        importCandidateLocked(candidateId, slot = null, selectionMode = null)
+                    }
+                contentIds += track.contentId
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // A broken subtitle must not fail media discovery or collection. The candidate keeps its failure state.
+            }
+        }
+        return contentIds
+    }
+
+    suspend fun materializeCandidatesForContents(contentIds: Collection<String>): Set<String> {
+        val normalized = contentIds.filter(String::isNotBlank).distinct()
+        if (normalized.isEmpty()) return emptySet()
+        return materializeCandidates(textDao.candidatesForCollectedContents(normalized).map { it.candidateId })
+    }
+
+    suspend fun materializeCollectedCandidates(): Set<String> =
+        materializeCandidates(textDao.candidatesForCollectedContents().map { it.candidateId })
+
+    private suspend fun importCandidateLocked(
+        candidateId: String,
+        slot: TextTrackSlot?,
+        selectionMode: TextSelectionMode?,
     ): TimedTextTrackEntity {
         textDao.latestCandidateImport(candidateId)
             ?.takeIf { it.state == TextImportState.Committed.name }
@@ -92,7 +131,10 @@ class TextImportCoordinator(
                     contentDao.textTracks(operation.contentId)
                         .firstOrNull { it.trackId == trackId }
                         ?.let { track ->
-                            selectTrack(operation.contentId, slot, selectionMode, track.trackId)
+                            if (slot != null && selectionMode != null) {
+                                selectTrack(operation.contentId, slot, selectionMode, track.trackId)
+                            }
+                            textDao.deleteCandidate(candidateId)
                             return track
                         }
                 }
@@ -112,8 +154,8 @@ class TextImportCoordinator(
                 sourceDisplayName = candidate.displayName,
                 mimeType = candidate.mimeType,
                 detectedFormat = candidate.format,
-                requestedSlot = slot.name,
-                selectionMode = selectionMode.name,
+                requestedSlot = slot?.name,
+                selectionMode = selectionMode?.name,
                 state = TextImportState.Requested.name,
                 artifactId = null,
                 revisionId = null,
@@ -143,10 +185,13 @@ class TextImportCoordinator(
         )
     }
 
-    suspend fun recoverPending() {
+    suspend fun recoverPending(): Set<String> {
+        val contentIds = linkedSetOf<String>()
         textDao.recoverableImports().forEach { operation ->
             runCatching { execute(operation) }
+                .onSuccess { track -> contentIds += track.contentId }
         }
+        return contentIds
     }
 
     private suspend fun execute(initial: TextImportOperationEntity): TimedTextTrackEntity {

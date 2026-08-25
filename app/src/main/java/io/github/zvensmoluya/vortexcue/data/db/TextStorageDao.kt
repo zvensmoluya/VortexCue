@@ -87,6 +87,21 @@ interface TextStorageDao {
     @Query("SELECT * FROM discovered_text_candidate WHERE content_id = :contentId ORDER BY candidate_id")
     suspend fun candidates(contentId: String): List<DiscoveredTextCandidateEntity>
 
+    @Query(
+        "SELECT candidate.* FROM discovered_text_candidate AS candidate " +
+            "INNER JOIN content_disposition AS disposition ON disposition.content_id = candidate.content_id " +
+            "WHERE disposition.is_collected = 1 AND candidate.content_id IN (:contentIds) " +
+            "ORDER BY candidate.content_id, candidate.candidate_id",
+    )
+    suspend fun candidatesForCollectedContents(contentIds: List<String>): List<DiscoveredTextCandidateEntity>
+
+    @Query(
+        "SELECT candidate.* FROM discovered_text_candidate AS candidate " +
+            "INNER JOIN content_disposition AS disposition ON disposition.content_id = candidate.content_id " +
+            "WHERE disposition.is_collected = 1 ORDER BY candidate.content_id, candidate.candidate_id",
+    )
+    suspend fun candidatesForCollectedContents(): List<DiscoveredTextCandidateEntity>
+
     @Query("SELECT * FROM discovered_text_candidate WHERE content_id = :contentId ORDER BY candidate_id")
     fun observeCandidates(contentId: String): Flow<List<DiscoveredTextCandidateEntity>>
 

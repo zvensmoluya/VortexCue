@@ -423,6 +423,9 @@ class ContentRepository(
 
     suspend fun canonicalContentId(contentId: String): String = resolveRedirect(contentId)
 
+    suspend fun canonicalContentIds(contentIds: Collection<String>): List<String> =
+        contentIds.map { resolveRedirect(it) }.distinct()
+
     fun observeDetails(contentId: String): Flow<ContentDetails?> {
         val canonicalId = contentId
         val base =
@@ -698,7 +701,7 @@ class ContentRepository(
         media: List<MediaSourceRef>,
         textCandidates: List<TimedTextTrackCandidate>,
         hasAccess: Boolean = true,
-    ) {
+    ): List<String> =
         database.withWriteTransaction {
             val previous = dao.source(descriptor.sourceId)
             val generation = (previous?.generation ?: 0L) + 1L
@@ -731,9 +734,14 @@ class ContentRepository(
                         sourceAlreadyEnsured = true,
                     )
             }
+            val collectedCandidateIds = mutableListOf<String>()
             textCandidates.groupBy { it.mediaUriValue }.forEach { (uriValue, candidates) ->
                 val contentId = contentByUri[uriValue] ?: return@forEach
-                persistDiscoveredCandidatesInside(descriptor.sourceId, generation, contentId, candidates)
+                val candidateIds =
+                    persistDiscoveredCandidatesInside(descriptor.sourceId, generation, contentId, candidates)
+                if (dao.disposition(contentId)?.isCollected == true) {
+                    collectedCandidateIds += candidateIds
+                }
             }
             textStorageDao.deleteOlderCandidates(descriptor.sourceId, generation)
             dao.markOlderAudioLocatorsUnavailable(descriptor.sourceId, generation, timestamp)
@@ -741,15 +749,15 @@ class ContentRepository(
                 selectAvailableLocatorInside(contentId)
             }
             garbageCollectInside()
+            collectedCandidateIds
         }
-    }
 
     private suspend fun persistDiscoveredCandidatesInside(
         sourceId: String,
         generation: Long,
         contentId: String,
         candidates: List<TimedTextTrackCandidate>,
-    ) {
+    ): List<String> {
         val entities =
             candidates.mapNotNull { candidate ->
                 val source = candidate.externalSource ?: return@mapNotNull null
@@ -772,6 +780,7 @@ class ContentRepository(
                 )
             }
         if (entities.isNotEmpty()) textStorageDao.upsertCandidates(entities)
+        return entities.map(DiscoveredTextCandidateEntity::candidateId)
     }
 
     suspend fun recordSourceScanFailure(
@@ -840,6 +849,15 @@ class ContentRepository(
             val canonical = resolveRedirect(contentId)
             val current = textCatalogInside(canonical)
             persistTextCatalogInside(canonical, current.mergeTracks(tracks.map { it.rekey(canonical) }))
+        }
+    }
+
+    suspend fun reconcileAutomaticTextSelection(contentIds: Collection<String>) {
+        database.withWriteTransaction {
+            contentIds.map { resolveRedirect(it) }.distinct().forEach { contentId ->
+                val current = textCatalogInside(contentId)
+                persistTextCatalogInside(contentId, current.mergeTracks(emptyList()))
+            }
         }
     }
 
