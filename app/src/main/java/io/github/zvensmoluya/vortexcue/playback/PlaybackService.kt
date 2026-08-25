@@ -49,8 +49,10 @@ class PlaybackService : MediaSessionService() {
     private var timerJob: Job? = null
     private var progressJob: Job? = null
     private var timerDeadlineMs = 0L
+    private var configuredTimerDurationMs = DefaultSleepTimerDurationMs
     private var stopAfterCurrentItem = false
     private var stopAfterTonight = false
+    private var sleepTimerDidFinish = false
 
     private val sleepTimerListener =
         object : Player.Listener {
@@ -64,14 +66,14 @@ class PlaybackService : MediaSessionService() {
                             reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT)
                 ) {
                     playbackPlayer?.pause()
-                    clearSleepTimer()
+                    clearSleepTimer(didFinish = true)
                 }
                 if (
                     stopAfterTonight &&
                         reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT
                 ) {
                     playbackPlayer?.pause()
-                    clearSleepTimer()
+                    clearSleepTimer(didFinish = true)
                 }
             }
 
@@ -88,8 +90,12 @@ class PlaybackService : MediaSessionService() {
                         )
                 ) {
                     player.pause()
-                    clearSleepTimer()
+                    clearSleepTimer(didFinish = true)
                 }
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) sleepTimerDidFinish = false
             }
         }
 
@@ -321,6 +327,8 @@ class PlaybackService : MediaSessionService() {
 
     private fun setDurationTimer(durationMs: Long) {
         timerJob?.cancel()
+        sleepTimerDidFinish = false
+        configuredTimerDurationMs = durationMs
         stopAfterCurrentItem = false
         stopAfterTonight = false
         timerDeadlineMs = SystemClock.elapsedRealtime() + durationMs
@@ -328,12 +336,13 @@ class PlaybackService : MediaSessionService() {
             serviceScope.launch {
                 delay(durationMs)
                 playbackPlayer?.pause()
-                clearSleepTimer()
+                clearSleepTimer(didFinish = true)
             }
     }
 
     private fun setEndOfItemTimer() {
         timerJob?.cancel()
+        sleepTimerDidFinish = false
         timerJob = null
         timerDeadlineMs = 0L
         stopAfterCurrentItem = true
@@ -342,6 +351,7 @@ class PlaybackService : MediaSessionService() {
 
     private fun setEndOfTonightTimer() {
         timerJob?.cancel()
+        sleepTimerDidFinish = false
         timerJob = null
         timerDeadlineMs = 0L
         stopAfterCurrentItem = false
@@ -349,12 +359,13 @@ class PlaybackService : MediaSessionService() {
         playbackPlayer?.repeatMode = Player.REPEAT_MODE_OFF
     }
 
-    private fun clearSleepTimer() {
+    private fun clearSleepTimer(didFinish: Boolean = false) {
         timerJob?.cancel()
         timerJob = null
         timerDeadlineMs = 0L
         stopAfterCurrentItem = false
         stopAfterTonight = false
+        sleepTimerDidFinish = didFinish
     }
 
     private fun sleepTimerResult(): SessionResult {
@@ -376,6 +387,8 @@ class PlaybackService : MediaSessionService() {
             Bundle().apply {
                 putString(SleepTimerCommands.Mode, mode.name)
                 putLong(SleepTimerCommands.RemainingMs, remaining)
+                putLong(SleepTimerCommands.ConfiguredDurationMs, configuredTimerDurationMs)
+                putBoolean(SleepTimerCommands.DidFinish, sleepTimerDidFinish)
             },
         )
     }

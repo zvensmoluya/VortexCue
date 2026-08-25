@@ -5,11 +5,15 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,8 +25,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.QueueMusic
@@ -45,19 +54,26 @@ import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -69,6 +85,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -150,30 +167,29 @@ internal fun PlayerScreen(
 ) {
     var textTracksVisible by rememberSaveable { mutableStateOf(false) }
     var timerVisible by rememberSaveable { mutableStateOf(false) }
+    val canDisplayTimedText =
+        shouldDisplayTimedText(
+            playbackState = playback.playbackState,
+            errorMessage = playback.errorMessage,
+        )
     val cuePositionMs =
         (playback.positionMs + session.subtitleOffsetMs).coerceAtLeast(0L)
-    val generatedSourceCue = session.generatedText?.sourceTimeline?.resolve(cuePositionMs)
-    val generatedTargetCue = session.generatedText?.targetTimeline?.resolve(cuePositionMs)
+    val generatedSourceCue =
+        session.generatedText?.sourceTimeline?.resolve(cuePositionMs).takeIf { canDisplayTimedText }
+    val generatedTargetCue =
+        session.generatedText?.targetTimeline?.resolve(cuePositionMs).takeIf { canDisplayTimedText }
     val primaryTimeline =
         session.generatedText?.targetTimeline
             ?: session.generatedText?.sourceTimeline
             ?: session.subtitle?.timeline
     val currentCue =
-        if (
-            playback.playbackState != Player.STATE_IDLE &&
-                playback.playbackState != Player.STATE_ENDED &&
-                playback.errorMessage == null
-        ) {
+        if (canDisplayTimedText) {
             generatedTargetCue ?: generatedSourceCue ?: session.subtitle?.timeline?.resolve(cuePositionMs)
         } else {
             null
         }
     val secondaryCue =
-        if (
-            playback.playbackState != Player.STATE_IDLE &&
-                playback.playbackState != Player.STATE_ENDED &&
-                playback.errorMessage == null
-        ) {
+        if (canDisplayTimedText) {
             session.secondarySubtitle?.timeline?.resolve(cuePositionMs).takeIf { session.generatedText == null }
         } else {
             null
@@ -190,7 +206,9 @@ internal fun PlayerScreen(
             session.generatedText.presentationMode == TextPresentationMode.SourceTarget
     val hasSecondaryText = hasPairedSource || session.generatedText == null && (session.secondarySubtitle != null || secondaryEmbeddedTrack != null)
     val primaryText =
-        if (session.generatedText != null) {
+        if (!canDisplayTimedText) {
+            null
+        } else if (session.generatedText != null) {
             generatedTargetCue?.text ?: generatedSourceCue?.text
         } else if (primaryEmbeddedTrack != null) {
             embeddedCueText.takeIf { embeddedCueTrackId == primaryEmbeddedTrack.stableId }
@@ -198,7 +216,9 @@ internal fun PlayerScreen(
             currentCue?.text
         }
     val secondaryText =
-        if (hasPairedSource) {
+        if (!canDisplayTimedText) {
+            null
+        } else if (hasPairedSource) {
             generatedSourceCue?.text
         } else if (secondaryEmbeddedTrack != null) {
             embeddedCueText.takeIf { embeddedCueTrackId == secondaryEmbeddedTrack.stableId }
@@ -289,7 +309,7 @@ internal fun PlayerScreen(
         )
     }
     if (timerVisible) {
-        SleepTimerDialog(
+        SleepTimerSheet(
             state = sleepTimer,
             onSetDuration = {
                 onSetSleepTimer(it)
@@ -299,7 +319,7 @@ internal fun PlayerScreen(
                 onStopAfterCurrent()
                 timerVisible = false
             },
-            showEndOfQueue = playback.queue.isNotEmpty(),
+            showEndOfQueue = playback.queue.size > 1,
             onEndOfQueue = {
                 onStopAfterQueue()
                 timerVisible = false
@@ -308,6 +328,7 @@ internal fun PlayerScreen(
                 onCancelSleepTimer()
                 timerVisible = false
             },
+            isGlow = surface == PlayerSurface.Glow,
             onDismiss = { timerVisible = false },
         )
     }
@@ -1209,6 +1230,13 @@ private fun GlowPlayer(
     val controlLevel = displayProfile.glowControlLevel.coerceIn(0, 255)
     val subtitleColor = Color(subtitleLevel, subtitleLevel, subtitleLevel)
     val controlColor = Color(controlLevel, controlLevel, controlLevel)
+    val showTimedText =
+        shouldShowGlowTimedText(
+            playbackState = playback.playbackState,
+            errorMessage = playback.errorMessage,
+            isPlaying = playback.isPlaying,
+            sleepTimerDidFinish = sleepTimer.didFinish,
+        )
 
     fun showControls() {
         controlsVisible = true
@@ -1300,7 +1328,7 @@ private fun GlowPlayer(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                text = primaryText.orEmpty(),
+                text = primaryText.takeIf { showTimedText }.orEmpty(),
                 modifier = Modifier.fillMaxWidth(),
                 color = subtitleColor,
                 fontSize = displayProfile.glowSubtitleSizeSp.coerceIn(18f, 36f).sp,
@@ -1309,7 +1337,7 @@ private fun GlowPlayer(
                     (displayProfile.glowSubtitleSizeSp.coerceIn(18f, 36f) * 1.4f).sp,
                 textAlign = TextAlign.Center,
             )
-            if (hasSecondaryText) {
+            if (hasSecondaryText && showTimedText) {
                 Text(
                     text = secondaryText.orEmpty(),
                     modifier = Modifier.fillMaxWidth(),
@@ -1672,54 +1700,279 @@ private fun QueueDialog(
     )
 }
 
+private enum class SleepTimerCondition {
+    Duration,
+    EndOfItem,
+    EndOfQueue,
+}
+
+private const val MaxSleepTimerHours = 23
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SleepTimerDialog(
+internal fun SleepTimerSheet(
     state: SleepTimerState,
     onSetDuration: (Long) -> Unit,
     onEndOfItem: () -> Unit,
     showEndOfQueue: Boolean,
     onEndOfQueue: () -> Unit,
     onCancelTimer: () -> Unit,
+    isGlow: Boolean,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
+    val configuredMinutes =
+        (state.configuredDurationMs / 60_000L)
+            .coerceIn(1L, MaxSleepTimerHours * 60L + 59L)
+            .toInt()
+    val configuredHours = configuredMinutes / 60
+    val configuredMinutePart = configuredMinutes % 60
+    val hourState = rememberLazyListState(initialFirstVisibleItemIndex = configuredHours)
+    val minuteState = rememberLazyListState(initialFirstVisibleItemIndex = configuredMinutePart)
+    val selectedHours by remember { derivedStateOf { hourState.firstVisibleItemIndex } }
+    val selectedMinutes by remember { derivedStateOf { minuteState.firstVisibleItemIndex } }
+    var condition by rememberSaveable {
+        mutableStateOf(sleepTimerCondition(state.mode, showEndOfQueue))
+    }
+    val durationMs = sleepTimerDurationMs(selectedHours, selectedMinutes)
+
+    LaunchedEffect(state.configuredDurationMs) {
+        if (!hourState.isScrollInProgress) hourState.scrollToItem(configuredHours)
+        if (!minuteState.isScrollInProgress) minuteState.scrollToItem(configuredMinutePart)
+    }
+    LaunchedEffect(state.mode, showEndOfQueue) {
+        if (state.isActive) condition = sleepTimerCondition(state.mode, showEndOfQueue)
+        if (!showEndOfQueue && condition == SleepTimerCondition.EndOfQueue) {
+            condition = SleepTimerCondition.Duration
+        }
+    }
+    val containerColor = if (isGlow) Color.Black else AppSurfaceRaised
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        title = { Text("睡眠定时", color = AppPrimaryText) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        containerColor = containerColor,
+        scrimColor = Color.Black.copy(alpha = 0.72f),
+        dragHandle = {
+            Box(
+                modifier =
+                    Modifier
+                        .padding(top = 10.dp, bottom = 8.dp)
+                        .size(width = 32.dp, height = 3.dp)
+                        .background(AppHairline, RoundedCornerShape(2.dp)),
+            )
+        },
+    ) {
+        Column(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 24.dp, end = 24.dp, bottom = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "睡眠定时",
+                    color = AppPrimaryText,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
                 if (state.isActive) {
-                    Text(
-                        text = "当前：${sleepTimerLabel(state)}",
-                        color = AppAccent,
-                        fontSize = 13.sp,
-                    )
+                    Text("已开启", color = AppAccent, fontSize = 13.sp)
                 }
-                listOf(15, 30, 45, 60).forEach { minutes ->
-                    TextButton(onClick = { onSetDuration(minutes * 60_000L) }) {
-                        Text("$minutes 分钟后停止", color = AppPrimaryText)
+            }
+
+            Text("停止方式", color = AppSecondaryText, fontSize = 13.sp)
+
+            SleepTimerConditionRow(
+                label = "经过一段时间",
+                selected = condition == SleepTimerCondition.Duration,
+                onClick = { condition = SleepTimerCondition.Duration },
+            )
+
+            AnimatedVisibility(visible = condition == SleepTimerCondition.Duration) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        DurationWheel(
+                            values = 0..MaxSleepTimerHours,
+                            state = hourState,
+                            label = "小时",
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text("小时", color = AppSecondaryText, fontSize = 13.sp)
+                        Spacer(Modifier.width(12.dp))
+                        DurationWheel(
+                            values = 0..59,
+                            state = minuteState,
+                            label = "分钟",
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text("分钟", color = AppSecondaryText, fontSize = 13.sp)
                     }
-                }
-                TextButton(onClick = onEndOfItem) {
-                    Text("当前内容结束后停止", color = AppPrimaryText)
-                }
-                if (showEndOfQueue) {
-                    TextButton(onClick = onEndOfQueue) {
-                    Text("播放列表结束后停止", color = AppPrimaryText)
-                    }
-                }
-                if (state.isActive) {
-                    TextButton(onClick = onCancelTimer) {
-                        Text("取消定时", color = AppError)
+
+                    if (durationMs == 0L) {
+                        Text(
+                            "至少选择 1 分钟",
+                            modifier = Modifier.fillMaxWidth(),
+                            color = AppSecondaryText,
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center,
+                        )
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("关闭", color = AppSecondaryText) }
-        },
-        containerColor = AppSurfaceRaised,
-    )
+
+            HorizontalDivider(color = AppHairline)
+
+            SleepTimerConditionRow(
+                label = "当前内容结束",
+                selected = condition == SleepTimerCondition.EndOfItem,
+                onClick = { condition = SleepTimerCondition.EndOfItem },
+            )
+            if (showEndOfQueue) {
+                SleepTimerConditionRow(
+                    label = "播放列表结束",
+                    selected = condition == SleepTimerCondition.EndOfQueue,
+                    onClick = { condition = SleepTimerCondition.EndOfQueue },
+                )
+            }
+
+            Button(
+                onClick = {
+                    when (condition) {
+                        SleepTimerCondition.Duration -> onSetDuration(durationMs)
+                        SleepTimerCondition.EndOfItem -> onEndOfItem()
+                        SleepTimerCondition.EndOfQueue -> onEndOfQueue()
+                    }
+                },
+                enabled = condition != SleepTimerCondition.Duration || durationMs > 0L,
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .semantics {
+                            contentDescription = if (state.isActive) "重新计时" else "开始定时"
+                        },
+                colors =
+                    ButtonDefaults.buttonColors(
+                        containerColor = AppAccent,
+                        contentColor = Color.Black,
+                        disabledContainerColor = AppHairline,
+                        disabledContentColor = AppMutedText,
+                    ),
+            ) {
+                Text(if (state.isActive) "重新计时" else "开始定时")
+            }
+
+            if (state.isActive) {
+                TextButton(
+                    onClick = onCancelTimer,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) {
+                    Text("关闭定时", color = AppSecondaryText)
+                }
+            }
+        }
+    }
 }
+
+@Composable
+private fun DurationWheel(
+    values: IntRange,
+    state: LazyListState,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    val selectedIndex by remember { derivedStateOf { state.firstVisibleItemIndex } }
+    Box(
+        modifier =
+            modifier
+                .height(144.dp)
+                .semantics { contentDescription = "$label，当前 ${values.first + selectedIndex}" },
+    ) {
+        Box(
+            modifier =
+                Modifier
+                    .align(Alignment.Center)
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .background(AppSurfaceSelected, RoundedCornerShape(8.dp)),
+        )
+        LazyColumn(
+            state = state,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = 48.dp),
+            flingBehavior = rememberSnapFlingBehavior(state),
+        ) {
+            items(values.count()) { index ->
+                val selected = index == selectedIndex
+                Box(
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = (values.first + index).toString().padStart(2, '0'),
+                        color = if (selected) AppPrimaryText else AppMutedText,
+                        fontSize = if (selected) 24.sp else 16.sp,
+                        fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SleepTimerConditionRow(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onClick)
+                .heightIn(min = 52.dp)
+                .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = null,
+            colors =
+                RadioButtonDefaults.colors(
+                    selectedColor = AppAccent,
+                    unselectedColor = AppMutedText,
+                ),
+        )
+        Text(label, color = AppPrimaryText, fontSize = 15.sp)
+    }
+}
+
+private fun sleepTimerCondition(
+    mode: SleepTimerMode,
+    showEndOfQueue: Boolean,
+): SleepTimerCondition =
+    when (mode) {
+        SleepTimerMode.EndOfItem -> SleepTimerCondition.EndOfItem
+        SleepTimerMode.EndOfTonight ->
+            if (showEndOfQueue) SleepTimerCondition.EndOfQueue else SleepTimerCondition.Duration
+        SleepTimerMode.None,
+        SleepTimerMode.Duration,
+        -> SleepTimerCondition.Duration
+    }
+
+internal fun sleepTimerDurationMs(hours: Int, minutes: Int): Long =
+    (hours.coerceIn(0, MaxSleepTimerHours) * 60L + minutes.coerceIn(0, 59)) * 60_000L
 
 internal data class QueueItemSnapshot(
     val mediaId: String,
@@ -1880,15 +2133,24 @@ private fun repeatModeLabel(mode: Int): String =
     }
 
 private fun sleepTimerLabel(state: SleepTimerState): String =
-    when (state.mode) {
-        SleepTimerMode.None -> "定时"
-        SleepTimerMode.EndOfItem -> "本曲结束"
-        SleepTimerMode.EndOfTonight -> "播放列表结束"
-        SleepTimerMode.Duration -> {
-            val minutes = ((state.remainingMs + 59_999L) / 60_000L).coerceAtLeast(1L)
-            "剩余 $minutes 分"
-        }
-    }
+    if (state.isActive) "已开启" else "未开启"
+
+internal fun shouldDisplayTimedText(
+    playbackState: Int,
+    errorMessage: String?,
+): Boolean =
+    playbackState != Player.STATE_IDLE &&
+        playbackState != Player.STATE_ENDED &&
+        errorMessage == null
+
+internal fun shouldShowGlowTimedText(
+    playbackState: Int,
+    errorMessage: String?,
+    isPlaying: Boolean,
+    sleepTimerDidFinish: Boolean,
+): Boolean =
+    shouldDisplayTimedText(playbackState, errorMessage) &&
+        (isPlaying || !sleepTimerDidFinish)
 
 private fun playPauseLabel(playback: PlaybackSnapshot): String =
     when {

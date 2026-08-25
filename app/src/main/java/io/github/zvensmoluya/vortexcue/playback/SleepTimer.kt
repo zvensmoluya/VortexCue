@@ -26,6 +26,8 @@ enum class SleepTimerMode {
 data class SleepTimerState(
     val mode: SleepTimerMode = SleepTimerMode.None,
     val remainingMs: Long = 0L,
+    val configuredDurationMs: Long = DefaultSleepTimerDurationMs,
+    val didFinish: Boolean = false,
 ) {
     val isActive: Boolean
         get() = mode != SleepTimerMode.None
@@ -40,6 +42,8 @@ internal object SleepTimerCommands {
     const val DurationMs = "duration_ms"
     const val Mode = "mode"
     const val RemainingMs = "remaining_ms"
+    const val ConfiguredDurationMs = "configured_duration_ms"
+    const val DidFinish = "did_finish"
 
     val Get = SessionCommand(ActionGet, Bundle.EMPTY)
     val SetDuration = SessionCommand(ActionSetDuration, Bundle.EMPTY)
@@ -98,8 +102,15 @@ private suspend fun querySleepTimer(controller: MediaController): SleepTimerStat
     return SleepTimerState(
         mode = mode,
         remainingMs = result.extras.getLong(SleepTimerCommands.RemainingMs).coerceAtLeast(0L),
+        configuredDurationMs =
+            result.extras
+                .getLong(SleepTimerCommands.ConfiguredDurationMs, DefaultSleepTimerDurationMs)
+                .coerceAtLeast(1L),
+        didFinish = result.extras.getBoolean(SleepTimerCommands.DidFinish),
     )
 }
+
+internal const val DefaultSleepTimerDurationMs = 30L * 60_000L
 
 private suspend fun <T> ListenableFuture<T>.await(): T =
     suspendCancellableCoroutine { continuation ->
