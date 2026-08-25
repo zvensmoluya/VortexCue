@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -811,6 +812,8 @@ internal fun MiniPlayer(
     onOpen: () -> Unit,
     onPlayPause: () -> Unit,
 ) {
+    val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -821,13 +824,20 @@ internal fun MiniPlayer(
         if (durationMs > 0L) {
             LinearProgressIndicator(
                 progress = { progress.coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth().height(2.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+                    .height(2.dp),
                 color = AppAccent,
                 trackColor = AppHairline,
             )
         }
         Row(
-            modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(start = 18.dp, end = 8.dp, top = 8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 72.dp)
+                .padding(start = 18.dp, end = 10.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(
@@ -835,11 +845,29 @@ internal fun MiniPlayer(
             ) {
                 Text(title, color = AppPrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 15.sp, fontWeight = FontWeight.Medium)
                 if (durationMs > 0L) {
-                    Text("${formatTime(positionMs)} / ${formatTime(durationMs)}", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 5.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(formatTime(positionMs), color = AppSecondaryText, fontSize = 12.sp)
+                        Text("-${formatTime(remainingMs)}", color = AppMutedText, fontSize = 12.sp)
+                    }
                 }
             }
-            IconButton(onClick = onPlayPause, modifier = Modifier.semantics { contentDescription = if (isPlaying) "暂停" else "播放" }) {
-                Icon(if (isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, null, tint = AppPrimaryText)
+            Spacer(Modifier.width(12.dp))
+            IconButton(
+                onClick = onPlayPause,
+                modifier = Modifier
+                    .size(48.dp)
+                    .background(AppSurfaceSelected, CircleShape)
+                    .semantics { contentDescription = if (isPlaying) "暂停" else "播放" },
+            ) {
+                Icon(
+                    if (isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                    contentDescription = null,
+                    tint = AppPrimaryText,
+                    modifier = Modifier.size(26.dp),
+                )
             }
         }
     }

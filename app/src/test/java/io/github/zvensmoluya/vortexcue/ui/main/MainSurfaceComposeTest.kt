@@ -70,9 +70,9 @@ class MainSurfaceComposeTest {
                 MiniPlayer(
                     title = "当前标题",
                     isPlaying = false,
-                    progress = 0.5f,
+                    progress = 1f / 3f,
                     positionMs = 30_000L,
-                    durationMs = 60_000L,
+                    durationMs = 90_000L,
                     onOpen = { openRequests += 1 },
                     onPlayPause = { playRequests += 1 },
                 )
@@ -80,6 +80,8 @@ class MainSurfaceComposeTest {
         }
 
         compose.onNodeWithText("当前标题").performClick()
+        compose.onNodeWithText("00:30").assertExists()
+        compose.onNodeWithText("-01:00").assertExists()
         compose.onNodeWithContentDescription("播放").performClick()
 
         compose.runOnIdle {

@@ -16,7 +16,7 @@ VortexCue 是 Android-first、OLED-first、sleep-first 的本地内容播放器�
 
 Logo 是动作，不是第五个页面；点击只打开 Import Hub，不改变当前 Tab。歌单页承担默认进入位置，但 UI 不使用“首页”命名，也不再出现 Home、今晚、发现或来源一级入口。
 
-存在 Current Queue 时，Mini Player 跨四个 Tab 显示。Mini Player 是底栏上方的内缩 Raised Surface 卡片，只显示标题、有效时间/进度和播放/暂停；点击正文进入 Normal Player。冷启动不恢复 Glow，Glow 只能由当前运行期的 PlayerSurface 明确进入。
+存在 Current Queue 时，Mini Player 跨四个 Tab 显示。Mini Player 是底栏上方的内缩 Raised Surface 卡片，只显示标题、已播放时间、剩余时间、底部进度和播放/暂停；播放按钮使用独立圆形承载面，点击正文进入 Normal Player。它不显示同步文字、Sleep Timer 或额外播放操作。冷启动不恢复 Glow，Glow 只能由当前运行期的 PlayerSurface 明确进入。
 
 应用内视觉令牌：
 
