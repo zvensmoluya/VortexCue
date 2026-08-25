@@ -1,7 +1,22 @@
 package io.github.zvensmoluya.vortexcue.ui.main
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,13 +59,13 @@ import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -73,14 +88,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.media3.common.Player
 import io.github.zvensmoluya.vortexcue.core.model.DisplayProfile
 import io.github.zvensmoluya.vortexcue.R
 import io.github.zvensmoluya.vortexcue.core.model.displayArtist
@@ -112,7 +131,10 @@ import io.github.zvensmoluya.vortexcue.ui.theme.AppPrimaryText
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSecondaryText
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceRaised
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceSelected
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.PI
+import kotlin.math.sin
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -146,7 +168,7 @@ internal fun MainTabScreen(
     onPlaySingle: (String) -> Unit,
     onPlayPlaylist: (String, List<String>, Int) -> Unit,
     onQueueSelect: (Int) -> Unit,
-    onContinue: () -> Unit,
+    onOpenPlayer: () -> Unit,
     onPlayPause: () -> Unit,
     onOpenSyncText: (ContentSummary) -> Unit,
     syncTextUiState: SyncTextUiState,
@@ -225,6 +247,12 @@ internal fun MainTabScreen(
         selectedItemPlaylistIds =
             selectedItem?.let { repository.playlistIdsForContent(it.contentId) }.orEmpty()
     }
+    val miniPlayerUiState = resolveMiniPlayerUiState(recovery, playback)
+    var retainedMiniPlayerUiState by remember { mutableStateOf(miniPlayerUiState) }
+    LaunchedEffect(miniPlayerUiState) {
+        miniPlayerUiState?.let { retainedMiniPlayerUiState = it }
+    }
+    val displayedMiniPlayerUiState = miniPlayerUiState ?: retainedMiniPlayerUiState
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = AppBackground,
@@ -265,16 +293,22 @@ internal fun MainTabScreen(
         },
         bottomBar = {
             Column(modifier = Modifier.background(AppBackground)) {
-                if (recovery.queue.isNotEmpty()) {
-                    MiniPlayer(
-                        title = recovery.currentItem?.media?.displayTitle ?: "播放列表",
-                        isPlaying = playback.isPlaying,
-                        progress = if (playback.durationMs > 0) playback.positionMs.toFloat() / playback.durationMs else 0f,
-                        positionMs = playback.positionMs,
-                        durationMs = playback.durationMs,
-                        onOpen = onContinue,
-                        onPlayPause = onPlayPause,
-                    )
+                AnimatedVisibility(
+                    visible = miniPlayerUiState != null,
+                    enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { it / 5 },
+                    exit = fadeOut(tween(140)) + slideOutVertically(tween(180)) { it / 5 },
+                ) {
+                    displayedMiniPlayerUiState?.let { state ->
+                        MiniPlayer(
+                            title = state.title,
+                            isPlaying = state.isPlaying,
+                            isBuffering = state.isBuffering,
+                            positionMs = state.positionMs,
+                            durationMs = state.durationMs,
+                            onOpen = onOpenPlayer,
+                            onPlayPause = onPlayPause,
+                        )
+                    }
                 }
                 MainNavigationBar(
                     selectedTab = selectedTab,
@@ -806,71 +840,235 @@ private fun SettingsTab(
 internal fun MiniPlayer(
     title: String,
     isPlaying: Boolean,
-    progress: Float,
+    isBuffering: Boolean,
     positionMs: Long,
     durationMs: Long,
     onOpen: () -> Unit,
     onPlayPause: () -> Unit,
 ) {
     val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
+    val motionPhase = remember { Animatable(0f) }
+    LaunchedEffect(isPlaying) {
+        if (!isPlaying) {
+            motionPhase.snapTo(0f)
+            return@LaunchedEffect
+        }
+        while (isActive) {
+            motionPhase.snapTo(0f)
+            motionPhase.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = 1_400, easing = LinearEasing),
+            )
+        }
+    }
+    val pulse = ((sin(motionPhase.value * 2f * PI.toFloat() - PI.toFloat() / 2f) + 1f) / 2f)
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 8.dp)
-            .heightIn(min = 72.dp)
-            .background(AppSurfaceRaised, RoundedCornerShape(8.dp)),
-    ) {
-        if (durationMs > 0L) {
-            LinearProgressIndicator(
-                progress = { progress.coerceIn(0f, 1f) },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp)
-                    .height(2.dp),
-                color = AppAccent,
-                trackColor = AppHairline,
+            .heightIn(min = 68.dp)
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFF191620), Color(0xFF0E0D12)),
+                ),
             )
-        }
+            .clickable(
+                onClickLabel = "打开播放器",
+                role = Role.Button,
+                onClick = onOpen,
+            ),
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .height(5.dp)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(AppAccent.copy(alpha = if (isPlaying) 0.14f else 0.07f), Color.Transparent),
+                    ),
+                ),
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth(0.72f)
+                .height(1.dp)
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(Color.Transparent, AppAccent.copy(alpha = if (isPlaying) 0.72f else 0.32f), Color.Transparent),
+                    ),
+                ),
+        )
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 72.dp)
-                .padding(start = 18.dp, end = 10.dp, bottom = 4.dp),
+                .heightIn(min = 68.dp)
+                .padding(start = 18.dp, end = 12.dp, top = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            MiniPlayerStateMark(
+                isPlaying = isPlaying,
+                isBuffering = isBuffering,
+                phase = motionPhase.value,
+            )
+            Spacer(Modifier.width(13.dp))
             Column(
-                modifier = Modifier.weight(1f).combinedClickable(onClick = onOpen, onLongClick = onOpen).padding(vertical = 10.dp),
+                modifier = Modifier.weight(1f).padding(vertical = 8.dp),
             ) {
-                Text(title, color = AppPrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                AnimatedContent(
+                    targetState = title,
+                    transitionSpec = {
+                        (fadeIn(tween(180)) + slideInHorizontally(tween(180)) { it / 6 })
+                            .togetherWith(fadeOut(tween(140)) + slideOutHorizontally(tween(140)) { -it / 6 })
+                    },
+                    label = "miniPlayerTitle",
+                ) { currentTitle ->
+                    Text(
+                        currentTitle,
+                        color = AppPrimaryText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
                 if (durationMs > 0L) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 5.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(formatTime(positionMs), color = AppSecondaryText, fontSize = 12.sp)
-                        Text("-${formatTime(remainingMs)}", color = AppMutedText, fontSize = 12.sp)
-                    }
+                    Text(
+                        "${formatTime(positionMs)} · -${formatTime(remainingMs)}",
+                        color = AppSecondaryText,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
                 }
             }
-            Spacer(Modifier.width(12.dp))
-            IconButton(
+            Spacer(Modifier.width(10.dp))
+            MiniPlayerPlaybackButton(
+                isPlaying = isPlaying,
+                isBuffering = isBuffering,
+                pulse = pulse,
                 onClick = onPlayPause,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MiniPlayerStateMark(
+    isPlaying: Boolean,
+    isBuffering: Boolean,
+    phase: Float,
+) {
+    Row(
+        modifier = Modifier.size(width = 22.dp, height = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        repeat(3) { index ->
+            val normalizedWave =
+                ((sin((phase + index * 0.23f) * 2f * PI.toFloat()) + 1f) / 2f)
+            val height =
+                when {
+                    isPlaying -> 7f + normalizedWave * 13f
+                    isBuffering -> listOf(6f, 12f, 6f)[index]
+                    else -> 4f
+                }
+            Box(
                 modifier = Modifier
-                    .size(48.dp)
-                    .background(AppSurfaceSelected, CircleShape)
-                    .semantics { contentDescription = if (isPlaying) "暂停" else "播放" },
+                    .width(3.dp)
+                    .height(height.dp)
+                    .background(
+                        if (isPlaying) AppAccent else AppMutedText,
+                        RoundedCornerShape(2.dp),
+                    ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun MiniPlayerPlaybackButton(
+    isPlaying: Boolean,
+    isBuffering: Boolean,
+    pulse: Float,
+    onClick: () -> Unit,
+) {
+    Box(modifier = Modifier.size(56.dp), contentAlignment = Alignment.Center) {
+        if (isPlaying) {
+            Box(
+                modifier = Modifier
+                    .size((45f + pulse * 8f).dp)
+                    .background(
+                        AppAccent.copy(alpha = 0.05f + pulse * 0.07f),
+                        CircleShape,
+                    ),
+            )
+        }
+        if (isBuffering) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(49.dp).clearAndSetSemantics { },
+                color = AppAccent.copy(alpha = 0.78f),
+                strokeWidth = 1.5.dp,
+            )
+        }
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier
+                .size(48.dp)
+                .semantics { contentDescription = if (isPlaying) "暂停" else "播放" },
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(
+                        Brush.radialGradient(
+                            listOf(AppSurfaceSelected, Color(0xFF211E2B)),
+                        ),
+                        CircleShape,
+                    ),
+                contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    if (isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
-                    contentDescription = null,
-                    tint = AppPrimaryText,
-                    modifier = Modifier.size(26.dp),
-                )
+                AnimatedContent(
+                    targetState = isPlaying,
+                    transitionSpec = {
+                        (fadeIn(tween(130)) + scaleIn(tween(160), initialScale = 0.78f))
+                            .togetherWith(fadeOut(tween(100)) + scaleOut(tween(120), targetScale = 0.78f))
+                    },
+                    label = "miniPlayerPlaybackIcon",
+                ) { playing ->
+                    Icon(
+                        if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                        contentDescription = null,
+                        tint = AppPrimaryText,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
             }
         }
     }
+}
+
+internal data class MiniPlayerUiState(
+    val title: String,
+    val isPlaying: Boolean,
+    val positionMs: Long,
+    val durationMs: Long,
+    val isBuffering: Boolean = false,
+)
+
+internal fun resolveMiniPlayerUiState(
+    recovery: PlaybackRecoveryProjection,
+    playback: PlaybackSnapshot,
+): MiniPlayerUiState? {
+    val currentItem = recovery.currentItem ?: return null
+    val hasRuntimeTiming = playback.durationMs > 0L
+    return MiniPlayerUiState(
+        title = currentItem.media.displayTitle,
+        isPlaying = playback.isPlaying,
+        positionMs = if (hasRuntimeTiming) playback.positionMs else recovery.positionMs,
+        durationMs = if (hasRuntimeTiming) playback.durationMs else recovery.durationMs,
+        isBuffering = playback.playbackState == Player.STATE_BUFFERING,
+    )
 }
 
 @Composable

@@ -3,11 +3,16 @@ package io.github.zvensmoluya.vortexcue.ui.main
 import android.app.Application
 import android.net.Uri
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -17,8 +22,11 @@ import io.github.zvensmoluya.vortexcue.core.model.ContentAvailability
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
 import io.github.zvensmoluya.vortexcue.data.ContentDisposition
 import io.github.zvensmoluya.vortexcue.data.ContentSummary
+import io.github.zvensmoluya.vortexcue.data.PlaybackItem
+import io.github.zvensmoluya.vortexcue.data.PlaybackRecoveryProjection
 import io.github.zvensmoluya.vortexcue.data.PlaylistSummary
 import io.github.zvensmoluya.vortexcue.library.LibraryCoordinatorState
+import io.github.zvensmoluya.vortexcue.ui.player.PlaybackSnapshot
 import io.github.zvensmoluya.vortexcue.ui.queue.QueueItemRow
 import io.github.zvensmoluya.vortexcue.ui.theme.VortexCueTheme
 import org.junit.Assert.assertEquals
@@ -62,7 +70,7 @@ class MainSurfaceComposeTest {
     }
 
     @Test
-    fun miniPlayerOpensPlayerAndTogglesPlayback() {
+    fun miniPlayerOpensOnlyOnClickAndKeepsPlaybackSeparate() {
         var openRequests = 0
         var playRequests = 0
         compose.setContent {
@@ -70,7 +78,7 @@ class MainSurfaceComposeTest {
                 MiniPlayer(
                     title = "当前标题",
                     isPlaying = false,
-                    progress = 1f / 3f,
+                    isBuffering = false,
                     positionMs = 30_000L,
                     durationMs = 90_000L,
                     onOpen = { openRequests += 1 },
@@ -79,15 +87,47 @@ class MainSurfaceComposeTest {
             }
         }
 
-        compose.onNodeWithText("当前标题").performClick()
-        compose.onNodeWithText("00:30").assertExists()
-        compose.onNodeWithText("-01:00").assertExists()
+        val card = compose.onNodeWithText("当前标题").assertHasClickAction()
+        assertEquals(false, card.fetchSemanticsNode().config.contains(SemanticsActions.OnLongClick))
+        card.performClick()
+        compose.onNodeWithText("00:30 · -01:00").assertExists()
+        compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo)).assertCountEquals(0)
         compose.onNodeWithContentDescription("播放").performClick()
 
         compose.runOnIdle {
             assertEquals(1, openRequests)
             assertEquals(1, playRequests)
         }
+    }
+
+    @Test
+    fun miniPlayerUsesPersistedTimingUntilRuntimeTimingIsAvailable() {
+        val recovery =
+            PlaybackRecoveryProjection(
+                queue =
+                    listOf(
+                        PlaybackItem(
+                            contentId = "content",
+                            locatorId = "locator",
+                            media = MediaSourceRef(Uri.parse("content://test/content"), "恢复标题.mp3", "audio/mpeg"),
+                            availability = ContentAvailability.Available,
+                        ),
+                    ),
+                positionMs = 30_000L,
+                durationMs = 90_000L,
+            )
+
+        assertEquals(
+            MiniPlayerUiState("恢复标题", false, 30_000L, 90_000L),
+            resolveMiniPlayerUiState(recovery, PlaybackSnapshot()),
+        )
+        assertEquals(
+            MiniPlayerUiState("恢复标题", true, 45_000L, 120_000L),
+            resolveMiniPlayerUiState(
+                recovery,
+                PlaybackSnapshot(positionMs = 45_000L, durationMs = 120_000L, isPlaying = true),
+            ),
+        )
     }
 
     @Test

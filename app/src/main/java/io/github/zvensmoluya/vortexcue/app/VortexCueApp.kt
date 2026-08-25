@@ -403,7 +403,7 @@ internal fun VortexCueApp(
         scope.launch { openContentNow(contentIds, index) }
     }
 
-    fun continuePlayback() {
+    fun openCurrentPlayer() {
         if (recovery.queue.isEmpty() && playback.queue.isEmpty()) return
         playerOriginTab = mainTab
         playerOriginPlaylistViewId = playlistViewId
@@ -414,7 +414,6 @@ internal fun VortexCueApp(
             // A cold launch always enters the readable Normal Player. Glow is an explicit action.
             playerSurface = PlayerSurface.Normal
             destination = AppDestination.Player
-            startPlayback()
         }
     }
 
@@ -693,7 +692,7 @@ internal fun VortexCueApp(
                         }
                     }
                 },
-                onContinue = ::continuePlayback,
+                onOpenPlayer = ::openCurrentPlayer,
                 onPlayPause = ::togglePlayback,
                 onOpenSyncText = { summary ->
                     scope.launch {
