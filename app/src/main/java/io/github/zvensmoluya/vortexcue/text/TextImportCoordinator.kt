@@ -218,12 +218,15 @@ class TextImportCoordinator(
                 val bytes =
                     inputReader?.invoke(sourceUri)
                         ?: withContext(Dispatchers.IO) { resolver.readSubtitleBytes(sourceUri) }
-                val parsed = SubtitleParser.parse(initial.sourceDisplayName, bytes)
                 val duration =
                     contentDao.activeLocator(initial.contentId)?.locatorId
                         ?.let { contentDao.locator(it)?.durationMs }
                         ?.takeIf { it > 0L }
-                timeline = CanonicalTextNormalizer.normalizeImported(parsed, duration)
+                timeline =
+                    withContext(Dispatchers.Default) {
+                        val parsed = SubtitleParser.parse(initial.sourceDisplayName, bytes)
+                        CanonicalTextNormalizer.normalizeImported(parsed, duration)
+                    }
                 val parsedOperation = reading.transition(TextImportState.Parsed)
                 textDao.upsertImportOperation(parsedOperation)
                 artifact = storage.publishTimelineArtifact(TextArtifactKind.ImportedTimeline, timeline)
@@ -231,6 +234,14 @@ class TextImportCoordinator(
                     parsedOperation.transition(TextImportState.ArtifactPublished).copy(artifactId = artifact.artifactId)
                 textDao.upsertImportOperation(publishedOperation)
             }
+            val timelineMetadata =
+                withContext(Dispatchers.Default) {
+                    ImportedTimelineMetadata(
+                        contentHash = canonicalContentHash(timeline),
+                        cueCount = timeline.cues.size,
+                        coveredEndMs = timeline.cues.maxOf(CanonicalTextCue::endMs),
+                    )
+                }
             val candidate = initial.candidateId?.let { textDao.candidate(it) }
             val track =
                 database.withWriteTransaction {
@@ -240,9 +251,9 @@ class TextImportCoordinator(
                             role = TimelineRole.Source,
                             completeness = TimelineCompleteness.Final,
                             artifacts = listOf(RevisionArtifactRole.Timeline to artifact),
-                            contentHash = canonicalContentHash(timeline),
-                            cueCount = timeline.cues.size,
-                            coveredEndMs = timeline.cues.maxOf(CanonicalTextCue::endMs),
+                            contentHash = timelineMetadata.contentHash,
+                            cueCount = timelineMetadata.cueCount,
+                            coveredEndMs = timelineMetadata.coveredEndMs,
                         )
                     commit(publishedOperation, revision, candidate)
                 }
@@ -342,6 +353,12 @@ class TextImportCoordinator(
             else -> "Unknown"
         }
 }
+
+private data class ImportedTimelineMetadata(
+    val contentHash: String,
+    val cueCount: Int,
+    val coveredEndMs: Long,
+)
 
 private fun Int.toRoles(): List<io.github.zvensmoluya.vortexcue.core.model.TimedTextRole> =
     io.github.zvensmoluya.vortexcue.core.model.TimedTextRole.entries.filterIndexed { index, _ -> this and (1 shl index) != 0 }
