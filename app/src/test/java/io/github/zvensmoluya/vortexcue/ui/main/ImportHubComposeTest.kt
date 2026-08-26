@@ -193,6 +193,29 @@ class ImportHubComposeTest {
     }
 
     @Test
+    fun trustedRjPackageUsesWorkImportInsteadOfPlaylistTarget(): Unit = runBlocking {
+        repository.applySuccessfulScan(
+            descriptor = systemDescriptor(),
+            media =
+                listOf(
+                    audio("01.wav", "第一段", folder = "Download/RJ01658524 作品/01_WAV版", mimeType = "audio/wav"),
+                    audio("01.mp3", "第一段", folder = "Download/RJ01658524 作品/02_MP3版"),
+                    audio("bonus.wav", "特典", folder = "Download/RJ01658524 作品/04_特典", mimeType = "audio/wav"),
+                ),
+            textCandidates = emptyList(),
+        )
+        setHub(coordinator = LibraryCoordinatorState(hasAudioAccess = true))
+
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("RJ01658524 作品").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("RJ01658524 作品").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("完整分发作品").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("导入这部作品").assertExists()
+        compose.onNodeWithText("导入到").assertDoesNotExist()
+        compose.onNodeWithText("正篇与特典将按发行顺序保存").assertExists()
+        Unit
+    }
+
+    @Test
     fun refreshUpdatesAutomaticSelectionUntilUserChangesIt() = runBlocking {
         val first = audio("first.mp3", "First")
         val second = audio("second.mp3", "Second")

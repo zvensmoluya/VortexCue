@@ -315,6 +315,103 @@ data class ContentDispositionEntity(
     val decidedAtMs: Long,
 )
 
+/** A stable, release-authored work imported from a trusted distribution package. */
+@Entity(
+    tableName = "work",
+    indices = [
+        Index(value = ["source_key"], unique = true),
+        Index("last_played_at_ms"),
+    ],
+)
+data class WorkEntity(
+    @PrimaryKey
+    @ColumnInfo(name = "work_id")
+    val workId: String,
+    @ColumnInfo(name = "source_key")
+    val sourceKey: String,
+    @ColumnInfo(name = "release_code")
+    val releaseCode: String,
+    val title: String,
+    @ColumnInfo(name = "manifest_fingerprint")
+    val manifestFingerprint: String,
+    @ColumnInfo(name = "profile_label")
+    val profileLabel: String,
+    @ColumnInfo(name = "created_at_ms")
+    val createdAtMs: Long,
+    @ColumnInfo(name = "updated_at_ms")
+    val updatedAtMs: Long,
+    @ColumnInfo(name = "last_played_at_ms")
+    val lastPlayedAtMs: Long? = null,
+)
+
+@Entity(
+    tableName = "work_part",
+    primaryKeys = ["work_id", "content_id"],
+    foreignKeys = [
+        ForeignKey(
+            entity = WorkEntity::class,
+            parentColumns = ["work_id"],
+            childColumns = ["work_id"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = ContentEntity::class,
+            parentColumns = ["content_id"],
+            childColumns = ["content_id"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("content_id"), Index(value = ["work_id", "sort_position"])],
+)
+data class WorkPartEntity(
+    @ColumnInfo(name = "work_id")
+    val workId: String,
+    @ColumnInfo(name = "content_id")
+    val contentId: String,
+    @ColumnInfo(name = "section_name")
+    val sectionName: String,
+    @ColumnInfo(name = "variant_key")
+    val variantKey: String,
+    @ColumnInfo(name = "sort_position")
+    val sortPosition: Long,
+    @ColumnInfo(name = "is_included")
+    val isIncluded: Boolean,
+)
+
+@Entity(
+    tableName = "work_progress",
+    foreignKeys = [
+        ForeignKey(
+            entity = WorkEntity::class,
+            parentColumns = ["work_id"],
+            childColumns = ["work_id"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = ContentEntity::class,
+            parentColumns = ["content_id"],
+            childColumns = ["content_id"],
+            onDelete = ForeignKey.SET_NULL,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("content_id")],
+)
+data class WorkProgressEntity(
+    @PrimaryKey
+    @ColumnInfo(name = "work_id")
+    val workId: String,
+    @ColumnInfo(name = "content_id")
+    val contentId: String?,
+    @ColumnInfo(name = "position_ms")
+    val positionMs: Long,
+    @ColumnInfo(name = "updated_at_ms")
+    val updatedAtMs: Long,
+)
+
 /** A playlist is independent from filesystem folders and media sources. */
 @Entity(
     tableName = "playlist",
@@ -340,10 +437,9 @@ data class PlaylistEntity(
     val systemRole: String? = null,
 )
 
-/** A content can belong to multiple playlists, but only once inside each playlist. */
+/** A playlist entry references either one loose content or one imported work. */
 @Entity(
-    tableName = "playlist_item",
-    primaryKeys = ["playlist_id", "content_id"],
+    tableName = "playlist_entry",
     foreignKeys = [
         ForeignKey(
             entity = ContentEntity::class,
@@ -359,19 +455,50 @@ data class PlaylistEntity(
             onDelete = ForeignKey.CASCADE,
             onUpdate = ForeignKey.CASCADE,
         ),
+        ForeignKey(
+            entity = WorkEntity::class,
+            parentColumns = ["work_id"],
+            childColumns = ["work_id"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
     ],
-    indices = [Index("content_id"), Index(value = ["playlist_id", "sort_position"])],
+    indices = [
+        Index("content_id"),
+        Index("work_id"),
+        Index(value = ["playlist_id", "sort_position"]),
+        Index(value = ["playlist_id", "content_id"], unique = true),
+        Index(value = ["playlist_id", "work_id"], unique = true),
+    ],
 )
-data class PlaylistItemEntity(
+data class PlaylistEntryEntity(
     @ColumnInfo(name = "playlist_id")
     val playlistId: String,
     @ColumnInfo(name = "content_id")
-    val contentId: String,
+    val contentId: String?,
     @ColumnInfo(name = "sort_position")
     val sortPosition: Long,
     @ColumnInfo(name = "added_at_ms")
     val addedAtMs: Long,
-)
+    @ColumnInfo(name = "work_id")
+    val workId: String? = null,
+    @PrimaryKey
+    @ColumnInfo(name = "entry_id")
+    val entryId: String = playlistEntryId(playlistId, contentId, workId),
+) {
+    init {
+        require((contentId == null) != (workId == null))
+    }
+}
+
+private fun playlistEntryId(playlistId: String, contentId: String?, workId: String?): String =
+    when {
+        contentId != null -> "content:$playlistId:$contentId"
+        workId != null -> "work:$playlistId:$workId"
+        else -> error("Playlist entry needs a reference")
+    }
+
+typealias PlaylistItemEntity = PlaylistEntryEntity
 
 @Entity(tableName = "import_source_preference")
 data class ImportSourcePreferenceEntity(
@@ -509,4 +636,8 @@ data class CurrentQueueEntryEntity(
     val position: Int,
     @ColumnInfo(name = "added_at_ms")
     val addedAtMs: Long,
+    @ColumnInfo(name = "origin_work_id")
+    val originWorkId: String? = null,
+    @ColumnInfo(name = "origin_playlist_entry_id")
+    val originPlaylistEntryId: String? = null,
 )

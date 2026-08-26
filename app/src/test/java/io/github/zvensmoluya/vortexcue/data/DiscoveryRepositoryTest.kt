@@ -138,6 +138,41 @@ class DiscoveryRepositoryTest {
     }
 
     @Test
+    fun trustedRjPackageImportsAsWorkAndCanBeReferencedByPlaylist() = runBlocking {
+        val descriptor =
+            SourceScanDescriptor(
+                sourceId = "folder:rj",
+                kind = LibrarySourceKind.Folder,
+                rootUri = "content://provider/tree/rj",
+                displayName = "DLsite",
+            )
+        repository.applySuccessfulScan(
+            descriptor,
+            listOf(
+                audio("01.wav", "第一段", "DLsite/RJ01658524 作品/01_WAV版", 120_000L, 10L, descriptor.sourceId),
+                audio("01.mp3", "第一段", "DLsite/RJ01658524 作品/02_MP3版", 120_500L, 10L, descriptor.sourceId),
+            ),
+            emptyList(),
+        )
+        val group = repository.discoveryGroups.first().single()
+        assertEquals("RJ01658524", group.releaseCode)
+
+        val result = repository.importWork(group.sourceKey)
+        val details = requireNotNull(repository.workDetails(result.workId))
+        assertEquals(1, details.includedParts.size)
+        assertEquals(2, repository.details(details.includedParts.single().content.contentId)?.mediaLocators?.size)
+        assertTrue(repository.playlistIdsForContent(details.includedParts.single().content.contentId).isEmpty())
+
+        val playlist = repository.createPlaylist("夜听")
+        repository.addWorkToPlaylists(result.workId, setOf(playlist.playlistId))
+        val entry = repository.observePlaylistEntries(playlist.playlistId).first().single()
+        assertTrue(entry is PlaylistEntrySummary.Work)
+        val queue = repository.playlistQueue(playlist.playlistId)
+        assertEquals(result.workId, queue.single().originWorkId)
+        assertEquals(entry.entryId, queue.single().originPlaylistEntryId)
+    }
+
+    @Test
     fun persistentScansRejectNewVideoAndDoNotInvalidateExplicitVideo() = runBlocking {
         val descriptor = systemDescriptor()
         val discoveredVideo = video("auto.mp4", MediaOrigin.MediaStore)

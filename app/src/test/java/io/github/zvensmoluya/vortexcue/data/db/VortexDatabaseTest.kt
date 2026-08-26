@@ -273,7 +273,7 @@ class VortexDatabaseTest {
                 val tables = buildList {
                     while (statement.step()) add(statement.getText(0))
                 }
-                assertEquals(listOf("content", "playlist"), tables)
+                assertEquals(listOf("content", "playlist", "playlist_entry"), tables)
             }
             connection.prepare("PRAGMA table_info(current_playback_session)").use { statement ->
                 val columns = buildList {
@@ -511,6 +511,59 @@ class VortexDatabaseTest {
                 assertFalse(statement.step())
             }
             connection.prepare("SELECT is_collected FROM content_disposition WHERE content_id = 'ignored-video'").use { statement ->
+                assertTrue(statement.step())
+                assertEquals(0L, statement.getLong(0))
+            }
+        }
+    }
+
+    @Test
+    fun versionTenMigrationCreatesWorkModelAndPreservesPlaylistEntriesAndQueue() = runBlocking {
+        val helper =
+            MigrationTestHelper(
+                databasePath = temporaryFolder.root.resolve("migration-v10-v11.db").toPath(),
+                schemaDirectoryPath = File("schemas").toPath(),
+                driver = BundledSQLiteDriver(),
+                databaseClass = VortexDatabase::class,
+                databaseFactory = { VortexDatabase_Impl() },
+                autoMigrationSpecs = emptyList(),
+            )
+        helper.createDatabase(10).use { connection ->
+            connection.prepare(
+                "INSERT INTO content (content_id, created_at_ms, subtitle_offset_ms) VALUES ('part', 1, 0)",
+            ).use { it.step() }
+            connection.prepare(
+                "INSERT INTO playlist (playlist_id, name, sort_position, created_at_ms, updated_at_ms, last_played_at_ms, system_role) " +
+                    "VALUES ('playlist', '测试', 0, 1, 1, NULL, NULL)",
+            ).use { it.step() }
+            connection.prepare(
+                "INSERT INTO playlist_item (playlist_id, content_id, sort_position, added_at_ms) " +
+                    "VALUES ('playlist', 'part', 3, 4)",
+            ).use { it.step() }
+            connection.prepare(
+                "INSERT INTO current_queue_entry (content_id, position, added_at_ms) VALUES ('part', 0, 5)",
+            ).use { it.step() }
+        }
+
+        helper.runMigrationsAndValidate(11, listOf(MIGRATION_10_11)).use { connection ->
+            connection.prepare(
+                "SELECT entry_id, playlist_id, content_id, work_id, sort_position FROM playlist_entry",
+            ).use { statement ->
+                assertTrue(statement.step())
+                assertEquals("content:playlist:part", statement.getText(0))
+                assertEquals("playlist", statement.getText(1))
+                assertEquals("part", statement.getText(2))
+                assertTrue(statement.isNull(3))
+                assertEquals(3L, statement.getLong(4))
+            }
+            connection.prepare("PRAGMA table_info(current_queue_entry)").use { statement ->
+                val columns = buildList {
+                    while (statement.step()) add(statement.getText(1))
+                }
+                assertTrue("origin_work_id" in columns)
+                assertTrue("origin_playlist_entry_id" in columns)
+            }
+            connection.prepare("SELECT COUNT(*) FROM work").use { statement ->
                 assertTrue(statement.step())
                 assertEquals(0L, statement.getLong(0))
             }

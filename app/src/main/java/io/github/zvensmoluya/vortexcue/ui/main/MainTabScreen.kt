@@ -108,6 +108,8 @@ import io.github.zvensmoluya.vortexcue.data.ContentRepository
 import io.github.zvensmoluya.vortexcue.data.ContentSummary
 import io.github.zvensmoluya.vortexcue.data.PlaylistBatchResult
 import io.github.zvensmoluya.vortexcue.data.PlaylistSummary
+import io.github.zvensmoluya.vortexcue.data.PlaylistEntrySummary
+import io.github.zvensmoluya.vortexcue.data.WorkSummary
 import io.github.zvensmoluya.vortexcue.data.PlaybackRecoveryProjection
 import io.github.zvensmoluya.vortexcue.data.SourceSummary
 import io.github.zvensmoluya.vortexcue.library.LibraryCoordinatorState
@@ -133,6 +135,7 @@ import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceRaised
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceSelected
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.flowOf
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -180,13 +183,27 @@ internal fun MainTabScreen(
     val scope = rememberCoroutineScope()
     val playlists by repository.playlists.collectAsState(initial = emptyList())
     val recentPlaylists by repository.recentPlaylists.collectAsState(initial = emptyList())
+    val works by repository.works.collectAsState(initial = emptyList())
     val allContent by repository.allContent.collectAsState(initial = emptyList())
     val sourceSummaries by repository.sources.collectAsState(initial = sources)
-    val detailContentFlow = remember(repository, playlistViewId) {
-        if (playlistViewId == null || playlistViewId == AllContentPlaylistId) repository.allContent
+    val selectedWorkId = playlistViewId?.takeIf { it.startsWith("work-") }
+    val detailContentFlow = remember(repository, playlistViewId, selectedWorkId) {
+        if (playlistViewId == null || playlistViewId == AllContentPlaylistId || selectedWorkId != null) repository.allContent
         else repository.observePlaylistContent(playlistViewId)
     }
     val detailContent by detailContentFlow.collectAsState(initial = emptyList())
+    val detailEntriesFlow = remember(repository, playlistViewId, selectedWorkId) {
+        if (playlistViewId != null && playlistViewId != AllContentPlaylistId && selectedWorkId == null) {
+            repository.observePlaylistEntries(playlistViewId)
+        } else {
+            flowOf(emptyList())
+        }
+    }
+    val detailEntries by detailEntriesFlow.collectAsState(initial = emptyList())
+    val workDetailsFlow = remember(repository, selectedWorkId) {
+        selectedWorkId?.let(repository::observeWorkDetails) ?: flowOf(null)
+    }
+    val selectedWorkDetails by workDetailsFlow.collectAsState(initial = null)
     var importVisible by rememberSaveable { mutableStateOf(false) }
     var importTargetPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
     var singleFileImportError by rememberSaveable { mutableStateOf<String?>(null) }
@@ -196,7 +213,10 @@ internal fun MainTabScreen(
     var playlistName by remember { mutableStateOf("") }
     var membershipItem by remember { mutableStateOf<ContentSummary?>(null) }
     var membershipInitialIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var membershipWork by remember { mutableStateOf<WorkSummary?>(null) }
+    var membershipWorkPartIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var playlistToDelete by remember { mutableStateOf<PlaylistSummary?>(null) }
+    var workToDelete by remember { mutableStateOf<WorkSummary?>(null) }
     var playlistReorderMode by rememberSaveable { mutableStateOf(false) }
     var contentReorderMode by rememberSaveable { mutableStateOf(false) }
     var contentOrganizeMode by rememberSaveable { mutableStateOf(false) }
@@ -207,7 +227,10 @@ internal fun MainTabScreen(
     val settingsListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
 
     LaunchedEffect(playlistViewId, playlists) {
-        if (playlistViewId != null && playlistViewId != AllContentPlaylistId && playlists.none { it.playlistId == playlistViewId }) {
+        if (
+            playlistViewId != null && playlistViewId != AllContentPlaylistId &&
+            !playlistViewId.startsWith("work-") && playlists.none { it.playlistId == playlistViewId }
+        ) {
             onPlaylistViewChanged(null)
         }
     }
@@ -330,11 +353,13 @@ internal fun MainTabScreen(
                         PlaylistOverview(
                             playlists = playlists,
                             recentPlaylists = recentPlaylists,
-                            allContentCount = allContent.size,
+                            works = works,
+                            allContentCount = allContent.size + works.size,
                             reorderMode = playlistReorderMode,
                             listState = playlistListState,
                             onOpenAllContent = { onPlaylistViewChanged(AllContentPlaylistId) },
                             onOpenPlaylist = onPlaylistViewChanged,
+                            onOpenWork = onPlaylistViewChanged,
                             onCreatePlaylist = {
                                 playlistName = ""
                                 playlistDialogMode = PlaylistDialogMode.Create
@@ -353,73 +378,93 @@ internal fun MainTabScreen(
                                 }
                             },
                         )
-                    } else {
-                        val isAllContent = playlistViewId == AllContentPlaylistId
-                        val playlist = playlists.firstOrNull { it.playlistId == playlistViewId }
-                        PlaylistDetail(
-                            title = if (isAllContent) "全部内容" else playlist?.name ?: "歌单",
+                    } else if (selectedWorkId != null) {
+                        selectedWorkDetails?.let { details ->
+                            WorkDetailPage(
+                                details = details,
+                                onBack = { onPlaylistViewChanged(null) },
+                                onContinue = {
+                                    scope.launch {
+                                        val queue = repository.workQueue(details.summary.workId)
+                                        val index = queue.indexOfFirst { it.contentId == details.summary.progressContentId }.coerceAtLeast(0)
+                                        gateway.replaceEntries(queue, index, details.summary.progressPositionMs)
+                                    }
+                                },
+                                onPlayFromStart = {
+                                    scope.launch { gateway.replaceEntries(repository.workQueue(details.summary.workId)) }
+                                },
+                                onPlayPart = { index ->
+                                    scope.launch { gateway.replaceEntries(repository.workQueue(details.summary.workId), index) }
+                                },
+                                onPartLongPress = { selectedItem = it },
+                                onSaveProfile = { ids ->
+                                    scope.launch {
+                                        repository.setWorkIncludedParts(details.summary.workId, ids)
+                                        notice = "已更新作品播放方案"
+                                    }
+                                },
+                                onAddWorkToPlaylist = {
+                                    membershipWork = details.summary
+                                    membershipWorkPartIds = emptySet()
+                                    membershipInitialIds = emptySet()
+                                },
+                                onAddPartsToPlaylist = { ids ->
+                                    membershipWork = null
+                                    membershipWorkPartIds = ids
+                                    membershipInitialIds = emptySet()
+                                },
+                                onDeleteWork = {
+                                    workToDelete = details.summary
+                                },
+                            )
+                        }
+                    } else if (playlistViewId == AllContentPlaylistId) {
+                        AllCollectedPage(
+                            works = works,
                             content = detailContent,
-                            isAllContent = isAllContent,
-                            reorderMode = contentReorderMode,
-                            listState = playlistDetailListState,
-                            onBack = {
-                                contentReorderMode = false
-                                contentOrganizeMode = false
-                                organizedContentIds = emptySet()
-                                onPlaylistViewChanged(null)
-                            },
+                            onBack = { onPlaylistViewChanged(null) },
+                            onOpenWork = onPlaylistViewChanged,
+                            onPlayContent = onPlaySingle,
+                            onContentLongPress = { selectedItem = it },
+                        )
+                    } else {
+                        val playlist = playlists.firstOrNull { it.playlistId == playlistViewId }
+                        MixedPlaylistDetail(
+                            title = playlist?.name ?: "歌单",
+                            entries = detailEntries,
+                            onBack = { onPlaylistViewChanged(null) },
                             onPlayAll = {
-                                if (!isAllContent && detailContent.isNotEmpty()) {
-                                    onPlayPlaylist(playlistViewId, detailContent.map { it.contentId }, 0)
+                                scope.launch {
+                                    val queue = repository.playlistQueue(playlistViewId)
+                                    if (queue.isNotEmpty()) {
+                                        gateway.replaceEntries(queue)
+                                        repository.markPlaylistPlayed(playlistViewId)
+                                    }
                                 }
                             },
-                            onPlay = { index ->
-                                if (isAllContent) detailContent.getOrNull(index)?.let { onPlaySingle(it.contentId) }
-                                else onPlayPlaylist(playlistViewId, detailContent.map { it.contentId }, index)
-                            },
-                            onLongPress = { selectedItem = it },
-                            onReorderModeChanged = {
-                                contentReorderMode = it
-                                if (it) {
-                                    contentOrganizeMode = false
-                                    organizedContentIds = emptySet()
+                            onPlayEntry = { entryIndex ->
+                                scope.launch {
+                                    val selectedEntry = detailEntries.getOrNull(entryIndex)
+                                    val queue = repository.playlistQueue(playlistViewId)
+                                    val queueIndex = queue.indexOfFirst { it.originPlaylistEntryId == selectedEntry?.entryId }.coerceAtLeast(0)
+                                    if (queue.isNotEmpty()) {
+                                        gateway.replaceEntries(queue, queueIndex)
+                                        repository.markPlaylistPlayed(playlistViewId)
+                                    }
                                 }
                             },
-                            onMove = { from, to ->
-                                val ids = detailContent.map { it.contentId }.toMutableList()
-                                if (!isAllContent && from in ids.indices && to in ids.indices) {
-                                    ids.add(to, ids.removeAt(from))
-                                    scope.launch { repository.reorderPlaylistItems(playlistViewId, ids) }
+                            onOpenWork = onPlaylistViewChanged,
+                            onContentLongPress = { selectedItem = it },
+                            onRemoveWork = { entryId ->
+                                scope.launch {
+                                    repository.removePlaylistEntry(entryId, playlistViewId)
+                                    notice = "已从歌单移除作品"
                                 }
                             },
                             onAddContent = {
-                                importTargetPlaylistId = playlistViewId.takeIf { it != AllContentPlaylistId }
+                                importTargetPlaylistId = playlistViewId
                                 singleFileImportError = null
                                 importVisible = true
-                            },
-                            organizeMode = contentOrganizeMode,
-                            selectedContentIds = organizedContentIds,
-                            onOrganizeModeChanged = { enabled ->
-                                contentOrganizeMode = enabled
-                                if (enabled) contentReorderMode = false else organizedContentIds = emptySet()
-                            },
-                            onSelectionChanged = { organizedContentIds = it },
-                            onBatchAdd = { playlistBatchTargetMode = PlaylistBatchTargetMode.Add },
-                            onBatchMove = { playlistBatchTargetMode = PlaylistBatchTargetMode.Move },
-                            onBatchRemove = {
-                                val currentPlaylistId = playlistViewId.takeIf { it != AllContentPlaylistId }
-                                val selectedIds = organizedContentIds
-                                if (currentPlaylistId != null && selectedIds.isNotEmpty()) {
-                                    scope.launch {
-                                        runCatching {
-                                            repository.removeContentsFromPlaylist(selectedIds, currentPlaylistId)
-                                        }.onSuccess { result ->
-                                            notice = batchRemoveNotice(result)
-                                            contentOrganizeMode = false
-                                            organizedContentIds = emptySet()
-                                        }.onFailure { notice = it.message ?: "无法移除所选内容" }
-                                    }
-                                }
                             },
                         )
                     }
@@ -461,10 +506,22 @@ internal fun MainTabScreen(
                 task = syncTextUiState.tasks.firstOrNull { it.contentId == item.contentId },
                 onPlay = {
                     selectedItem = null
-                    val currentPlaylistId = playlistViewId?.takeIf { it != AllContentPlaylistId }
-                    val index = detailContent.indexOfFirst { it.contentId == item.contentId }
-                    if (currentPlaylistId != null && index >= 0) {
-                        onPlayPlaylist(currentPlaylistId, detailContent.map { it.contentId }, index)
+                    val work = selectedWorkDetails
+                    if (work != null) {
+                        val index = work.includedParts.indexOfFirst { it.content.contentId == item.contentId }.coerceAtLeast(0)
+                        scope.launch { gateway.replaceEntries(repository.workQueue(work.summary.workId), index) }
+                        return@ItemActions
+                    }
+                    val currentPlaylistId = playlistViewId?.takeIf { it != AllContentPlaylistId && !it.startsWith("work-") }
+                    val entry = detailEntries.filterIsInstance<PlaylistEntrySummary.Content>()
+                        .firstOrNull { it.content.contentId == item.contentId }
+                    if (currentPlaylistId != null && entry != null) {
+                        scope.launch {
+                            val queue = repository.playlistQueue(currentPlaylistId)
+                            val index = queue.indexOfFirst { it.originPlaylistEntryId == entry.entryId }.coerceAtLeast(0)
+                            gateway.replaceEntries(queue, index)
+                            repository.markPlaylistPlayed(currentPlaylistId)
+                        }
                     } else {
                         onPlaySingle(item.contentId)
                     }
@@ -508,13 +565,18 @@ internal fun MainTabScreen(
                     selectedItem = null
                     onOpenSyncText(item)
                 },
-                onIgnore = {
-                    selectedItem = null
-                    scope.launch {
-                        repository.ignore(item.contentId)
-                        notice = "已移出内容（原文件未删除）"
-                    }
-                },
+                onIgnore =
+                    if (selectedWorkDetails == null) {
+                        {
+                            selectedItem = null
+                            scope.launch {
+                                repository.ignore(item.contentId)
+                                notice = "已移出内容（原文件未删除）"
+                            }
+                        }
+                    } else {
+                        null
+                    },
                 onCancelSync = {
                     selectedItem = null
                     onSyncTextAction(SyncTextAction.CancelForContent(item.contentId))
@@ -536,6 +598,7 @@ internal fun MainTabScreen(
             title = item.media.displayTitle,
             playlists = playlists,
             initialSelection = membershipInitialIds,
+            defaultToFavorite = selectedWorkDetails == null,
             onDismiss = { membershipItem = null },
             onSave = { selectedIds, newName ->
                 scope.launch {
@@ -555,6 +618,38 @@ internal fun MainTabScreen(
                         notice = "歌单已更新"
                     }
                         .onFailure { notice = it.message ?: "无法更新歌单" }
+                }
+            },
+        )
+    }
+
+    if (membershipWork != null || membershipWorkPartIds.isNotEmpty()) {
+        val work = membershipWork
+        PlaylistMembershipSheet(
+            title = work?.title ?: "将 ${membershipWorkPartIds.size} 个段落加入歌单",
+            playlists = playlists,
+            initialSelection = emptySet(),
+            defaultToFavorite = false,
+            onDismiss = {
+                membershipWork = null
+                membershipWorkPartIds = emptySet()
+            },
+            onSave = { selectedIds, newName ->
+                scope.launch {
+                    runCatching {
+                        val createdId = newName?.let { repository.createPlaylist(it).playlistId }
+                        val targets = selectedIds + listOfNotNull(createdId)
+                        require(targets.isNotEmpty()) { "至少选择一个歌单" }
+                        if (work != null) {
+                            repository.addWorkToPlaylists(work.workId, targets)
+                        } else {
+                            repository.addContentsToPlaylists(membershipWorkPartIds, targets)
+                        }
+                    }.onSuccess {
+                        membershipWork = null
+                        membershipWorkPartIds = emptySet()
+                        notice = "已加入歌单"
+                    }.onFailure { notice = it.message ?: "无法加入歌单" }
                 }
             },
         )
@@ -636,6 +731,27 @@ internal fun MainTabScreen(
                     notice = "歌单已删除"
                 }
             },
+        )
+    }
+
+    workToDelete?.let { work ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { workToDelete = null },
+            title = { Text("移出作品？") },
+            text = { Text("作品入口和作品级进度会被移除；已单独加入手动歌单的段落会保留，原文件不会删除。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        workToDelete = null
+                        scope.launch {
+                            repository.deleteWork(work.workId)
+                            onPlaylistViewChanged(null)
+                            notice = "已移出作品（原文件未删除）"
+                        }
+                    },
+                ) { Text("移出") }
+            },
+            dismissButton = { TextButton(onClick = { workToDelete = null }) { Text("取消") } },
         )
     }
 
@@ -861,6 +977,7 @@ internal fun MiniPlayer(
             )
         }
     }
+
     val pulse = ((sin(motionPhase.value * 2f * PI.toFloat() - PI.toFloat() / 2f) + 1f) / 2f)
 
     Box(
@@ -1080,7 +1197,7 @@ private fun ItemActions(
     onManagePlaylists: () -> Unit,
     onRemoveFromPlaylist: (() -> Unit)?,
     onSync: () -> Unit,
-    onIgnore: () -> Unit,
+    onIgnore: (() -> Unit)?,
     onCancelSync: () -> Unit,
     onRetrySync: () -> Unit,
     onAllowMeteredSync: () -> Unit,
@@ -1104,7 +1221,7 @@ private fun ItemActions(
                 ActionButton("暂停同步文字", Icons.Outlined.Close, onCancelSync)
             }
         }
-        ActionButton("移出内容", Icons.Outlined.DeleteOutline, onIgnore)
+        onIgnore?.let { ActionButton("移出内容", Icons.Outlined.DeleteOutline, it) }
         Spacer(Modifier.height(16.dp))
     }
 }

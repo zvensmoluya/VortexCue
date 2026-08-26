@@ -8,6 +8,14 @@ data class PlaybackItem(
     val locatorId: String,
     val media: MediaSourceRef,
     val availability: ContentAvailability,
+    val originWorkId: String? = null,
+    val originPlaylistEntryId: String? = null,
+)
+
+data class QueueContentRef(
+    val contentId: String,
+    val originWorkId: String? = null,
+    val originPlaylistEntryId: String? = null,
 )
 
 data class PlaybackRecoveryProjection(

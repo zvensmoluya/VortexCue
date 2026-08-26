@@ -132,6 +132,59 @@ data class PlaylistSummary(
         get() = systemRole == PlaylistSystemRole.DefaultFavorite
 }
 
+data class WorkSummary(
+    val workId: String,
+    val sourceKey: String,
+    val releaseCode: String,
+    val title: String,
+    val profileLabel: String,
+    val partCount: Int,
+    val totalDurationMs: Long,
+    val lastPlayedAtMs: Long?,
+    val progressContentId: String? = null,
+    val progressPositionMs: Long = 0L,
+)
+
+data class WorkPartSummary(
+    val content: ContentSummary,
+    val sectionName: String,
+    val variantKey: String,
+    val sortPosition: Long,
+    val isIncluded: Boolean,
+)
+
+data class WorkDetails(
+    val summary: WorkSummary,
+    val parts: List<WorkPartSummary>,
+) {
+    val includedParts: List<WorkPartSummary>
+        get() = parts.filter(WorkPartSummary::isIncluded)
+}
+
+sealed interface PlaylistEntrySummary {
+    val entryId: String
+    val sortPosition: Long
+
+    data class Content(
+        override val entryId: String,
+        override val sortPosition: Long,
+        val content: ContentSummary,
+    ) : PlaylistEntrySummary
+
+    data class Work(
+        override val entryId: String,
+        override val sortPosition: Long,
+        val work: WorkSummary,
+    ) : PlaylistEntrySummary
+}
+
+data class WorkImportResult(
+    val workId: String,
+    val partCount: Int,
+    val mergedLocatorCount: Int,
+    val upgradedCollectedCount: Int,
+)
+
 data class ImportContentResult(
     val contentCount: Int,
     val changedContentCount: Int,
@@ -171,7 +224,12 @@ data class DiscoveryGroupSummary(
     val hasAccess: Boolean,
     val errorMessage: String?,
     val lastImportedAtMs: Long?,
-)
+    val releaseCode: String? = null,
+    val importedWorkId: String? = null,
+) {
+    val isTrustedWorkPackage: Boolean
+        get() = releaseCode != null
+}
 
 data class DiscoveryItem(
     val contentId: String,
@@ -181,6 +239,9 @@ data class DiscoveryItem(
     val status: DiscoveryItemStatus,
     val isDefaultSelected: Boolean,
     val availability: ContentAvailability,
+    val folder: String? = null,
+    val sectionName: String = "正篇",
+    val variantKey: String = "default",
 )
 
 

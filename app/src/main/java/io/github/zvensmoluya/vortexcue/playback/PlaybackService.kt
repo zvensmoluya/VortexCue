@@ -515,9 +515,21 @@ class PlaybackService : MediaSessionService() {
                 queueMutex.withLock {
                     when (customCommand.customAction) {
                         PlaybackCommands.Replace.customAction -> {
+                            val contentIds = args.getStringArrayList(PlaybackCommands.ContentIds).orEmpty()
+                            val workIds = args.getStringArrayList(PlaybackCommands.OriginWorkIds).orEmpty()
+                            val playlistEntryIds =
+                                args.getStringArrayList(PlaybackCommands.OriginPlaylistEntryIds).orEmpty()
+                            val entries = contentIds.mapIndexed { index, contentId ->
+                                io.github.zvensmoluya.vortexcue.data.QueueContentRef(
+                                    contentId = contentId,
+                                    originWorkId = workIds.getOrNull(index)?.takeIf(String::isNotEmpty),
+                                    originPlaylistEntryId =
+                                        playlistEntryIds.getOrNull(index)?.takeIf(String::isNotEmpty),
+                                )
+                            }
                             val projection =
-                                playbackRepository.replace(
-                                    contentIds = args.getStringArrayList(PlaybackCommands.ContentIds).orEmpty(),
+                                playbackRepository.replaceEntries(
+                                    entries = entries,
                                     currentIndex = args.getInt(PlaybackCommands.CurrentIndex),
                                     positionMs = args.getLong(PlaybackCommands.PositionMs),
                                 )

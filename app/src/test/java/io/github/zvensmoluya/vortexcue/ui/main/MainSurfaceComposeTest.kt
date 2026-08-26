@@ -25,6 +25,7 @@ import io.github.zvensmoluya.vortexcue.data.ContentSummary
 import io.github.zvensmoluya.vortexcue.data.PlaybackItem
 import io.github.zvensmoluya.vortexcue.data.PlaybackRecoveryProjection
 import io.github.zvensmoluya.vortexcue.data.PlaylistSummary
+import io.github.zvensmoluya.vortexcue.data.WorkSummary
 import io.github.zvensmoluya.vortexcue.library.LibraryCoordinatorState
 import io.github.zvensmoluya.vortexcue.ui.player.PlaybackSnapshot
 import io.github.zvensmoluya.vortexcue.ui.queue.QueueItemRow
@@ -182,11 +183,13 @@ class MainSurfaceComposeTest {
                 PlaylistOverview(
                     playlists = listOf(PlaylistSummary("all-list", "练习", 3)),
                     recentPlaylists = listOf(PlaylistSummary("recent-list", "睡前", 5, lastPlayedAtMs = 1L)),
+                    works = emptyList(),
                     allContentCount = 8,
                     reorderMode = false,
                     listState = rememberLazyListState(),
                     onOpenAllContent = {},
                     onOpenPlaylist = { opens += 1 },
+                    onOpenWork = {},
                     onCreatePlaylist = {},
                     onRenamePlaylist = {},
                     onDeletePlaylist = {},
@@ -203,6 +206,47 @@ class MainSurfaceComposeTest {
         compose.onNodeWithText("搜索内容").assertDoesNotExist()
         compose.onNodeWithText("睡前").performClick()
         compose.runOnIdle { assertEquals(1, opens) }
+    }
+
+    @Test
+    fun playlistOverviewKeepsImportedWorkAsOnePersistentEntry() {
+        var openedWork: String? = null
+        compose.setContent {
+            VortexCueTheme {
+                PlaylistOverview(
+                    playlists = emptyList(),
+                    recentPlaylists = emptyList(),
+                    works =
+                        listOf(
+                            WorkSummary(
+                                workId = "work-test",
+                                sourceKey = "folder:test:rj01658524",
+                                releaseCode = "RJ01658524",
+                                title = "蓝空に、吐息。",
+                                profileLabel = "WAV 优先 · 包含特典",
+                                partCount = 16,
+                                totalDurationMs = 7_200_000L,
+                                lastPlayedAtMs = null,
+                            ),
+                        ),
+                    allContentCount = 1,
+                    reorderMode = false,
+                    listState = rememberLazyListState(),
+                    onOpenAllContent = {},
+                    onOpenPlaylist = {},
+                    onOpenWork = { openedWork = it },
+                    onCreatePlaylist = {},
+                    onRenamePlaylist = {},
+                    onDeletePlaylist = {},
+                    onReorderModeChanged = {},
+                    onMovePlaylist = { _, _ -> },
+                )
+            }
+        }
+
+        compose.onNodeWithText("作品").assertExists()
+        compose.onNodeWithText("蓝空に、吐息。").performClick()
+        compose.runOnIdle { assertEquals("work-test", openedWork) }
     }
 
     @Test

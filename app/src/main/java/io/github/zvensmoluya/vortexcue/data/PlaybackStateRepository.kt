@@ -6,6 +6,7 @@ import io.github.zvensmoluya.vortexcue.data.db.CurrentQueueEntryEntity
 import io.github.zvensmoluya.vortexcue.data.db.PlaybackDao
 import io.github.zvensmoluya.vortexcue.data.db.QueueItemRow
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase
+import io.github.zvensmoluya.vortexcue.data.db.WorkProgressEntity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -17,6 +18,7 @@ class PlaybackStateRepository(
 ) {
     private val playbackDao: PlaybackDao = database.playbackDao()
     private val contentDao = database.contentDao()
+    private val workDao = database.workDao()
 
     val recovery: Flow<PlaybackRecoveryProjection> =
         combine(playbackDao.observeSession(), playbackDao.observeQueueItems()) { session, queue ->
@@ -52,8 +54,24 @@ class PlaybackStateRepository(
             val canonical = canonicalExisting(contentIds)
             val index = currentIndex.coerceIn(0, (canonical.size - 1).coerceAtLeast(0))
             writeStructure(
-                contentIds = canonical,
+                entries = canonical.map(::QueueContentRef),
                 currentContentId = canonical.getOrNull(index),
+                positionMs = positionMs,
+                durationMs = 0L,
+            )
+        }
+
+    suspend fun replaceEntries(
+        entries: List<QueueContentRef>,
+        currentIndex: Int = 0,
+        positionMs: Long = 0L,
+    ): PlaybackRecoveryProjection =
+        database.withWriteTransaction {
+            val canonical = canonicalExistingEntries(entries)
+            val index = currentIndex.coerceIn(0, (canonical.size - 1).coerceAtLeast(0))
+            writeStructure(
+                entries = canonical,
+                currentContentId = canonical.getOrNull(index)?.contentId,
                 positionMs = positionMs,
                 durationMs = 0L,
             )
@@ -62,16 +80,18 @@ class PlaybackStateRepository(
     suspend fun append(contentIds: List<String>): PlaybackRecoveryProjection =
         database.withWriteTransaction {
             val session = sessionInside()
-            val current = playbackDao.queueEntries().map { it.contentId }
+            val current = playbackDao.queueEntries().map {
+                QueueContentRef(it.contentId, it.originWorkId, it.originPlaylistEntryId)
+            }
             val appended = canonicalExisting(contentIds)
             for (contentId in appended) contentDao.clearDraftIfContent(contentId)
-            val merged = (current + appended).distinct()
+            val merged = (current + appended.map(::QueueContentRef)).distinctBy(QueueContentRef::contentId)
             if (merged == current) {
                 return@withWriteTransaction projection(session, playbackDao.queueItems())
             }
             writeStructure(
-                contentIds = merged,
-                currentContentId = session.currentContentId ?: merged.firstOrNull(),
+                entries = merged,
+                currentContentId = session.currentContentId ?: merged.firstOrNull()?.contentId,
                 positionMs = session.positionMs,
                 durationMs = session.durationMs,
             )
@@ -81,18 +101,20 @@ class PlaybackStateRepository(
         database.withWriteTransaction {
             val canonical = contentRepository.canonicalContentId(contentId)
             val session = sessionInside()
-            val previous = playbackDao.queueEntries().map { it.contentId }
-            val removedIndex = previous.indexOf(canonical)
+            val previous = playbackDao.queueEntries().map {
+                QueueContentRef(it.contentId, it.originWorkId, it.originPlaylistEntryId)
+            }
+            val removedIndex = previous.indexOfFirst { it.contentId == canonical }
             if (removedIndex < 0) return@withWriteTransaction projection(session, playbackDao.queueItems())
-            val retained = previous.filterNot { it == canonical }
+            val retained = previous.filterNot { it.contentId == canonical }
             val nextCurrent =
                 when {
                     retained.isEmpty() -> null
-                    session.currentContentId != canonical && session.currentContentId in retained -> session.currentContentId
-                    else -> retained[removedIndex.coerceAtMost(retained.lastIndex)]
+                    session.currentContentId != canonical && retained.any { it.contentId == session.currentContentId } -> session.currentContentId
+                    else -> retained[removedIndex.coerceAtMost(retained.lastIndex)].contentId
                 }
             writeStructure(
-                contentIds = retained,
+                entries = retained,
                 currentContentId = nextCurrent,
                 positionMs = if (nextCurrent == session.currentContentId) session.positionMs else 0L,
                 durationMs = if (nextCurrent == session.currentContentId) session.durationMs else 0L,
@@ -102,14 +124,16 @@ class PlaybackStateRepository(
     suspend fun move(fromIndex: Int, toIndex: Int): PlaybackRecoveryProjection =
         database.withWriteTransaction {
             val session = sessionInside()
-            val queue = playbackDao.queueEntries().map { it.contentId }.toMutableList()
+            val queue = playbackDao.queueEntries().map {
+                QueueContentRef(it.contentId, it.originWorkId, it.originPlaylistEntryId)
+            }.toMutableList()
             if (fromIndex !in queue.indices || toIndex !in queue.indices || fromIndex == toIndex) {
                 return@withWriteTransaction projection(session, playbackDao.queueItems())
             }
             val moved = queue.removeAt(fromIndex)
             queue.add(toIndex, moved)
             writeStructure(
-                contentIds = queue,
+                entries = queue,
                 currentContentId = session.currentContentId,
                 positionMs = session.positionMs,
                 durationMs = session.durationMs,
@@ -119,7 +143,7 @@ class PlaybackStateRepository(
     suspend fun clear(): PlaybackRecoveryProjection =
         database.withWriteTransaction {
             writeStructure(
-                contentIds = emptyList(),
+                entries = emptyList(),
                 currentContentId = null,
                 positionMs = 0L,
                 durationMs = 0L,
@@ -180,18 +204,27 @@ class PlaybackStateRepository(
         durationMs: Long,
         playbackSpeed: Float,
         expectedRevision: Long,
-    ): Boolean =
-        playbackDao.updateProgress(
+    ): Boolean {
+        val updatedAtMs = nowMs()
+        val updated = playbackDao.updateProgress(
             contentId = contentId,
             positionMs = positionMs.coerceAtLeast(0L),
             durationMs = durationMs.coerceAtLeast(0L),
             playbackSpeed = playbackSpeed.takeIf { it.isFinite() }?.coerceIn(0.25f, 3f) ?: 1f,
             expectedRevision = expectedRevision,
-            updatedAtMs = nowMs(),
+            updatedAtMs = updatedAtMs,
         ) == 1
+        if (updated && contentId != null) {
+            playbackDao.queueEntries().firstOrNull { it.contentId == contentId }?.originWorkId?.let { workId ->
+                workDao.upsertProgress(WorkProgressEntity(workId, contentId, positionMs.coerceAtLeast(0L), updatedAtMs))
+                workDao.markPlayed(workId, updatedAtMs)
+            }
+        }
+        return updated
+    }
 
     private suspend fun writeStructure(
-        contentIds: List<String>,
+        entries: List<QueueContentRef>,
         currentContentId: String?,
         positionMs: Long,
         durationMs: Long,
@@ -200,12 +233,18 @@ class PlaybackStateRepository(
         playbackDao.clearQueueEntries()
         val timestamp = nowMs()
         playbackDao.upsertQueueEntries(
-            contentIds.distinct().mapIndexed { index, contentId ->
-                CurrentQueueEntryEntity(contentId = contentId, position = index, addedAtMs = timestamp)
+            entries.distinctBy(QueueContentRef::contentId).mapIndexed { index, entry ->
+                CurrentQueueEntryEntity(
+                    contentId = entry.contentId,
+                    position = index,
+                    addedAtMs = timestamp,
+                    originWorkId = entry.originWorkId,
+                    originPlaylistEntryId = entry.originPlaylistEntryId,
+                )
             },
         )
-        for (contentId in contentIds) contentDao.clearDraftIfContent(contentId)
-        val current = currentContentId?.takeIf { it in contentIds }
+        for (entry in entries) contentDao.clearDraftIfContent(entry.contentId)
+        val current = currentContentId?.takeIf { id -> entries.any { it.contentId == id } }
         val updated =
             previous.copy(
                 currentContentId = current,
@@ -223,6 +262,17 @@ class PlaybackStateRepository(
         for (contentId in contentIds) {
             val canonical = contentRepository.canonicalContentId(contentId)
             if (contentDao.content(canonical) != null && canonical !in result) result += canonical
+        }
+        return result
+    }
+
+    private suspend fun canonicalExistingEntries(entries: List<QueueContentRef>): List<QueueContentRef> {
+        val result = mutableListOf<QueueContentRef>()
+        for (entry in entries) {
+            val canonical = contentRepository.canonicalContentId(entry.contentId)
+            if (contentDao.content(canonical) != null && result.none { it.contentId == canonical }) {
+                result += entry.copy(contentId = canonical)
+            }
         }
         return result
     }
@@ -245,6 +295,8 @@ class PlaybackStateRepository(
                     locatorId = summary.locatorId,
                     media = summary.media,
                     availability = summary.availability,
+                    originWorkId = row.originWorkId,
+                    originPlaylistEntryId = row.originPlaylistEntryId,
                 )
             }
         val currentIndex =

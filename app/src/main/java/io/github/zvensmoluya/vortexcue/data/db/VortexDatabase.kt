@@ -19,8 +19,11 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
         TimedTextTrackRoleEntity::class,
         TextSelectionEntity::class,
         ContentDispositionEntity::class,
+        WorkEntity::class,
+        WorkPartEntity::class,
+        WorkProgressEntity::class,
         PlaylistEntity::class,
-        PlaylistItemEntity::class,
+        PlaylistEntryEntity::class,
         ImportSourcePreferenceEntity::class,
         ImportSourceTargetEntity::class,
         RecentEntryEntity::class,
@@ -48,7 +51,7 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
     ],
     // The new content model intentionally allows a destructive upgrade. Original
     // media remains in user storage; only app-owned indexes are rebuilt.
-    version = 10,
+    version = 11,
     autoMigrations = [
         AutoMigration(from = 2, to = 3),
         AutoMigration(from = 4, to = 5),
@@ -60,6 +63,8 @@ abstract class VortexDatabase : RoomDatabase() {
     abstract fun contentDao(): ContentDao
 
     abstract fun playbackDao(): PlaybackDao
+
+    abstract fun workDao(): WorkDao
 
     abstract fun syncTextDao(): SyncTextDao
 
@@ -74,7 +79,7 @@ abstract class VortexDatabase : RoomDatabase() {
                 VortexDatabase::class.java,
                 DatabaseName,
             ).setDriver(AndroidSQLiteDriver())
-                .addMigrations(MIGRATION_8_9, MIGRATION_9_10)
+                .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
     }

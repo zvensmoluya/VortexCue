@@ -121,15 +121,25 @@ internal fun ImportHubScreen(
 
     Surface(modifier = Modifier.fillMaxSize(), color = AppBackground) {
         if (selectedSourceKey != null && selectedGroup != null) {
-            ImportSourceDetail(
-                group = selectedGroup,
-                repository = repository,
-                playlists = playlists,
-                initialTargetPlaylistId = initialTargetPlaylistId,
-                onContentImported = onContentImported,
-                onBack = { selectedSourceKey = null },
-                onDone = onDismiss,
-            )
+            if (selectedGroup.isTrustedWorkPackage) {
+                ImportWorkDetail(
+                    group = selectedGroup,
+                    repository = repository,
+                    onContentImported = onContentImported,
+                    onBack = { selectedSourceKey = null },
+                    onDone = onDismiss,
+                )
+            } else {
+                ImportSourceDetail(
+                    group = selectedGroup,
+                    repository = repository,
+                    playlists = playlists,
+                    initialTargetPlaylistId = initialTargetPlaylistId,
+                    onContentImported = onContentImported,
+                    onBack = { selectedSourceKey = null },
+                    onDone = onDismiss,
+                )
+            }
         } else {
             ImportSourceOverview(
                 groups = groups,
@@ -147,6 +157,131 @@ internal fun ImportHubScreen(
                 onCancelScan = onCancelScan,
                 onRemoveSource = onRemoveSource,
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ImportWorkDetail(
+    group: DiscoveryGroupSummary,
+    repository: ContentRepository,
+    onContentImported: suspend (List<String>) -> Unit,
+    onBack: () -> Unit,
+    onDone: () -> Unit,
+) {
+    val items by remember(repository, group.sourceKey) { repository.observeDiscoveryItems(group.sourceKey) }
+        .collectAsState(initial = emptyList())
+    val scope = rememberCoroutineScope()
+    var selectedIds by remember(group.sourceKey) { mutableStateOf<Set<String>>(emptySet()) }
+    var initialized by remember(group.sourceKey) { mutableStateOf(false) }
+    var importing by remember(group.sourceKey) { mutableStateOf(false) }
+    var completion by remember(group.sourceKey) { mutableStateOf<String?>(null) }
+    var error by remember(group.sourceKey) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(items) {
+        if (!initialized && items.isNotEmpty()) {
+            selectedIds = items.filter(DiscoveryItem::isDefaultSelected).mapTo(linkedSetOf(), DiscoveryItem::contentId)
+            initialized = true
+        } else if (initialized) {
+            selectedIds = selectedIds.intersect(items.mapTo(hashSetOf(), DiscoveryItem::contentId))
+        }
+    }
+
+    Scaffold(
+        containerColor = AppBackground,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(group.displayName, color = AppPrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(group.releaseCode.orEmpty(), color = AppSecondaryText, fontSize = 11.sp)
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "返回作品列表" }) {
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, tint = AppPrimaryText)
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = AppBackground),
+            )
+        },
+        bottomBar = {
+            Column(
+                modifier = Modifier.fillMaxWidth().background(AppSurfaceRaised).navigationBarsPadding().padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                error?.let { Text(it, color = AppError, fontSize = 12.sp) }
+                completion?.let { Text(it, color = AppAccent, fontSize = 12.sp) }
+                if (completion == null) {
+                    Text("${selectedIds.size} 个播放段落 · WAV 优先 · 保留发行顺序", color = AppSecondaryText, fontSize = 12.sp)
+                    Button(
+                        enabled = selectedIds.isNotEmpty() && !importing,
+                        onClick = {
+                            scope.launch {
+                                importing = true
+                                error = null
+                                runCatching {
+                                    val result = repository.importWork(group.sourceKey, selectedIds)
+                                    onContentImported(selectedIds.toList())
+                                    result
+                                }.onSuccess { result ->
+                                    completion = "已导入作品 · ${result.partCount} 个播放段落"
+                                }.onFailure { error = it.message ?: "无法导入作品" }
+                                importing = false
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) {
+                        Text(
+                            when {
+                                importing -> "正在导入作品…"
+                                group.importedWorkId != null -> "更新这部作品"
+                                else -> "导入这部作品"
+                            },
+                        )
+                    }
+                } else {
+                    Button(onClick = onDone, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("完成") }
+                }
+            }
+        },
+    ) { insets ->
+        LazyColumn(modifier = Modifier.padding(insets).fillMaxSize()) {
+            item(key = "work-summary") {
+                Column(modifier = Modifier.fillMaxWidth().background(AppSurfaceSelected).padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("完整分发作品", color = AppPrimaryText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                    Text("荧荧会把格式副本合并为同一段落，并把作品作为一个整体保存。", color = AppSecondaryText, fontSize = 13.sp)
+                    Text("正篇与特典将按发行顺序保存", color = AppSecondaryText, fontSize = 12.sp)
+                }
+            }
+            items.groupBy(DiscoveryItem::sectionName).forEach { (section, sectionItems) ->
+                item(key = "section:$section") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 18.dp, bottom = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(section, color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
+                            Text("${sectionItems.count { it.contentId in selectedIds }} / ${sectionItems.size} 个文件", color = AppSecondaryText, fontSize = 11.sp)
+                        }
+                        TextButton(onClick = {
+                            val ids = sectionItems.mapTo(hashSetOf(), DiscoveryItem::contentId)
+                            selectedIds = if (ids.all(selectedIds::contains)) selectedIds - ids else selectedIds + ids
+                        }) { Text(if (sectionItems.all { it.contentId in selectedIds }) "取消" else "包含") }
+                    }
+                }
+                items(sectionItems, key = DiscoveryItem::contentId) { item ->
+                    ImportItemRow(
+                        item = item,
+                        checked = item.contentId in selectedIds,
+                        onChecked = { checked ->
+                            selectedIds = if (checked) selectedIds + item.contentId else selectedIds - item.contentId
+                        },
+                        onIgnore = null,
+                    )
+                }
+            }
         }
     }
 }
@@ -344,10 +479,18 @@ private fun ImportSourceCard(
                 Text(group.displayName, color = AppPrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (group.pendingCount > 0) {
                     Spacer(Modifier.width(8.dp))
-                    Text("新增 ${group.pendingCount}", color = AppAccent, fontSize = 11.sp)
+                    Text(
+                        if (group.isTrustedWorkPackage) "待整理" else "新增 ${group.pendingCount}",
+                        color = AppAccent,
+                        fontSize = 11.sp,
+                    )
                 }
             }
-            Text("${group.totalCount} 个音频", color = AppSecondaryText, fontSize = 12.sp)
+            Text(
+                if (group.isTrustedWorkPackage) "完整作品 · ${group.totalCount} 个音频" else "${group.totalCount} 个音频",
+                color = AppSecondaryText,
+                fontSize = 12.sp,
+            )
             if (group.sampleTitles.isNotEmpty()) {
                 Text(group.sampleTitles.joinToString("、"), color = AppMutedText, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }

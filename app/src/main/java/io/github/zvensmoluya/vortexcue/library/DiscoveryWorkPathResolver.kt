@@ -8,6 +8,7 @@ internal data class DiscoveryWorkPath(
     val displayName: String,
     val disambiguatedDisplayName: String,
     val locationLeaf: String,
+    val releaseCode: String? = null,
 )
 
 internal data class DiscoverySelectionCandidate(
@@ -39,11 +40,13 @@ internal fun resolveDiscoveryWorkPath(folder: String?): DiscoveryWorkPath {
             inferWorkRoot(pathParts)
         }
     val displayName = workParts.last()
+    val releaseCode = RjCode.find(workParts.last().normalizedToken())?.value?.trim { !it.isLetterOrDigit() }?.uppercase(Locale.ROOT)
     return DiscoveryWorkPath(
         stablePath = workParts.joinToString("/") { it.normalizedKeyPart() },
         displayName = displayName,
         disambiguatedDisplayName = workParts.takeLast(2).joinToString(" / "),
         locationLeaf = displayName,
+        releaseCode = releaseCode,
     )
 }
 

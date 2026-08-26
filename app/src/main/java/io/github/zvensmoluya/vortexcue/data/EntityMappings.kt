@@ -20,6 +20,7 @@ import io.github.zvensmoluya.vortexcue.data.db.ContentSummaryRow
 import io.github.zvensmoluya.vortexcue.data.db.PlaylistSummaryRow
 import io.github.zvensmoluya.vortexcue.data.db.MediaLocatorEntity
 import io.github.zvensmoluya.vortexcue.data.db.QueueItemRow
+import io.github.zvensmoluya.vortexcue.data.db.WorkPartRow
 import io.github.zvensmoluya.vortexcue.data.db.SourceSummaryRow
 import io.github.zvensmoluya.vortexcue.data.db.TextSelectionEntity
 import io.github.zvensmoluya.vortexcue.data.db.TimedTextTrackEntity
@@ -138,6 +139,33 @@ internal fun QueueItemRow.toContentSummary(): ContentSummary =
         availability = availability.enumValueOr(ContentAvailability.Unchecked),
         disposition = null,
         lastOpenedAtMs = null,
+    )
+
+internal fun WorkPartRow.toContentSummary(): ContentSummary =
+    ContentSummary(
+        contentId = contentId,
+        locatorId = locatorId,
+        media =
+            mediaSourceRef(
+                uriValue = uriValue,
+                displayName = displayName,
+                mimeType = mimeType,
+                title = title,
+                artist = artist,
+                album = album,
+                durationMs = durationMs,
+                folder = folder,
+                dateAddedSeconds = dateAddedSeconds,
+                origin = origin,
+                sourceId = sourceId,
+                kind = kind,
+                sizeBytes = sizeBytes,
+                videoWidth = videoWidth,
+                videoHeight = videoHeight,
+            ),
+        availability = availability.enumValueOr(ContentAvailability.Unchecked),
+        disposition = isCollected?.let { if (it) ContentDisposition.Collected else ContentDisposition.Ignored },
+        lastOpenedAtMs = lastOpenedAtMs,
     )
 
 internal fun SourceSummaryRow.toDomain(): SourceSummary =

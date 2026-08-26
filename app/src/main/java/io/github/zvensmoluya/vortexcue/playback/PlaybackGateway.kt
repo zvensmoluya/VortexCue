@@ -10,6 +10,7 @@ import com.google.common.util.concurrent.MoreExecutors
 import io.github.zvensmoluya.vortexcue.core.model.MediaKind
 import io.github.zvensmoluya.vortexcue.core.model.MediaOrigin
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
+import io.github.zvensmoluya.vortexcue.data.QueueContentRef
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -35,6 +36,25 @@ class PlaybackGateway(private val controller: MediaController) {
             PlaybackCommands.Replace,
             Bundle().apply {
                 putStringArrayList(PlaybackCommands.ContentIds, ArrayList(contentIds))
+                putInt(PlaybackCommands.CurrentIndex, currentIndex)
+                putLong(PlaybackCommands.PositionMs, positionMs)
+            },
+        )
+
+    suspend fun replaceEntries(
+        entries: List<QueueContentRef>,
+        currentIndex: Int = 0,
+        positionMs: Long = 0L,
+    ): SessionResult =
+        send(
+            PlaybackCommands.Replace,
+            Bundle().apply {
+                putStringArrayList(PlaybackCommands.ContentIds, ArrayList(entries.map(QueueContentRef::contentId)))
+                putStringArrayList(PlaybackCommands.OriginWorkIds, ArrayList(entries.map { it.originWorkId.orEmpty() }))
+                putStringArrayList(
+                    PlaybackCommands.OriginPlaylistEntryIds,
+                    ArrayList(entries.map { it.originPlaylistEntryId.orEmpty() }),
+                )
                 putInt(PlaybackCommands.CurrentIndex, currentIndex)
                 putLong(PlaybackCommands.PositionMs, positionMs)
             },
@@ -98,6 +118,8 @@ internal object PlaybackCommands {
     private const val Prefix = "io.github.zvensmoluya.vortexcue.PLAYBACK_"
     const val ContentIds = "content_ids"
     const val ContentId = "content_id"
+    const val OriginWorkIds = "origin_work_ids"
+    const val OriginPlaylistEntryIds = "origin_playlist_entry_ids"
     const val CurrentIndex = "current_index"
     const val PositionMs = "position_ms"
     const val FromIndex = "from_index"

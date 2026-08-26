@@ -51,7 +51,9 @@ interface PlaybackDao {
 
     companion object {
         const val QUEUE_SELECT =
-            "SELECT q.position AS position, c.content_id AS contentId, l.locator_id AS locatorId, " +
+            "SELECT q.position AS position, q.origin_work_id AS originWorkId, " +
+                "q.origin_playlist_entry_id AS originPlaylistEntryId, " +
+                "c.content_id AS contentId, l.locator_id AS locatorId, " +
                 "l.uri_value AS uriValue, l.display_name AS displayName, l.mime_type AS mimeType, " +
                 "l.title AS title, l.artist AS artist, l.album AS album, l.duration_ms AS durationMs, " +
                 "l.folder AS folder, l.date_added_seconds AS dateAddedSeconds, l.origin AS origin, " +

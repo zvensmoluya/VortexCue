@@ -71,6 +71,9 @@ import io.github.zvensmoluya.vortexcue.core.model.displayArtist
 import io.github.zvensmoluya.vortexcue.core.model.displayTitle
 import io.github.zvensmoluya.vortexcue.data.ContentSummary
 import io.github.zvensmoluya.vortexcue.data.PlaylistSummary
+import io.github.zvensmoluya.vortexcue.data.PlaylistEntrySummary
+import io.github.zvensmoluya.vortexcue.data.WorkDetails
+import io.github.zvensmoluya.vortexcue.data.WorkSummary
 import io.github.zvensmoluya.vortexcue.ui.theme.AppAccent
 import io.github.zvensmoluya.vortexcue.ui.theme.AppBackground
 import io.github.zvensmoluya.vortexcue.ui.theme.AppHairline
@@ -85,11 +88,13 @@ internal const val AllContentPlaylistId = "__all_content__"
 internal fun PlaylistOverview(
     playlists: List<PlaylistSummary>,
     recentPlaylists: List<PlaylistSummary>,
+    works: List<WorkSummary>,
     allContentCount: Int,
     reorderMode: Boolean,
     listState: LazyListState,
     onOpenAllContent: () -> Unit,
     onOpenPlaylist: (String) -> Unit,
+    onOpenWork: (String) -> Unit,
     onCreatePlaylist: () -> Unit,
     onRenamePlaylist: (PlaylistSummary) -> Unit,
     onDeletePlaylist: (PlaylistSummary) -> Unit,
@@ -130,6 +135,24 @@ internal fun PlaylistOverview(
                         }
                     }
                 }
+            }
+        }
+        if (works.isNotEmpty() && !reorderMode) {
+            item(key = "works-title") {
+                Text(
+                    "作品",
+                    color = AppPrimaryText,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 4.dp),
+                )
+            }
+            items(works, key = WorkSummary::workId) { work ->
+                WorkCard(
+                    work = work,
+                    onClick = { onOpenWork(work.workId) },
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
             }
         }
         item(key = "all-title") {
@@ -471,6 +494,224 @@ internal fun PlaylistDetail(
 }
 
 @Composable
+private fun WorkCard(work: WorkSummary, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.fillMaxWidth().background(AppSurfaceRaised, RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Text(work.title, color = AppPrimaryText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(work.releaseCode, color = AppAccent, fontSize = 12.sp)
+        Text("${work.partCount} 段 · ${formatWorkDuration(work.totalDurationMs)} · ${work.profileLabel}", color = AppSecondaryText, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+private fun formatWorkDuration(durationMs: Long): String {
+    val totalMinutes = durationMs.coerceAtLeast(0L) / 60_000L
+    val hours = totalMinutes / 60L
+    val minutes = totalMinutes % 60L
+    return if (hours > 0L) "${hours}小时${minutes}分" else "${minutes}分钟"
+}
+
+@Composable
+internal fun WorkDetailPage(
+    details: WorkDetails,
+    onBack: () -> Unit,
+    onContinue: () -> Unit,
+    onPlayFromStart: () -> Unit,
+    onPlayPart: (Int) -> Unit,
+    onPartLongPress: (ContentSummary) -> Unit,
+    onSaveProfile: (Set<String>) -> Unit,
+    onAddWorkToPlaylist: () -> Unit,
+    onAddPartsToPlaylist: (Set<String>) -> Unit,
+    onDeleteWork: () -> Unit,
+) {
+    var profileEditing by remember(details.summary.workId) { mutableStateOf(false) }
+    var selectingParts by remember(details.summary.workId) { mutableStateOf(false) }
+    var selectedIds by remember(details.parts) {
+        mutableStateOf<Set<String>>(details.includedParts.mapTo(linkedSetOf()) { it.content.contentId })
+    }
+    val includedIds = details.includedParts.mapTo(linkedSetOf()) { it.content.contentId }
+    LazyColumn(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+        item(key = "work-header") {
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "返回作品" }) {
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, tint = AppPrimaryText)
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(details.summary.title, color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(details.summary.releaseCode, color = AppAccent, fontSize = 12.sp)
+                    }
+                    IconButton(onClick = onDeleteWork, modifier = Modifier.semantics { contentDescription = "移除作品" }) {
+                        Icon(Icons.Outlined.DeleteOutline, null, tint = AppSecondaryText)
+                    }
+                }
+                Text(
+                    "${details.summary.partCount} 段 · ${formatWorkDuration(details.summary.totalDurationMs)} · ${details.summary.profileLabel}",
+                    color = AppSecondaryText,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onContinue, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("继续播放") }
+                    TextButton(onClick = onPlayFromStart, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("从头播放") }
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = onAddWorkToPlaylist, modifier = Modifier.weight(1f)) { Text("整部加入歌单") }
+                    TextButton(onClick = { selectingParts = !selectingParts; profileEditing = false }, modifier = Modifier.weight(1f)) {
+                        Text(if (selectingParts) "取消选择" else "选择段落")
+                    }
+                    TextButton(onClick = { profileEditing = !profileEditing; selectingParts = false; selectedIds = includedIds }, modifier = Modifier.weight(1f)) {
+                        Text(if (profileEditing) "取消调整" else "调整版本")
+                    }
+                }
+                if (profileEditing || selectingParts) {
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("已选择 ${selectedIds.size} 段", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                        Button(
+                            enabled = selectedIds.isNotEmpty(),
+                            onClick = {
+                                if (profileEditing) onSaveProfile(selectedIds) else onAddPartsToPlaylist(selectedIds)
+                                profileEditing = false
+                                selectingParts = false
+                            },
+                        ) { Text(if (profileEditing) "保存方案" else "加入歌单") }
+                    }
+                }
+            }
+        }
+        details.parts.groupBy { it.sectionName }.forEach { (section, parts) ->
+            item(key = "work-section:$section") {
+                Text(section, color = AppPrimaryText, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 6.dp))
+            }
+            itemsIndexed(parts, key = { _, part -> part.content.contentId }) { _, part ->
+                if (profileEditing || selectingParts) {
+                    SelectableContentRow(
+                        item = part.content,
+                        checked = part.content.contentId in selectedIds,
+                        onChecked = { checked ->
+                            selectedIds = if (checked) selectedIds + part.content.contentId else selectedIds - part.content.contentId
+                        },
+                    )
+                } else {
+                    val includedIndex = details.includedParts.indexOfFirst { it.content.contentId == part.content.contentId }
+                    ContentRow(
+                        item = part.content,
+                        status = when {
+                            !part.isIncluded -> "未包含 · ${part.variantKey}"
+                            part.variantKey != "default" -> part.variantKey
+                            else -> null
+                        },
+                        onClick = { if (includedIndex >= 0) onPlayPart(includedIndex) },
+                        onLongPress = { onPartLongPress(part.content) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun MixedPlaylistDetail(
+    title: String,
+    entries: List<PlaylistEntrySummary>,
+    onBack: () -> Unit,
+    onPlayAll: () -> Unit,
+    onPlayEntry: (Int) -> Unit,
+    onOpenWork: (String) -> Unit,
+    onContentLongPress: (ContentSummary) -> Unit,
+    onRemoveWork: (String) -> Unit,
+    onAddContent: () -> Unit,
+) {
+    LazyColumn(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+        item(key = "mixed-header") {
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "返回歌单" }) {
+                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, tint = AppPrimaryText)
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(title, color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                    Text("${entries.size} 项", color = AppSecondaryText, fontSize = 12.sp)
+                }
+                if (entries.isNotEmpty()) {
+                    IconButton(onClick = onPlayAll, modifier = Modifier.semantics { contentDescription = "播放全部" }) {
+                        Icon(Icons.Outlined.PlayArrow, null, tint = AppPrimaryText)
+                    }
+                }
+                IconButton(onClick = onAddContent, modifier = Modifier.semantics { contentDescription = "向歌单添加内容" }) {
+                    Icon(Icons.Outlined.Add, null, tint = AppPrimaryText)
+                }
+            }
+        }
+        itemsIndexed(entries, key = { _, entry -> entry.entryId }) { index, entry ->
+            when (entry) {
+                is PlaylistEntrySummary.Content ->
+                    ContentRow(
+                        item = entry.content,
+                        status = null,
+                        onClick = { onPlayEntry(index) },
+                        onLongPress = { onContentLongPress(entry.content) },
+                    )
+                is PlaylistEntrySummary.Work ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable { onOpenWork(entry.work.workId) }.padding(start = 20.dp, end = 8.dp, top = 14.dp, bottom = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(entry.work.title, color = AppPrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text("作品 · ${entry.work.partCount} 段 · ${entry.work.releaseCode}", color = AppSecondaryText, fontSize = 12.sp)
+                        }
+                        IconButton(onClick = { onRemoveWork(entry.entryId) }, modifier = Modifier.semantics { contentDescription = "从歌单移除 ${entry.work.title}" }) {
+                            Icon(Icons.Outlined.Close, null, tint = AppSecondaryText)
+                        }
+                    }
+            }
+            HorizontalDivider(color = AppHairline)
+        }
+    }
+}
+
+@Composable
+internal fun AllCollectedPage(
+    works: List<WorkSummary>,
+    content: List<ContentSummary>,
+    onBack: () -> Unit,
+    onOpenWork: (String) -> Unit,
+    onPlayContent: (String) -> Unit,
+    onContentLongPress: (ContentSummary) -> Unit,
+) {
+    LazyColumn(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+        item(key = "all-collected-header") {
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "返回歌单" }) {
+                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, tint = AppPrimaryText)
+                }
+                Column {
+                    Text("全部内容", color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                    Text("${works.size} 部作品 · ${content.size} 项独立内容", color = AppSecondaryText, fontSize = 12.sp)
+                }
+            }
+        }
+        if (works.isNotEmpty()) {
+            item(key = "all-works-title") {
+                Text("作品", color = AppPrimaryText, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+            }
+            items(works, key = WorkSummary::workId) { work ->
+                WorkCard(work, { onOpenWork(work.workId) }, Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            }
+        }
+        if (content.isNotEmpty()) {
+            item(key = "all-loose-title") {
+                Text("独立内容", color = AppPrimaryText, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+            }
+            items(content, key = ContentSummary::contentId) { item ->
+                ContentRow(item, null, { onPlayContent(item.contentId) }, { onContentLongPress(item) })
+            }
+        }
+    }
+}
+
+@Composable
 private fun SelectableContentRow(
     item: ContentSummary,
     checked: Boolean,
@@ -551,10 +792,11 @@ internal fun PlaylistMembershipSheet(
     initialSelection: Set<String>,
     onDismiss: () -> Unit,
     onSave: (Set<String>, String?) -> Unit,
+    defaultToFavorite: Boolean = true,
 ) {
     val defaultPlaylistId = playlists.firstOrNull { it.isDefaultFavorite }?.playlistId
     var selectedIds by remember(initialSelection, defaultPlaylistId) {
-        mutableStateOf(initialSelection.ifEmpty { defaultPlaylistId?.let(::setOf).orEmpty() })
+        mutableStateOf(initialSelection.ifEmpty { if (defaultToFavorite) defaultPlaylistId?.let(::setOf).orEmpty() else emptySet() })
     }
     var newPlaylistName by remember { mutableStateOf("") }
     fun toggle(playlistId: String, checked: Boolean) {
@@ -566,7 +808,7 @@ internal fun PlaylistMembershipSheet(
                     selectedIds + playlistId
                 }
             } else {
-                (selectedIds - playlistId).ifEmpty { defaultPlaylistId?.let(::setOf).orEmpty() }
+                (selectedIds - playlistId).ifEmpty { if (defaultToFavorite) defaultPlaylistId?.let(::setOf).orEmpty() else emptySet() }
             }
     }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AppSurfaceRaised) {
