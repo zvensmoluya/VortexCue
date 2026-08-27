@@ -39,15 +39,27 @@ internal fun resolveDiscoveryWorkPath(folder: String?): DiscoveryWorkPath {
         } else {
             inferWorkRoot(pathParts)
         }
-    val displayName = workParts.last()
-    val releaseCode = RjCode.find(workParts.last().normalizedToken())?.value?.trim { !it.isLetterOrDigit() }?.uppercase(Locale.ROOT)
+    val locationLeaf = workParts.last()
+    val releaseCode = RjCode.find(locationLeaf.normalizedToken())?.value?.trim { !it.isLetterOrDigit() }?.uppercase(Locale.ROOT)
+    val title = releaseCode?.let { inferReleaseTitle(workParts, locationLeaf, it) } ?: locationLeaf
     return DiscoveryWorkPath(
         stablePath = workParts.joinToString("/") { it.normalizedKeyPart() },
-        displayName = displayName,
-        disambiguatedDisplayName = workParts.takeLast(2).joinToString(" / "),
-        locationLeaf = displayName,
+        displayName = title,
+        disambiguatedDisplayName = if (title == locationLeaf) workParts.takeLast(2).joinToString(" / ") else "$title · $releaseCode",
+        locationLeaf = locationLeaf,
         releaseCode = releaseCode,
     )
+}
+
+private fun inferReleaseTitle(workParts: List<String>, locationLeaf: String, releaseCode: String): String {
+    val titleInLeaf =
+        locationLeaf.replace(Regex(Regex.escape(releaseCode), RegexOption.IGNORE_CASE), "")
+            .trim(ReleaseTitleSeparator)
+            .takeIf(String::isNotBlank)
+    if (titleInLeaf != null) return titleInLeaf
+    return workParts.dropLast(1).lastOrNull()
+        ?.takeIf { it.normalizedToken() !in GenericContainerDirectories }
+        ?: releaseCode
 }
 
 private fun inferWorkRoot(pathParts: List<String>): List<String> {
@@ -130,6 +142,9 @@ private val OtherAudioPath =
     )
 
 private val RjCode = Regex("(?:^|[^a-z0-9])rj\\d{5,}(?:[^a-z0-9]|$)")
+private val ReleaseTitleSeparator: (Char) -> Boolean = { char ->
+    char.isWhitespace() || char in "_-—–·.[](){}（）［］【】"
+}
 private val TechnicalSeparator = Regex("[\\s._\\-\\[\\](){}（）［］【】]+")
 private val AudioFormatDirectorySuffix =
     Regex("(?:(?:版|ver|version|format|音源|データ))?(?:(?:(?:16|24|32)bit(?:(?:44(?:1)?|48|88(?:2)?|96|192)k?hz?)?)|(?:(?:128|192|256|320)kbps))?(?:(?:版|ver|version|format|音源|データ))?")

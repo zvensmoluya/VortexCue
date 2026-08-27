@@ -151,25 +151,40 @@ class DiscoveryRepositoryTest {
             listOf(
                 audio("01.wav", "第一段", "DLsite/RJ01658524 作品/01_WAV版", 120_000L, 10L, descriptor.sourceId),
                 audio("01.mp3", "第一段", "DLsite/RJ01658524 作品/02_MP3版", 120_500L, 10L, descriptor.sourceId),
+                audio("01-no-se.wav", "第一段（无 SE）", "DLsite/RJ01658524 作品/03_効果音無し", 119_000L, 10L, descriptor.sourceId),
+                audio("bonus.wav", "特典", "DLsite/RJ01658524 作品/04_特典", 60_000L, 10L, descriptor.sourceId),
             ),
             emptyList(),
         )
         val group = repository.discoveryGroups.first().single()
         assertEquals("RJ01658524", group.releaseCode)
+        assertEquals("作品", group.displayName)
 
         val result = repository.importWork(group.sourceKey)
         val details = requireNotNull(repository.workDetails(result.workId))
-        assertEquals(1, details.includedParts.size)
-        assertEquals(2, repository.details(details.includedParts.single().content.contentId)?.mediaLocators?.size)
-        assertTrue(repository.playlistIdsForContent(details.includedParts.single().content.contentId).isEmpty())
+        assertEquals(3, details.parts.size)
+        assertEquals(2, details.includedParts.size)
+        assertEquals(3, result.contentIds.size)
+        assertTrue(details.parts.all { it.content.disposition == ContentDisposition.Collected })
+        val standard = details.parts.single { it.variantKey == "default" && it.sectionName == "正篇" }
+        val withoutSe = details.parts.single { it.variantKey == "without-se" }
+        val bonus = details.parts.single { it.sectionName == "特典" }
+        assertEquals(2, repository.details(standard.content.contentId)?.mediaLocators?.size)
+        assertTrue(repository.playlistIdsForContent(standard.content.contentId).isEmpty())
+        assertEquals(listOf(standard.content.contentId, bonus.content.contentId), repository.workQueue(result.workId).map { it.contentId })
+
+        repository.setWorkEdition(result.workId, "without-se")
+        assertEquals(listOf(withoutSe.content.contentId, bonus.content.contentId), repository.workQueue(result.workId).map { it.contentId })
+        repository.importWork(group.sourceKey)
+        assertEquals(listOf(withoutSe.content.contentId, bonus.content.contentId), repository.workQueue(result.workId).map { it.contentId })
 
         val playlist = repository.createPlaylist("夜听")
         repository.addWorkToPlaylists(result.workId, setOf(playlist.playlistId))
         val entry = repository.observePlaylistEntries(playlist.playlistId).first().single()
         assertTrue(entry is PlaylistEntrySummary.Work)
         val queue = repository.playlistQueue(playlist.playlistId)
-        assertEquals(result.workId, queue.single().originWorkId)
-        assertEquals(entry.entryId, queue.single().originPlaylistEntryId)
+        assertTrue(queue.all { it.originWorkId == result.workId })
+        assertTrue(queue.all { it.originPlaylistEntryId == entry.entryId })
     }
 
     @Test

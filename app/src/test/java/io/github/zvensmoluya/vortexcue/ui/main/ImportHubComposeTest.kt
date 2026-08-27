@@ -206,12 +206,17 @@ class ImportHubComposeTest {
         )
         setHub(coordinator = LibraryCoordinatorState(hasAudioAccess = true))
 
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("RJ01658524 作品").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("RJ01658524 作品").performClick()
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("完整分发作品").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("导入这部作品").assertExists()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("作品").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("作品").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("2 个段落").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("RJ01658524").assertExists()
+        compose.onNodeWithText("正篇 · 标准版").assertExists()
+        compose.onNodeWithText("收录整部作品").assertExists()
         compose.onNodeWithText("导入到").assertDoesNotExist()
-        compose.onNodeWithText("正篇与特典将按发行顺序保存").assertExists()
+        compose.onNodeWithText("完整分发作品").assertDoesNotExist()
+        compose.onNodeWithText("收录整部作品").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("已收录整部作品 · 2 个段落").fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(2, repository.works.first().single().partCount)
         Unit
     }
 

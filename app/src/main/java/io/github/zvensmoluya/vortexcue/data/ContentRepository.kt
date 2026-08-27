@@ -119,19 +119,38 @@ class ContentRepository(
                 val pending = visible.filter { it.summary.disposition == null }
                 val lowSignalFolder = first.locationLeaf.lowercase(Locale.ROOT) in LowSignalAudioFolders
                 val allShort = visible.all { it.summary.media.durationMs < ShortAudioThresholdMs }
+                val workTitle = visible.workDisplayTitle()
                 val displayName =
-                    if (names[first.baseDisplayName.lowercase(Locale.ROOT)].orEmpty().map { it.sourceKey }.distinct().size > 1) {
+                    if (first.releaseCode != null) {
+                        workTitle
+                    } else if (names[first.baseDisplayName.lowercase(Locale.ROOT)].orEmpty().map { it.sourceKey }.distinct().size > 1) {
                         first.disambiguatedDisplayName
                     } else {
                         first.baseDisplayName
                     }
+                val workPlan =
+                    first.releaseCode?.let {
+                        analyzeDlsiteWork(
+                            visible.map { audio ->
+                                DlsiteWorkCandidate(
+                                    contentId = audio.summary.contentId,
+                                    displayName = audio.summary.media.displayName,
+                                    folder = audio.summary.media.folder,
+                                    durationMs = audio.summary.media.durationMs,
+                                )
+                            },
+                        )
+                    }
+                val visibleById = visible.associateBy { it.summary.contentId }
                 DiscoveryGroupSummary(
                     sourceKey = sourceKey,
                     sourceId = first.sourceId,
                     displayName = displayName,
                     totalCount = visible.size,
                     pendingCount = pending.size,
-                    sampleTitles = visible.sortedWith(locatedAudioComparator).take(3).map { it.summary.media.displayTitle },
+                    sampleTitles =
+                        workPlan?.parts?.take(3)?.mapNotNull { visibleById[it.primaryContentId]?.summary?.media?.displayTitle }
+                            ?: visible.sortedWith(locatedAudioComparator).take(3).map { it.summary.media.displayTitle },
                     newestAddedSeconds = pending.maxOfOrNull { it.summary.media.dateAddedSeconds }
                         ?: visible.maxOfOrNull { it.summary.media.dateAddedSeconds } ?: 0L,
                     totalDurationMs = visible.sumOf { it.summary.media.durationMs },
@@ -141,6 +160,9 @@ class ContentRepository(
                     lastImportedAtMs = preferenceMap[sourceKey]?.lastImportedAtMs,
                     releaseCode = first.releaseCode,
                     importedWorkId = workRows.firstOrNull { it.sourceKey == sourceKey }?.workId,
+                    workPartCount = workPlan?.parts?.size,
+                    workEditionCount = workPlan?.editions?.size,
+                    workHasBonus = workPlan?.parts?.any { it.sectionName == "特典" } == true,
                 )
             }.sortedWith(
                 compareByDescending<DiscoveryGroupSummary> { it.isRecommended }
@@ -262,6 +284,64 @@ class ContentRepository(
                     variantKey = locatedAudio.workVariantKey(),
                 )
             }
+        }
+
+    fun observeWorkImportPreview(sourceKey: String): Flow<WorkImportPreview?> =
+        combine(dao.observeAvailableAudio(), dao.observeSources()) { rows, sourceRows ->
+            val sourceMap = sourceRows.associateBy { it.sourceId }
+            val located =
+                rows.mapNotNull { it.toLocatedAudio(sourceMap) }
+                    .filter { it.sourceKey == sourceKey && it.summary.disposition != ContentDisposition.Ignored }
+            if (located.isEmpty() || located.first().releaseCode == null) return@combine null
+            val byId = located.associateBy { it.summary.contentId }
+            val plan =
+                analyzeDlsiteWork(
+                    located.map {
+                        DlsiteWorkCandidate(
+                            contentId = it.summary.contentId,
+                            displayName = it.summary.media.displayName,
+                            folder = it.summary.media.folder,
+                            durationMs = it.summary.media.durationMs,
+                        )
+                    },
+                )
+            WorkImportPreview(
+                title = located.workDisplayTitle(),
+                releaseCode = requireNotNull(located.first().releaseCode),
+                fileCount = located.size,
+                logicalPartCount = plan.parts.size,
+                mergedLocatorCount = plan.parts.sumOf { (it.equivalentContentIds.size - 1).coerceAtLeast(0) },
+                deliveryLabel = plan.deliveryLabel,
+                defaultEditionKey = plan.defaultEditionKey,
+                editions =
+                    plan.editions.map { edition ->
+                        WorkEditionSummary(
+                            key = edition.key,
+                            label = edition.label,
+                            partCount = edition.partCount,
+                            isSelected = edition.key == plan.defaultEditionKey,
+                        )
+                    },
+                parts =
+                    plan.parts.mapNotNull { part ->
+                        val primary = byId[part.primaryContentId] ?: return@mapNotNull null
+                        WorkImportPart(
+                            contentId = part.primaryContentId,
+                            title = primary.summary.media.displayTitle,
+                            durationMs = primary.summary.media.durationMs,
+                            sectionName = part.sectionName,
+                            editionKey = part.variantKey,
+                            editionLabel = workEditionLabel(part.variantKey),
+                            formatLabels =
+                                part.equivalentContentIds.mapNotNull { id ->
+                                    byId[id]?.summary?.media?.displayName
+                                        ?.substringAfterLast('.', "")
+                                        ?.takeIf(String::isNotBlank)
+                                        ?.uppercase(Locale.ROOT)
+                                }.distinct(),
+                        )
+                    },
+            )
         }
 
     fun observeImportTargets(sourceKey: String): Flow<Set<String>> =
@@ -723,10 +803,7 @@ class ContentRepository(
         }
     }
 
-    suspend fun importWork(
-        sourceKey: String,
-        selectedContentIds: Set<String>? = null,
-    ): WorkImportResult =
+    suspend fun importWork(sourceKey: String): WorkImportResult =
         database.withWriteTransaction {
             val sourceMap = dao.sources().associateBy { it.sourceId }
             val located =
@@ -745,7 +822,17 @@ class ContentRepository(
                         )
                     },
                 )
-            val requested = selectedContentIds ?: plan.defaultContentIds
+            val workId = stableWorkId(sourceKey)
+            val existing = workDao.work(workId)
+            val existingEditionKey =
+                workDao.parts(workId)
+                    .filter { it.isIncluded && it.sectionName == "正篇" }
+                    .map(WorkPartEntity::variantKey)
+                    .distinct()
+                    .singleOrNull()
+            val activeEditionKey =
+                existingEditionKey?.takeIf { key -> plan.editions.any { it.key == key } }
+                    ?: plan.defaultEditionKey
             var mergedLocatorCount = 0
             val canonicalParts = mutableListOf<WorkPartEntity>()
             plan.parts.forEachIndexed { index, part ->
@@ -759,20 +846,18 @@ class ContentRepository(
                 }
                 canonicalParts +=
                     WorkPartEntity(
-                        workId = stableWorkId(sourceKey),
+                        workId = workId,
                         contentId = resolveRedirect(primary),
                         sectionName = part.sectionName,
                         variantKey = part.variantKey,
                         sortPosition = index.toLong(),
-                        isIncluded = part.equivalentContentIds.any(requested::contains),
+                        isIncluded = part.sectionName == "特典" || part.variantKey == activeEditionKey,
                     )
             }
             val parts = canonicalParts.distinctBy(WorkPartEntity::contentId)
-            require(parts.any(WorkPartEntity::isIncluded)) { "至少选择一个作品段落" }
+            require(parts.any(WorkPartEntity::isIncluded)) { "作品没有可播放的默认版本" }
             val timestamp = nowMs()
-            val workId = stableWorkId(sourceKey)
-            val existing = workDao.work(workId)
-            val title = located.first().baseDisplayName
+            val title = located.workDisplayTitle()
             workDao.upsertWork(
                 WorkEntity(
                     workId = workId,
@@ -800,19 +885,23 @@ class ContentRepository(
             dao.clearImportSourceTargets(sourceKey)
             WorkImportResult(
                 workId = workId,
-                partCount = parts.count(WorkPartEntity::isIncluded),
+                partCount = parts.size,
                 mergedLocatorCount = mergedLocatorCount,
                 upgradedCollectedCount = upgradedCollectedCount,
+                contentIds = parts.map(WorkPartEntity::contentId),
             )
         }
 
-    suspend fun setWorkIncludedParts(workId: String, contentIds: Set<String>) {
+    suspend fun setWorkEdition(workId: String, editionKey: String) {
         database.withWriteTransaction {
             val parts = workDao.parts(workId)
             require(parts.isNotEmpty()) { "作品不存在" }
-            val canonical = contentIds.mapTo(hashSetOf()) { resolveRedirect(it) }
-            require(parts.any { it.contentId in canonical }) { "至少选择一个作品段落" }
-            workDao.upsertParts(parts.map { it.copy(isIncluded = it.contentId in canonical) })
+            require(parts.any { it.sectionName == "正篇" && it.variantKey == editionKey }) { "作品版本不存在" }
+            workDao.upsertParts(
+                parts.map { part ->
+                    part.copy(isIncluded = part.sectionName == "特典" || part.variantKey == editionKey)
+                },
+            )
             workDao.work(workId)?.let { workDao.upsertWork(it.copy(updatedAtMs = nowMs())) }
         }
     }
@@ -1600,14 +1689,26 @@ private fun WorkEntity.toSummary(
     progress: WorkProgressEntity?,
 ): WorkSummary {
     val included = parts.filter { it.isIncluded }
+    val selectedEditions =
+        included.filter { it.sectionName == "正篇" }.map { workEditionLabel(it.variantKey) }.distinct()
+    val deliveryLabel =
+        profileLabel.split(" · ").firstOrNull { it == "WAV 优先" || it == "原始格式" }
+            ?: "原始格式"
+    val resolvedProfileLabel = buildList {
+        add(deliveryLabel)
+        add(selectedEditions.singleOrNull() ?: "自定义版本")
+        if (included.any { it.sectionName == "特典" }) add("包含特典")
+    }.joinToString(" · ")
     return WorkSummary(
         workId = workId,
         sourceKey = sourceKey,
         releaseCode = releaseCode,
         title = title,
-        profileLabel = profileLabel,
-        partCount = included.size,
-        totalDurationMs = included.sumOf { it.durationMs },
+        profileLabel = resolvedProfileLabel,
+        partCount = parts.size,
+        totalDurationMs = parts.sumOf { it.durationMs },
+        playbackPartCount = included.size,
+        playbackDurationMs = included.sumOf { it.durationMs },
         lastPlayedAtMs = lastPlayedAtMs,
         progressContentId = progress?.contentId,
         progressPositionMs = progress?.positionMs ?: 0L,
@@ -1656,6 +1757,14 @@ private fun LocatedAudio.workVariantKey(): String {
         Regex("(?:se|効果音)(?:あり|有り|付き)|withse").containsMatchIn(compact) -> "with-se"
         else -> "default"
     }
+}
+
+private fun List<LocatedAudio>.workDisplayTitle(): String {
+    val first = first()
+    val releaseCode = first.releaseCode ?: return first.baseDisplayName
+    if (!first.baseDisplayName.equals(releaseCode, ignoreCase = true)) return first.baseDisplayName
+    val commonAlbum = mapNotNull { it.summary.media.album?.trim()?.takeIf(String::isNotBlank) }.distinct()
+    return commonAlbum.singleOrNull() ?: releaseCode
 }
 
 private val locatedAudioComparator =

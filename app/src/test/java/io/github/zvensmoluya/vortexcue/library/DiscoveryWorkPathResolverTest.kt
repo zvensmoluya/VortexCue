@@ -15,8 +15,22 @@ class DiscoveryWorkPathResolverTest {
     fun rjCodeProvidesAWorkRootAcrossContentSubdirectories() {
         assertPath(
             expectedStablePath = "downloads/rj123456_作品名",
-            expectedDisplayName = "RJ123456_作品名",
+            expectedDisplayName = "作品名",
             folder = "Downloads/RJ123456_作品名/本編/Chapter 01",
+        )
+    }
+
+    @Test
+    fun codeOnlyReleaseFolderUsesMeaningfulParentAsTitle() {
+        assertPath(
+            expectedStablePath = "downloads/静かな夜/rj123456",
+            expectedDisplayName = "静かな夜",
+            folder = "Downloads/静かな夜/RJ123456/WAV",
+        )
+        assertPath(
+            expectedStablePath = "downloads/rj123456",
+            expectedDisplayName = "RJ123456",
+            folder = "Downloads/RJ123456/WAV",
         )
     }
 

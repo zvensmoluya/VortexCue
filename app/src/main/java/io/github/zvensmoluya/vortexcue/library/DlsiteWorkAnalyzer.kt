@@ -20,8 +20,17 @@ internal data class DlsiteWorkPartPlan(
     val defaultIncluded: Boolean,
 )
 
+internal data class DlsiteWorkEditionPlan(
+    val key: String,
+    val label: String,
+    val partCount: Int,
+)
+
 internal data class DlsiteWorkPlan(
     val parts: List<DlsiteWorkPartPlan>,
+    val editions: List<DlsiteWorkEditionPlan>,
+    val defaultEditionKey: String,
+    val deliveryLabel: String,
     val profileLabel: String,
     val manifestFingerprint: String,
 ) {
@@ -56,18 +65,50 @@ internal fun analyzeDlsiteWork(candidates: List<DlsiteWorkCandidate>): DlsiteWor
                 )
             }
         }.sortedWith { left, right -> naturalPathCompare(left.sortKey, right.sortKey) }
-    val hasBonus = parts.any { it.sectionName == "特典" }
+    val editionKeys =
+        parts.asSequence()
+            .filter { it.sectionName == MainSection }
+            .map(DlsiteWorkPartPlan::variantKey)
+            .distinct()
+            .toList()
+            .ifEmpty { listOf(DefaultEdition) }
+    val defaultEditionKey =
+        when {
+            DefaultEdition in editionKeys -> DefaultEdition
+            WithSeEdition in editionKeys -> WithSeEdition
+            else -> editionKeys.first()
+        }
+    val includedParts = parts.map { part ->
+        part.copy(defaultIncluded = part.sectionName == BonusSection || part.variantKey == defaultEditionKey)
+    }
+    val editions = editionKeys.map { key ->
+        DlsiteWorkEditionPlan(
+            key = key,
+            label = editionLabel(key),
+            partCount = includedParts.count { it.sectionName == MainSection && it.variantKey == key },
+        )
+    }
+    val hasBonus = includedParts.any { it.sectionName == BonusSection }
+    val deliveryLabel = if (preferredWav) "WAV 优先" else "原始格式"
     val profile = buildList {
-        add(if (preferredWav) "WAV 优先" else "原始格式")
-        if (parts.any { it.variantKey == "without-se" }) add("通常版")
+        add(deliveryLabel)
+        add(editionLabel(defaultEditionKey))
         if (hasBonus) add("包含特典")
     }.joinToString(" · ")
     val manifest =
         candidates.sortedBy(DlsiteWorkCandidate::contentId).joinToString("\n") {
             "${it.contentId}|${it.folder.orEmpty()}|${it.displayName}|${it.durationMs}"
         }
-    return DlsiteWorkPlan(parts, profile, sha256(manifest))
+    return DlsiteWorkPlan(includedParts, editions, defaultEditionKey, deliveryLabel, profile, sha256(manifest))
 }
+
+internal fun editionLabel(key: String): String =
+    when (key) {
+        DefaultEdition -> "标准版"
+        WithSeEdition -> "SE 版"
+        WithoutSeEdition -> "无 SE 版"
+        else -> key
+    }
 
 private data class AnalyzedCandidate(
     val contentId: String,
@@ -106,7 +147,7 @@ private fun analyzeCandidate(candidate: DlsiteWorkCandidate): AnalyzedCandidate 
         durationMs = candidate.durationMs,
         format = format,
         logicalKey = "$logicalPath\u0000$stem",
-        sectionName = if (isBonus) "特典" else "正篇",
+        sectionName = if (isBonus) BonusSection else MainSection,
         variantKey = variant,
         sortKey = (relative + candidate.displayName).joinToString("/") { it.normalized() },
     )
@@ -158,3 +199,9 @@ private val BonusDirectory = Regex("特典|bonus|extra|omake|おまけ")
 private val WithoutSeDirectory = Regex("(?:se|効果音)(?:なし|無し|抜き)|withoutse")
 private val WithSeDirectory = Regex("(?:se|効果音)(?:あり|有り|付き)|withse")
 private val NaturalToken = Regex("\\d+|\\D+")
+
+internal const val MainSection = "正篇"
+internal const val BonusSection = "特典"
+internal const val DefaultEdition = "default"
+internal const val WithSeEdition = "with-se"
+internal const val WithoutSeEdition = "without-se"

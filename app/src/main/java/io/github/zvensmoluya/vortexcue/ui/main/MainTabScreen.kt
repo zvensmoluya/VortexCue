@@ -397,10 +397,10 @@ internal fun MainTabScreen(
                                     scope.launch { gateway.replaceEntries(repository.workQueue(details.summary.workId), index) }
                                 },
                                 onPartLongPress = { selectedItem = it },
-                                onSaveProfile = { ids ->
+                                onSelectEdition = { editionKey ->
                                     scope.launch {
-                                        repository.setWorkIncludedParts(details.summary.workId, ids)
-                                        notice = "已更新作品播放方案"
+                                        repository.setWorkEdition(details.summary.workId, editionKey)
+                                        notice = "已切换作品播放版本"
                                     }
                                 },
                                 onAddWorkToPlaylist = {

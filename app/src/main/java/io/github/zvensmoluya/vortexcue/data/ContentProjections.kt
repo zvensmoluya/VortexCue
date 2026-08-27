@@ -140,6 +140,8 @@ data class WorkSummary(
     val profileLabel: String,
     val partCount: Int,
     val totalDurationMs: Long,
+    val playbackPartCount: Int = partCount,
+    val playbackDurationMs: Long = totalDurationMs,
     val lastPlayedAtMs: Long?,
     val progressContentId: String? = null,
     val progressPositionMs: Long = 0L,
@@ -159,7 +161,58 @@ data class WorkDetails(
 ) {
     val includedParts: List<WorkPartSummary>
         get() = parts.filter(WorkPartSummary::isIncluded)
+
+    val editions: List<WorkEditionSummary>
+        get() {
+            val mainParts = parts.filter { it.sectionName == "正篇" }
+            val selectedKeys = includedParts.filter { it.sectionName == "正篇" }.mapTo(hashSetOf(), WorkPartSummary::variantKey)
+            return mainParts.map(WorkPartSummary::variantKey).distinct().map { key ->
+                WorkEditionSummary(
+                    key = key,
+                    label = workEditionLabel(key),
+                    partCount = mainParts.count { it.variantKey == key },
+                    isSelected = key in selectedKeys,
+                )
+            }
+        }
 }
+
+data class WorkEditionSummary(
+    val key: String,
+    val label: String,
+    val partCount: Int,
+    val isSelected: Boolean,
+)
+
+data class WorkImportPreview(
+    val title: String,
+    val releaseCode: String,
+    val fileCount: Int,
+    val logicalPartCount: Int,
+    val mergedLocatorCount: Int,
+    val deliveryLabel: String,
+    val defaultEditionKey: String,
+    val editions: List<WorkEditionSummary>,
+    val parts: List<WorkImportPart>,
+)
+
+data class WorkImportPart(
+    val contentId: String,
+    val title: String,
+    val durationMs: Long,
+    val sectionName: String,
+    val editionKey: String,
+    val editionLabel: String,
+    val formatLabels: List<String>,
+)
+
+fun workEditionLabel(key: String): String =
+    when (key) {
+        "default" -> "标准版"
+        "with-se" -> "SE 版"
+        "without-se" -> "无 SE 版"
+        else -> key
+    }
 
 sealed interface PlaylistEntrySummary {
     val entryId: String
@@ -183,6 +236,7 @@ data class WorkImportResult(
     val partCount: Int,
     val mergedLocatorCount: Int,
     val upgradedCollectedCount: Int,
+    val contentIds: List<String> = emptyList(),
 )
 
 data class ImportContentResult(
@@ -226,6 +280,9 @@ data class DiscoveryGroupSummary(
     val lastImportedAtMs: Long?,
     val releaseCode: String? = null,
     val importedWorkId: String? = null,
+    val workPartCount: Int? = null,
+    val workEditionCount: Int? = null,
+    val workHasBonus: Boolean = false,
 ) {
     val isTrustedWorkPackage: Boolean
         get() = releaseCode != null

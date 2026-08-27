@@ -71,6 +71,7 @@ import io.github.zvensmoluya.vortexcue.data.DiscoveryItemStatus
 import io.github.zvensmoluya.vortexcue.data.ImportContentResult
 import io.github.zvensmoluya.vortexcue.data.PlaylistSummary
 import io.github.zvensmoluya.vortexcue.data.SourceSummary
+import io.github.zvensmoluya.vortexcue.data.WorkImportPart
 import io.github.zvensmoluya.vortexcue.library.LibraryCoordinatorState
 import io.github.zvensmoluya.vortexcue.library.LibrarySourceKind
 import io.github.zvensmoluya.vortexcue.ui.theme.AppAccent
@@ -170,23 +171,12 @@ private fun ImportWorkDetail(
     onBack: () -> Unit,
     onDone: () -> Unit,
 ) {
-    val items by remember(repository, group.sourceKey) { repository.observeDiscoveryItems(group.sourceKey) }
-        .collectAsState(initial = emptyList())
+    val preview by remember(repository, group.sourceKey) { repository.observeWorkImportPreview(group.sourceKey) }
+        .collectAsState(initial = null)
     val scope = rememberCoroutineScope()
-    var selectedIds by remember(group.sourceKey) { mutableStateOf<Set<String>>(emptySet()) }
-    var initialized by remember(group.sourceKey) { mutableStateOf(false) }
     var importing by remember(group.sourceKey) { mutableStateOf(false) }
     var completion by remember(group.sourceKey) { mutableStateOf<String?>(null) }
     var error by remember(group.sourceKey) { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(items) {
-        if (!initialized && items.isNotEmpty()) {
-            selectedIds = items.filter(DiscoveryItem::isDefaultSelected).mapTo(linkedSetOf(), DiscoveryItem::contentId)
-            initialized = true
-        } else if (initialized) {
-            selectedIds = selectedIds.intersect(items.mapTo(hashSetOf(), DiscoveryItem::contentId))
-        }
-    }
 
     Scaffold(
         containerColor = AppBackground,
@@ -194,8 +184,10 @@ private fun ImportWorkDetail(
             TopAppBar(
                 title = {
                     Column {
-                        Text(group.displayName, color = AppPrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(group.releaseCode.orEmpty(), color = AppSecondaryText, fontSize = 11.sp)
+                        Text(preview?.title ?: group.displayName, color = AppPrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (!group.releaseCode.equals(preview?.title ?: group.displayName, ignoreCase = true)) {
+                            Text(group.releaseCode.orEmpty(), color = AppSecondaryText, fontSize = 11.sp)
+                        }
                     }
                 },
                 navigationIcon = {
@@ -214,19 +206,21 @@ private fun ImportWorkDetail(
                 error?.let { Text(it, color = AppError, fontSize = 12.sp) }
                 completion?.let { Text(it, color = AppAccent, fontSize = 12.sp) }
                 if (completion == null) {
-                    Text("${selectedIds.size} 个播放段落 · WAV 优先 · 保留发行顺序", color = AppSecondaryText, fontSize = 12.sp)
+                    preview?.let {
+                        Text("完整收录 ${it.logicalPartCount} 个段落 · ${it.deliveryLabel}", color = AppSecondaryText, fontSize = 12.sp)
+                    }
                     Button(
-                        enabled = selectedIds.isNotEmpty() && !importing,
+                        enabled = preview != null && !importing,
                         onClick = {
                             scope.launch {
                                 importing = true
                                 error = null
                                 runCatching {
-                                    val result = repository.importWork(group.sourceKey, selectedIds)
-                                    onContentImported(selectedIds.toList())
+                                    val result = repository.importWork(group.sourceKey)
+                                    onContentImported(result.contentIds)
                                     result
                                 }.onSuccess { result ->
-                                    completion = "已导入作品 · ${result.partCount} 个播放段落"
+                                    completion = "已收录整部作品 · ${result.partCount} 个段落"
                                 }.onFailure { error = it.message ?: "无法导入作品" }
                                 importing = false
                             }
@@ -237,7 +231,7 @@ private fun ImportWorkDetail(
                             when {
                                 importing -> "正在导入作品…"
                                 group.importedWorkId != null -> "更新这部作品"
-                                else -> "导入这部作品"
+                                else -> "收录整部作品"
                             },
                         )
                     }
@@ -249,41 +243,65 @@ private fun ImportWorkDetail(
     ) { insets ->
         LazyColumn(modifier = Modifier.padding(insets).fillMaxSize()) {
             item(key = "work-summary") {
-                Column(modifier = Modifier.fillMaxWidth().background(AppSurfaceSelected).padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("完整分发作品", color = AppPrimaryText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                    Text("荧荧会把格式副本合并为同一段落，并把作品作为一个整体保存。", color = AppSecondaryText, fontSize = 13.sp)
-                    Text("正篇与特典将按发行顺序保存", color = AppSecondaryText, fontSize = 12.sp)
-                }
-            }
-            items.groupBy(DiscoveryItem::sectionName).forEach { (section, sectionItems) ->
-                item(key = "section:$section") {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 18.dp, bottom = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(section, color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
-                            Text("${sectionItems.count { it.contentId in selectedIds }} / ${sectionItems.size} 个文件", color = AppSecondaryText, fontSize = 11.sp)
+                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text("${preview?.logicalPartCount ?: 0} 个段落", color = AppPrimaryText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                    preview?.let {
+                        val editionSummary = it.editions.joinToString("、") { edition -> edition.label }
+                        Text(
+                            buildList {
+                                if (editionSummary.isNotBlank()) add(editionSummary)
+                                if (it.parts.any { part -> part.sectionName == "特典" }) add("包含特典")
+                                add(it.deliveryLabel)
+                            }.joinToString(" · "),
+                            color = AppSecondaryText,
+                            fontSize = 13.sp,
+                        )
+                        if (it.mergedLocatorCount > 0) {
+                            Text("${it.fileCount} 个本地文件已整理为 ${it.logicalPartCount} 个段落", color = AppMutedText, fontSize = 11.sp)
                         }
-                        TextButton(onClick = {
-                            val ids = sectionItems.mapTo(hashSetOf(), DiscoveryItem::contentId)
-                            selectedIds = if (ids.all(selectedIds::contains)) selectedIds - ids else selectedIds + ids
-                        }) { Text(if (sectionItems.all { it.contentId in selectedIds }) "取消" else "包含") }
                     }
                 }
-                items(sectionItems, key = DiscoveryItem::contentId) { item ->
-                    ImportItemRow(
-                        item = item,
-                        checked = item.contentId in selectedIds,
-                        onChecked = { checked ->
-                            selectedIds = if (checked) selectedIds + item.contentId else selectedIds - item.contentId
-                        },
-                        onIgnore = null,
-                    )
+            }
+            preview?.let { work ->
+                val mainParts = work.parts.filter { it.sectionName == "正篇" }
+                work.editions.forEach { edition ->
+                    val editionParts = mainParts.filter { it.editionKey == edition.key }
+                    if (editionParts.isNotEmpty()) {
+                        item(key = "edition:${edition.key}") {
+                            WorkPreviewSection("正篇 · ${edition.label}", "${edition.partCount} 个段落${if (edition.isSelected) " · 默认播放" else ""}")
+                        }
+                        items(editionParts, key = WorkImportPart::contentId) { part -> WorkPreviewPartRow(part) }
+                    }
+                }
+                val bonusParts = work.parts.filter { it.sectionName == "特典" }
+                if (bonusParts.isNotEmpty()) {
+                    item(key = "section:bonus") { WorkPreviewSection("特典", "${bonusParts.size} 个段落 · 随作品播放") }
+                    items(bonusParts, key = WorkImportPart::contentId) { part -> WorkPreviewPartRow(part) }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun WorkPreviewSection(title: String, detail: String) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp)) {
+        Text(title, color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
+        Text(detail, color = AppSecondaryText, fontSize = 11.sp)
+    }
+}
+
+@Composable
+private fun WorkPreviewPartRow(part: WorkImportPart) {
+    Column(modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 20.dp, vertical = 10.dp)) {
+        Text(part.title, color = AppPrimaryText, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(
+            listOfNotNull(formatDuration(part.durationMs), part.formatLabels.takeIf(List<String>::isNotEmpty)?.joinToString(" + ")).joinToString(" · "),
+            color = AppSecondaryText,
+            fontSize = 11.sp,
+        )
+    }
+    HorizontalDivider(color = AppHairline)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -480,14 +498,23 @@ private fun ImportSourceCard(
                 if (group.pendingCount > 0) {
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        if (group.isTrustedWorkPackage) "待整理" else "新增 ${group.pendingCount}",
+                        if (group.isTrustedWorkPackage) "待收录" else "新增 ${group.pendingCount}",
                         color = AppAccent,
                         fontSize = 11.sp,
                     )
                 }
             }
             Text(
-                if (group.isTrustedWorkPackage) "完整作品 · ${group.totalCount} 个音频" else "${group.totalCount} 个音频",
+                if (group.isTrustedWorkPackage) {
+                    buildList {
+                        if (!group.releaseCode.equals(group.displayName, ignoreCase = true)) add(group.releaseCode.orEmpty())
+                        group.workPartCount?.let { add("$it 个段落") }
+                        group.workEditionCount?.takeIf { it > 1 }?.let { add("$it 个版本") }
+                        if (group.workHasBonus) add("含特典")
+                    }.joinToString(" · ")
+                } else {
+                    "${group.totalCount} 个音频"
+                },
                 color = AppSecondaryText,
                 fontSize = 12.sp,
             )

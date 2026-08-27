@@ -24,6 +24,8 @@ class DlsiteWorkAnalyzerTest {
         assertEquals("特典", plan.parts.first { it.primaryContentId == "bonus" }.sectionName)
         assertTrue("wav" in plan.defaultContentIds)
         assertTrue("bonus" in plan.defaultContentIds)
+        assertEquals("default", plan.defaultEditionKey)
+        assertEquals(listOf("标准版", "无 SE 版"), plan.editions.map(DlsiteWorkEditionPlan::label))
         assertTrue(plan.profileLabel.contains("WAV 优先"))
     }
 

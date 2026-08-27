@@ -46,6 +46,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -77,6 +78,7 @@ import io.github.zvensmoluya.vortexcue.data.WorkSummary
 import io.github.zvensmoluya.vortexcue.ui.theme.AppAccent
 import io.github.zvensmoluya.vortexcue.ui.theme.AppBackground
 import io.github.zvensmoluya.vortexcue.ui.theme.AppHairline
+import io.github.zvensmoluya.vortexcue.ui.theme.AppMutedText
 import io.github.zvensmoluya.vortexcue.ui.theme.AppPrimaryText
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSecondaryText
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceRaised
@@ -501,7 +503,7 @@ private fun WorkCard(work: WorkSummary, onClick: () -> Unit, modifier: Modifier 
     ) {
         Text(work.title, color = AppPrimaryText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(work.releaseCode, color = AppAccent, fontSize = 12.sp)
-        Text("${work.partCount} 段 · ${formatWorkDuration(work.totalDurationMs)} · ${work.profileLabel}", color = AppSecondaryText, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text("完整收录 ${work.partCount} 段 · 当前播放 ${work.playbackPartCount} 段 · ${work.profileLabel}", color = AppSecondaryText, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -520,17 +522,15 @@ internal fun WorkDetailPage(
     onPlayFromStart: () -> Unit,
     onPlayPart: (Int) -> Unit,
     onPartLongPress: (ContentSummary) -> Unit,
-    onSaveProfile: (Set<String>) -> Unit,
+    onSelectEdition: (String) -> Unit,
     onAddWorkToPlaylist: () -> Unit,
     onAddPartsToPlaylist: (Set<String>) -> Unit,
     onDeleteWork: () -> Unit,
 ) {
-    var profileEditing by remember(details.summary.workId) { mutableStateOf(false) }
     var selectingParts by remember(details.summary.workId) { mutableStateOf(false) }
-    var selectedIds by remember(details.parts) {
+    var selectedIds by remember(details.includedParts) {
         mutableStateOf<Set<String>>(details.includedParts.mapTo(linkedSetOf()) { it.content.contentId })
     }
-    val includedIds = details.includedParts.mapTo(linkedSetOf()) { it.content.contentId }
     LazyColumn(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
         item(key = "work-header") {
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
@@ -547,7 +547,7 @@ internal fun WorkDetailPage(
                     }
                 }
                 Text(
-                    "${details.summary.partCount} 段 · ${formatWorkDuration(details.summary.totalDurationMs)} · ${details.summary.profileLabel}",
+                    "完整收录 ${details.summary.partCount} 段 · 当前播放 ${details.summary.playbackPartCount} 段 / ${formatWorkDuration(details.summary.playbackDurationMs)}",
                     color = AppSecondaryText,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
@@ -558,34 +558,48 @@ internal fun WorkDetailPage(
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(onClick = onAddWorkToPlaylist, modifier = Modifier.weight(1f)) { Text("整部加入歌单") }
-                    TextButton(onClick = { selectingParts = !selectingParts; profileEditing = false }, modifier = Modifier.weight(1f)) {
+                    TextButton(onClick = { selectingParts = !selectingParts }, modifier = Modifier.weight(1f)) {
                         Text(if (selectingParts) "取消选择" else "选择段落")
                     }
-                    TextButton(onClick = { profileEditing = !profileEditing; selectingParts = false; selectedIds = includedIds }, modifier = Modifier.weight(1f)) {
-                        Text(if (profileEditing) "取消调整" else "调整版本")
+                }
+                if (details.editions.size > 1) {
+                    Text("播放版本", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp, top = 10.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        details.editions.forEach { edition ->
+                            if (edition.isSelected) {
+                                Button(onClick = {}, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
+                                    Text(edition.label, maxLines = 1)
+                                }
+                            } else {
+                                OutlinedButton(
+                                    onClick = { onSelectEdition(edition.key) },
+                                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                                ) { Text(edition.label, maxLines = 1) }
+                            }
+                        }
                     }
                 }
-                if (profileEditing || selectingParts) {
+                Text(details.summary.profileLabel, color = AppMutedText, fontSize = 11.sp, modifier = Modifier.padding(start = 8.dp, top = 6.dp))
+                if (selectingParts) {
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("已选择 ${selectedIds.size} 段", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.weight(1f).padding(start = 8.dp))
                         Button(
                             enabled = selectedIds.isNotEmpty(),
                             onClick = {
-                                if (profileEditing) onSaveProfile(selectedIds) else onAddPartsToPlaylist(selectedIds)
-                                profileEditing = false
+                                onAddPartsToPlaylist(selectedIds)
                                 selectingParts = false
                             },
-                        ) { Text(if (profileEditing) "保存方案" else "加入歌单") }
+                        ) { Text("加入歌单") }
                     }
                 }
             }
         }
-        details.parts.groupBy { it.sectionName }.forEach { (section, parts) ->
+        details.includedParts.groupBy { it.sectionName }.forEach { (section, parts) ->
             item(key = "work-section:$section") {
                 Text(section, color = AppPrimaryText, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 6.dp))
             }
             itemsIndexed(parts, key = { _, part -> part.content.contentId }) { _, part ->
-                if (profileEditing || selectingParts) {
+                if (selectingParts) {
                     SelectableContentRow(
                         item = part.content,
                         checked = part.content.contentId in selectedIds,
@@ -597,11 +611,7 @@ internal fun WorkDetailPage(
                     val includedIndex = details.includedParts.indexOfFirst { it.content.contentId == part.content.contentId }
                     ContentRow(
                         item = part.content,
-                        status = when {
-                            !part.isIncluded -> "未包含 · ${part.variantKey}"
-                            part.variantKey != "default" -> part.variantKey
-                            else -> null
-                        },
+                        status = null,
                         onClick = { if (includedIndex >= 0) onPlayPart(includedIndex) },
                         onLongPress = { onPartLongPress(part.content) },
                     )
@@ -659,7 +669,7 @@ internal fun MixedPlaylistDetail(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(entry.work.title, color = AppPrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Text("作品 · ${entry.work.partCount} 段 · ${entry.work.releaseCode}", color = AppSecondaryText, fontSize = 12.sp)
+                            Text("作品 · 当前播放 ${entry.work.playbackPartCount} 段 · ${entry.work.releaseCode}", color = AppSecondaryText, fontSize = 12.sp)
                         }
                         IconButton(onClick = { onRemoveWork(entry.entryId) }, modifier = Modifier.semantics { contentDescription = "从歌单移除 ${entry.work.title}" }) {
                             Icon(Icons.Outlined.Close, null, tint = AppSecondaryText)
