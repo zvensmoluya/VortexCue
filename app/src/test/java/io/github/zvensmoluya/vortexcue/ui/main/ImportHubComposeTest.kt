@@ -211,11 +211,11 @@ class ImportHubComposeTest {
         compose.waitUntil(5_000) { compose.onAllNodesWithText("2 个段落").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("RJ01658524").assertExists()
         compose.onNodeWithText("正篇 · 标准版").assertExists()
-        compose.onNodeWithText("收录整部作品").assertExists()
+        compose.onNodeWithText("添加作品").assertExists()
         compose.onNodeWithText("导入到").assertDoesNotExist()
         compose.onNodeWithText("完整分发作品").assertDoesNotExist()
-        compose.onNodeWithText("收录整部作品").performClick()
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("已收录整部作品 · 2 个段落").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("添加作品").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("已添加作品 · 2 个段落").fetchSemanticsNodes().isNotEmpty() }
         assertEquals(2, repository.works.first().single().partCount)
         Unit
     }

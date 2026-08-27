@@ -244,7 +244,8 @@ class MainSurfaceComposeTest {
             }
         }
 
-        compose.onNodeWithText("作品").assertExists()
+        compose.onNodeWithText("作品 · RJ01658524 · 16 段 · 2小时0分").assertExists()
+        compose.onNodeWithText("WAV 优先 · 包含特典").assertDoesNotExist()
         compose.onNodeWithText("蓝空に、吐息。").performClick()
         compose.runOnIdle { assertEquals("work-test", openedWork) }
     }

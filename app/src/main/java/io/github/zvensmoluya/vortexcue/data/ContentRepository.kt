@@ -120,8 +120,11 @@ class ContentRepository(
                 val lowSignalFolder = first.locationLeaf.lowercase(Locale.ROOT) in LowSignalAudioFolders
                 val allShort = visible.all { it.summary.media.durationMs < ShortAudioThresholdMs }
                 val workTitle = visible.workDisplayTitle()
+                val importedWork = workRows.firstOrNull { it.sourceKey == sourceKey }
                 val displayName =
-                    if (first.releaseCode != null) {
+                    if (importedWork != null) {
+                        importedWork.title
+                    } else if (first.releaseCode != null) {
                         workTitle
                     } else if (names[first.baseDisplayName.lowercase(Locale.ROOT)].orEmpty().map { it.sourceKey }.distinct().size > 1) {
                         first.disambiguatedDisplayName
@@ -159,7 +162,7 @@ class ContentRepository(
                     errorMessage = first.errorMessage,
                     lastImportedAtMs = preferenceMap[sourceKey]?.lastImportedAtMs,
                     releaseCode = first.releaseCode,
-                    importedWorkId = workRows.firstOrNull { it.sourceKey == sourceKey }?.workId,
+                    importedWorkId = importedWork?.workId,
                     workPartCount = workPlan?.parts?.size,
                     workEditionCount = workPlan?.editions?.size,
                     workHasBonus = workPlan?.parts?.any { it.sectionName == "特典" } == true,
@@ -287,7 +290,11 @@ class ContentRepository(
         }
 
     fun observeWorkImportPreview(sourceKey: String): Flow<WorkImportPreview?> =
-        combine(dao.observeAvailableAudio(), dao.observeSources()) { rows, sourceRows ->
+        combine(
+            dao.observeAvailableAudio(),
+            dao.observeSources(),
+            workDao.observeWorkBySourceKey(sourceKey),
+        ) { rows, sourceRows, existingWork ->
             val sourceMap = sourceRows.associateBy { it.sourceId }
             val located =
                 rows.mapNotNull { it.toLocatedAudio(sourceMap) }
@@ -306,7 +313,7 @@ class ContentRepository(
                     },
                 )
             WorkImportPreview(
-                title = located.workDisplayTitle(),
+                title = existingWork?.title ?: located.workDisplayTitle(),
                 releaseCode = requireNotNull(located.first().releaseCode),
                 fileCount = located.size,
                 logicalPartCount = plan.parts.size,
@@ -803,7 +810,7 @@ class ContentRepository(
         }
     }
 
-    suspend fun importWork(sourceKey: String): WorkImportResult =
+    suspend fun importWork(sourceKey: String, titleOverride: String? = null): WorkImportResult =
         database.withWriteTransaction {
             val sourceMap = dao.sources().associateBy { it.sourceId }
             val located =
@@ -857,7 +864,7 @@ class ContentRepository(
             val parts = canonicalParts.distinctBy(WorkPartEntity::contentId)
             require(parts.any(WorkPartEntity::isIncluded)) { "作品没有可播放的默认版本" }
             val timestamp = nowMs()
-            val title = located.workDisplayTitle()
+            val title = titleOverride?.trim()?.takeIf(String::isNotBlank) ?: existing?.title ?: located.workDisplayTitle()
             workDao.upsertWork(
                 WorkEntity(
                     workId = workId,
@@ -903,6 +910,15 @@ class ContentRepository(
                 },
             )
             workDao.work(workId)?.let { workDao.upsertWork(it.copy(updatedAtMs = nowMs())) }
+        }
+    }
+
+    suspend fun renameWork(workId: String, title: String) {
+        val normalized = title.trim()
+        require(normalized.isNotBlank()) { "作品名不能为空" }
+        database.withWriteTransaction {
+            val work = requireNotNull(workDao.work(workId)) { "作品不存在" }
+            workDao.upsertWork(work.copy(title = normalized, updatedAtMs = nowMs()))
         }
     }
 

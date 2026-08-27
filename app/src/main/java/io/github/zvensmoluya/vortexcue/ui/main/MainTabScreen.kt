@@ -217,6 +217,8 @@ internal fun MainTabScreen(
     var membershipWorkPartIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var playlistToDelete by remember { mutableStateOf<PlaylistSummary?>(null) }
     var workToDelete by remember { mutableStateOf<WorkSummary?>(null) }
+    var workToRename by remember { mutableStateOf<WorkSummary?>(null) }
+    var workName by remember { mutableStateOf("") }
     var playlistReorderMode by rememberSaveable { mutableStateOf(false) }
     var contentReorderMode by rememberSaveable { mutableStateOf(false) }
     var contentOrganizeMode by rememberSaveable { mutableStateOf(false) }
@@ -412,6 +414,10 @@ internal fun MainTabScreen(
                                     membershipWork = null
                                     membershipWorkPartIds = ids
                                     membershipInitialIds = emptySet()
+                                },
+                                onRenameWork = {
+                                    workName = details.summary.title
+                                    workToRename = details.summary
                                 },
                                 onDeleteWork = {
                                     workToDelete = details.summary
@@ -640,11 +646,8 @@ internal fun MainTabScreen(
                         val createdId = newName?.let { repository.createPlaylist(it).playlistId }
                         val targets = selectedIds + listOfNotNull(createdId)
                         require(targets.isNotEmpty()) { "至少选择一个歌单" }
-                        if (work != null) {
-                            repository.addWorkToPlaylists(work.workId, targets)
-                        } else {
-                            repository.addContentsToPlaylists(membershipWorkPartIds, targets)
-                        }
+                        if (work != null) repository.addWorkToPlaylists(work.workId, targets)
+                        else repository.addContentsToPlaylists(membershipWorkPartIds, targets)
                     }.onSuccess {
                         membershipWork = null
                         membershipWorkPartIds = emptySet()
@@ -729,6 +732,24 @@ internal fun MainTabScreen(
                 scope.launch {
                     repository.deletePlaylist(playlist.playlistId)
                     notice = "歌单已删除"
+                }
+            },
+        )
+    }
+
+    workToRename?.let { work ->
+        PlaylistNameDialog(
+            title = "修改作品名",
+            value = workName,
+            onValueChanged = { workName = it },
+            onDismiss = { workToRename = null },
+            onConfirm = {
+                val title = workName
+                workToRename = null
+                scope.launch {
+                    runCatching { repository.renameWork(work.workId, title) }
+                        .onSuccess { notice = "作品名已更新" }
+                        .onFailure { notice = it.message ?: "无法修改作品名" }
                 }
             },
         )

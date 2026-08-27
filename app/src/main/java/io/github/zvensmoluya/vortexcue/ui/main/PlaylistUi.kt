@@ -3,17 +3,18 @@ package io.github.zvensmoluya.vortexcue.ui.main
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -21,9 +22,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -46,8 +47,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -139,24 +142,6 @@ internal fun PlaylistOverview(
                 }
             }
         }
-        if (works.isNotEmpty() && !reorderMode) {
-            item(key = "works-title") {
-                Text(
-                    "作品",
-                    color = AppPrimaryText,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 4.dp),
-                )
-            }
-            items(works, key = WorkSummary::workId) { work ->
-                WorkCard(
-                    work = work,
-                    onClick = { onOpenWork(work.workId) },
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-            }
-        }
         item(key = "all-title") {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = if (recentPlaylists.isEmpty()) 20.dp else 18.dp),
@@ -186,6 +171,15 @@ internal fun PlaylistOverview(
                 onClick = { if (!reorderMode) onOpenAllContent() },
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
+        }
+        if (works.isNotEmpty() && !reorderMode) {
+            items(works, key = WorkSummary::workId) { work ->
+                WorkCard(
+                    work = work,
+                    onClick = { if (!reorderMode) onOpenWork(work.workId) },
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
         }
         defaultPlaylist?.let { playlist ->
             item(key = playlist.playlistId) {
@@ -497,13 +491,20 @@ internal fun PlaylistDetail(
 
 @Composable
 private fun WorkCard(work: WorkSummary, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier.fillMaxWidth().background(AppSurfaceRaised, RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp),
+    Row(
+        modifier = modifier.fillMaxWidth().heightIn(min = 78.dp).background(AppSurfaceRaised, RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(start = 20.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(work.title, color = AppPrimaryText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(work.releaseCode, color = AppAccent, fontSize = 12.sp)
-        Text("完整收录 ${work.partCount} 段 · 当前播放 ${work.playbackPartCount} 段 · ${work.profileLabel}", color = AppSecondaryText, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(work.title, color = AppPrimaryText, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(
+                "作品 · ${work.releaseCode} · ${work.playbackPartCount} 段 · ${formatWorkDuration(work.playbackDurationMs)}",
+                color = AppSecondaryText,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -525,12 +526,15 @@ internal fun WorkDetailPage(
     onSelectEdition: (String) -> Unit,
     onAddWorkToPlaylist: () -> Unit,
     onAddPartsToPlaylist: (Set<String>) -> Unit,
+    onRenameWork: () -> Unit,
     onDeleteWork: () -> Unit,
 ) {
     var selectingParts by remember(details.summary.workId) { mutableStateOf(false) }
     var selectedIds by remember(details.includedParts) {
         mutableStateOf<Set<String>>(details.includedParts.mapTo(linkedSetOf()) { it.content.contentId })
     }
+    val progressIndex = details.includedParts.indexOfFirst { it.content.contentId == details.summary.progressContentId }
+    val hasProgress = progressIndex >= 0 || details.summary.progressPositionMs > 0L
     LazyColumn(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
         item(key = "work-header") {
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
@@ -542,19 +546,52 @@ internal fun WorkDetailPage(
                         Text(details.summary.title, color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Text(details.summary.releaseCode, color = AppAccent, fontSize = 12.sp)
                     }
-                    IconButton(onClick = onDeleteWork, modifier = Modifier.semantics { contentDescription = "移除作品" }) {
-                        Icon(Icons.Outlined.DeleteOutline, null, tint = AppSecondaryText)
+                    var menuVisible by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { menuVisible = true }, modifier = Modifier.semantics { contentDescription = "作品操作" }) {
+                            Icon(Icons.Outlined.MoreVert, null, tint = AppSecondaryText)
+                        }
+                        DropdownMenu(expanded = menuVisible, onDismissRequest = { menuVisible = false }) {
+                            if (hasProgress) {
+                                DropdownMenuItem(
+                                    text = { Text("从头播放") },
+                                    leadingIcon = { Icon(Icons.Outlined.PlayArrow, null) },
+                                    onClick = { menuVisible = false; onPlayFromStart() },
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text("修改作品名") },
+                                leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                                onClick = { menuVisible = false; onRenameWork() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("移出作品") },
+                                leadingIcon = { Icon(Icons.Outlined.DeleteOutline, null) },
+                                onClick = { menuVisible = false; onDeleteWork() },
+                            )
+                        }
                     }
                 }
                 Text(
-                    "完整收录 ${details.summary.partCount} 段 · 当前播放 ${details.summary.playbackPartCount} 段 / ${formatWorkDuration(details.summary.playbackDurationMs)}",
+                    "${details.summary.playbackPartCount} 段 · ${formatWorkDuration(details.summary.playbackDurationMs)}",
                     color = AppSecondaryText,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                 )
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onContinue, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("继续播放") }
-                    TextButton(onClick = onPlayFromStart, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("从头播放") }
+                if (progressIndex >= 0) {
+                    Text(
+                        "上次听到第 ${progressIndex + 1} 段 · ${details.includedParts[progressIndex].content.media.displayTitle}",
+                        color = AppMutedText,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
+                Button(onClick = onContinue, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(top = 6.dp)) {
+                    Icon(Icons.Outlined.PlayArrow, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (hasProgress) "继续播放" else "播放作品")
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(onClick = onAddWorkToPlaylist, modifier = Modifier.weight(1f)) { Text("整部加入歌单") }
@@ -563,23 +600,18 @@ internal fun WorkDetailPage(
                     }
                 }
                 if (details.editions.size > 1) {
-                    Text("播放版本", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp, top = 10.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        details.editions.forEach { edition ->
-                            if (edition.isSelected) {
-                                Button(onClick = {}, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
-                                    Text(edition.label, maxLines = 1)
-                                }
-                            } else {
-                                OutlinedButton(
-                                    onClick = { onSelectEdition(edition.key) },
-                                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-                                ) { Text(edition.label, maxLines = 1) }
-                            }
+                    Text("内容版本", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp, top = 14.dp, bottom = 6.dp))
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        details.editions.forEachIndexed { index, edition ->
+                            SegmentedButton(
+                                selected = edition.isSelected,
+                                onClick = { if (!edition.isSelected) onSelectEdition(edition.key) },
+                                shape = SegmentedButtonDefaults.itemShape(index, details.editions.size),
+                                label = { Text(edition.label, maxLines = 1) },
+                            )
                         }
                     }
                 }
-                Text(details.summary.profileLabel, color = AppMutedText, fontSize = 11.sp, modifier = Modifier.padding(start = 8.dp, top = 6.dp))
                 if (selectingParts) {
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("已选择 ${selectedIds.size} 段", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.weight(1f).padding(start = 8.dp))
@@ -599,6 +631,7 @@ internal fun WorkDetailPage(
                 Text(section, color = AppPrimaryText, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 6.dp))
             }
             itemsIndexed(parts, key = { _, part -> part.content.contentId }) { _, part ->
+                val includedIndex = details.includedParts.indexOfFirst { it.content.contentId == part.content.contentId }
                 if (selectingParts) {
                     SelectableContentRow(
                         item = part.content,
@@ -608,16 +641,29 @@ internal fun WorkDetailPage(
                         },
                     )
                 } else {
-                    val includedIndex = details.includedParts.indexOfFirst { it.content.contentId == part.content.contentId }
-                    ContentRow(
+                    WorkPartRow(
                         item = part.content,
-                        status = null,
                         onClick = { if (includedIndex >= 0) onPlayPart(includedIndex) },
                         onLongPress = { onPartLongPress(part.content) },
                     )
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun WorkPartRow(item: ContentSummary, onClick: () -> Unit, onLongPress: () -> Unit) {
+    Column {
+        Column(
+            modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongPress).padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(item.media.displayTitle, color = AppPrimaryText, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(formatWorkDuration(item.media.durationMs), color = AppSecondaryText, fontSize = 12.sp)
+        }
+        HorizontalDivider(color = AppHairline)
     }
 }
 

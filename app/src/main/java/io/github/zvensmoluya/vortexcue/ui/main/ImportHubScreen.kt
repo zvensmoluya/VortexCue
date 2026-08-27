@@ -26,9 +26,11 @@ import androidx.compose.material.icons.outlined.AudioFile
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -177,6 +179,9 @@ private fun ImportWorkDetail(
     var importing by remember(group.sourceKey) { mutableStateOf(false) }
     var completion by remember(group.sourceKey) { mutableStateOf<String?>(null) }
     var error by remember(group.sourceKey) { mutableStateOf<String?>(null) }
+    var titleOverride by remember(group.sourceKey) { mutableStateOf<String?>(null) }
+    var editingTitle by remember(group.sourceKey) { mutableStateOf<String?>(null) }
+    val displayedTitle = titleOverride ?: preview?.title ?: group.displayName
 
     Scaffold(
         containerColor = AppBackground,
@@ -184,8 +189,8 @@ private fun ImportWorkDetail(
             TopAppBar(
                 title = {
                     Column {
-                        Text(preview?.title ?: group.displayName, color = AppPrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (!group.releaseCode.equals(preview?.title ?: group.displayName, ignoreCase = true)) {
+                        Text(displayedTitle, color = AppPrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (!group.releaseCode.equals(displayedTitle, ignoreCase = true)) {
                             Text(group.releaseCode.orEmpty(), color = AppSecondaryText, fontSize = 11.sp)
                         }
                     }
@@ -194,6 +199,12 @@ private fun ImportWorkDetail(
                     IconButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "返回作品列表" }) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, tint = AppPrimaryText)
                     }
+                },
+                actions = {
+                    IconButton(
+                        onClick = { editingTitle = displayedTitle },
+                        modifier = Modifier.semantics { contentDescription = "修改作品名" },
+                    ) { Icon(Icons.Outlined.Edit, null, tint = AppSecondaryText) }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AppBackground),
             )
@@ -206,9 +217,6 @@ private fun ImportWorkDetail(
                 error?.let { Text(it, color = AppError, fontSize = 12.sp) }
                 completion?.let { Text(it, color = AppAccent, fontSize = 12.sp) }
                 if (completion == null) {
-                    preview?.let {
-                        Text("完整收录 ${it.logicalPartCount} 个段落 · ${it.deliveryLabel}", color = AppSecondaryText, fontSize = 12.sp)
-                    }
                     Button(
                         enabled = preview != null && !importing,
                         onClick = {
@@ -216,11 +224,11 @@ private fun ImportWorkDetail(
                                 importing = true
                                 error = null
                                 runCatching {
-                                    val result = repository.importWork(group.sourceKey)
+                                    val result = repository.importWork(group.sourceKey, titleOverride)
                                     onContentImported(result.contentIds)
                                     result
                                 }.onSuccess { result ->
-                                    completion = "已收录整部作品 · ${result.partCount} 个段落"
+                                    completion = "已添加作品 · ${result.partCount} 个段落"
                                 }.onFailure { error = it.message ?: "无法导入作品" }
                                 importing = false
                             }
@@ -230,8 +238,8 @@ private fun ImportWorkDetail(
                         Text(
                             when {
                                 importing -> "正在导入作品…"
-                                group.importedWorkId != null -> "更新这部作品"
-                                else -> "收录整部作品"
+                                group.importedWorkId != null -> "更新作品"
+                                else -> "添加作品"
                             },
                         )
                     }
@@ -246,19 +254,17 @@ private fun ImportWorkDetail(
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text("${preview?.logicalPartCount ?: 0} 个段落", color = AppPrimaryText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                     preview?.let {
+                        val playbackParts = it.parts.filter { part -> part.sectionName == "特典" || part.editionKey == it.defaultEditionKey }
                         val editionSummary = it.editions.joinToString("、") { edition -> edition.label }
                         Text(
                             buildList {
                                 if (editionSummary.isNotBlank()) add(editionSummary)
                                 if (it.parts.any { part -> part.sectionName == "特典" }) add("包含特典")
-                                add(it.deliveryLabel)
                             }.joinToString(" · "),
                             color = AppSecondaryText,
                             fontSize = 13.sp,
                         )
-                        if (it.mergedLocatorCount > 0) {
-                            Text("${it.fileCount} 个本地文件已整理为 ${it.logicalPartCount} 个段落", color = AppMutedText, fontSize = 11.sp)
-                        }
+                        Text(formatDuration(playbackParts.sumOf(WorkImportPart::durationMs)), color = AppMutedText, fontSize = 11.sp)
                     }
                 }
             }
@@ -281,6 +287,39 @@ private fun ImportWorkDetail(
             }
         }
     }
+    editingTitle?.let { value ->
+        AlertDialog(
+            onDismissRequest = { editingTitle = null },
+            title = { Text("修改作品名") },
+            text = {
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { editingTitle = it },
+                    label = { Text("作品名") },
+                    singleLine = true,
+                )
+            },
+            dismissButton = { TextButton(onClick = { editingTitle = null }) { Text("取消") } },
+            confirmButton = {
+                TextButton(
+                    enabled = value.trim().isNotBlank(),
+                    onClick = {
+                        val normalized = value.trim()
+                        titleOverride = normalized
+                        editingTitle = null
+                        group.importedWorkId?.let { workId ->
+                            scope.launch {
+                                runCatching { repository.renameWork(workId, normalized) }
+                                    .onSuccess { completion = "作品名已更新" }
+                                    .onFailure { error = it.message ?: "无法修改作品名" }
+                            }
+                        }
+                    },
+                ) { Text("保存") }
+            },
+            containerColor = AppSurfaceRaised,
+        )
+    }
 }
 
 @Composable
@@ -295,11 +334,7 @@ private fun WorkPreviewSection(title: String, detail: String) {
 private fun WorkPreviewPartRow(part: WorkImportPart) {
     Column(modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 20.dp, vertical = 10.dp)) {
         Text(part.title, color = AppPrimaryText, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(
-            listOfNotNull(formatDuration(part.durationMs), part.formatLabels.takeIf(List<String>::isNotEmpty)?.joinToString(" + ")).joinToString(" · "),
-            color = AppSecondaryText,
-            fontSize = 11.sp,
-        )
+        Text(formatDuration(part.durationMs), color = AppSecondaryText, fontSize = 11.sp)
     }
     HorizontalDivider(color = AppHairline)
 }
@@ -498,7 +533,7 @@ private fun ImportSourceCard(
                 if (group.pendingCount > 0) {
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        if (group.isTrustedWorkPackage) "待收录" else "新增 ${group.pendingCount}",
+                        if (group.isTrustedWorkPackage) "待添加" else "新增 ${group.pendingCount}",
                         color = AppAccent,
                         fontSize = 11.sp,
                     )

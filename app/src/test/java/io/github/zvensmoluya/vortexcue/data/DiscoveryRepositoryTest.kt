@@ -175,8 +175,10 @@ class DiscoveryRepositoryTest {
 
         repository.setWorkEdition(result.workId, "without-se")
         assertEquals(listOf(withoutSe.content.contentId, bonus.content.contentId), repository.workQueue(result.workId).map { it.contentId })
+        repository.renameWork(result.workId, "用户修改的作品名")
         repository.importWork(group.sourceKey)
         assertEquals(listOf(withoutSe.content.contentId, bonus.content.contentId), repository.workQueue(result.workId).map { it.contentId })
+        assertEquals("用户修改的作品名", repository.workDetails(result.workId)?.summary?.title)
 
         val playlist = repository.createPlaylist("夜听")
         repository.addWorkToPlaylists(result.workId, setOf(playlist.playlistId))
