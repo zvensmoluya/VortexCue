@@ -10,6 +10,8 @@ import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -109,6 +111,7 @@ class TranslationNetworkGateway(
     private val registry: TranslationAdapterRegistry,
     private val streamResponses: Boolean = true,
     private val requestBudget: TranslationRequestBudget = TranslationRequestBudget(),
+    private val requestTimeoutMs: Long = DefaultRequestTimeoutMs,
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val elapsedRealtimeMs: () -> Long = { System.nanoTime() / 1_000_000L },
     private val waitBeforeRetry: suspend (Long) -> Unit = { delay(it) },
@@ -116,6 +119,10 @@ class TranslationNetworkGateway(
         Random.nextLong((baseDelayMs / 4L).coerceIn(1L, MaxRetryJitterMs) + 1L)
     },
 ) {
+    init {
+        require(requestTimeoutMs > 0L) { "Translation request timeout must be positive" }
+    }
+
     suspend fun translate(
         protocol: TranslationProtocol,
         request: TranslationProviderRequest,
@@ -131,7 +138,20 @@ class TranslationNetworkGateway(
                 val permit = requestBudget.acquire()
                 attemptEpoch = permit.cooldownEpoch
                 val response = try {
-                    if (streamResponses) adapter.translateStreaming(request) else adapter.translate(request)
+                    try {
+                        withTimeout(requestTimeoutMs) {
+                            if (streamResponses) adapter.translateStreaming(request) else adapter.translate(request)
+                        }
+                    } catch (timeout: TimeoutCancellationException) {
+                        throw TranslationProtocolException(
+                            category = GenerationErrorCategory.TemporaryNetwork,
+                            retryable = true,
+                            capacityExceeded = false,
+                            phase = TranslationFailurePhase.Transport,
+                            message = "Translation request timed out after ${requestTimeoutMs}ms",
+                            cause = timeout,
+                        )
+                    }
                 } finally {
                     permit.release()
                 }
@@ -179,6 +199,7 @@ class TranslationNetworkGateway(
 
     companion object {
         const val MaxNetworkAttempts = 3
+        const val DefaultRequestTimeoutMs = 2 * 60 * 1_000L
         private const val MaxRetryJitterMs = 750L
         private val RetryDelaysMs = longArrayOf(500L, 1_500L, 3_000L)
     }

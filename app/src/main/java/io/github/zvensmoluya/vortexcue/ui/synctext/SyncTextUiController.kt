@@ -154,6 +154,8 @@ sealed interface SyncTextAction {
 
     data class CancelForContent(val contentId: String) : SyncTextAction
 
+    data class AbortForContent(val contentId: String) : SyncTextAction
+
     data class RetryForContent(val contentId: String) : SyncTextAction
 
     data class AllowMeteredNetworkForContent(val contentId: String) : SyncTextAction
@@ -268,6 +270,10 @@ class SyncTextUiController(
             is SyncTextAction.CancelForContent -> runAction {
                 repository.cancelForContent(action.contentId)
                 "同步文字已暂停"
+            }
+            is SyncTextAction.AbortForContent -> runAction {
+                repository.abortForContent(action.contentId)
+                "同步文字生成已停止"
             }
             is SyncTextAction.RetryForContent -> runAction {
                 repository.retryForContent(action.contentId)

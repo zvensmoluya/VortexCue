@@ -454,6 +454,39 @@ class SyncTextRepositoryTest {
         assertEquals(replacement.taskId, repository.nextRunnableTask()?.taskId)
     }
 
+    @Test
+    fun `aborting a task makes it terminal and allows a replacement`() = runBlocking {
+        insertContentWithTextTrack()
+        repository.saveCredential("abort", "Abort", CredentialPurpose.Shared, "secret")
+        val scheme = repository.createScheme(
+            name = "Abort",
+            asrProfile = AsrProfile.OpenRouterWhisperV1,
+            asrCredentialId = "abort",
+            translationProtocol = TranslationProtocol.ChatCompletions,
+            translationEndpoint = "https://example.test/v1/chat/completions",
+            translationModel = "model",
+            translationCredentialId = "abort",
+            defaultTargetLanguage = "fr",
+        )
+        val task = repository.submit(
+            GenerationRequest(ContentId, GenerationInput.ExistingTrack(TrackId), GenerationOutput.SourceOnly, scheme.schemeId),
+        )
+
+        repository.abortTask(task.taskId)
+
+        val aborted = requireNotNull(database.syncTextDao().task(task.taskId))
+        assertEquals(GenerationTaskState.Aborted.name, aborted.state)
+        assertNull(aborted.activeDedupeKey)
+        assertNull(repository.nextRunnableTask())
+        val replacement = repository.submit(
+            GenerationRequest(ContentId, GenerationInput.ExistingTrack(TrackId), GenerationOutput.SourceOnly, scheme.schemeId),
+        )
+        assertEquals(replacement.taskId, repository.nextRunnableTask()?.taskId)
+
+        repository.deleteTask(task.taskId)
+        assertEquals(GenerationTaskState.Deleted.name, database.syncTextDao().task(task.taskId)?.state)
+    }
+
     private suspend fun insertContentWithTextTrack() {
         val dao = database.contentDao()
         dao.upsertContent(ContentEntity(ContentId, 1L))

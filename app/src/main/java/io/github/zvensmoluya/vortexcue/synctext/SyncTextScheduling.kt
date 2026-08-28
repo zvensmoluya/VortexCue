@@ -78,6 +78,14 @@ class AndroidSyncTextScheduler(
         }
     }
 
+    override fun cancel(taskId: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            appContext.getSystemService(JobScheduler::class.java).cancel(UidtJobId)
+        } else {
+            WorkManager.getInstance(appContext).cancelUniqueWork(WorkName)
+        }
+    }
+
     fun onAppForeground() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             uidtScheduleGate?.retryDeferred()?.let { outcome ->

@@ -2,6 +2,7 @@ package io.github.zvensmoluya.vortexcue.synctext
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
@@ -296,6 +297,43 @@ class TranslationProtocolAdaptersTest {
         assertEquals("stream", response.text)
         assertEquals(1, streamingCalls)
         assertEquals(0, fullCalls)
+    }
+
+    @Test
+    fun `gateway converts a hung provider call into a bounded retryable failure`() = runBlocking {
+        var calls = 0
+        val attempts = mutableListOf<TranslationNetworkAttempt>()
+        val adapter =
+            object : TranslationProtocolAdapter {
+                override val protocol = TranslationProtocol.Responses
+
+                override suspend fun translate(request: TranslationProviderRequest): TranslationProviderResponse {
+                    calls += 1
+                    awaitCancellation()
+                }
+            }
+        val gateway =
+            TranslationNetworkGateway(
+                registry = TranslationAdapterRegistry(listOf(adapter)),
+                requestTimeoutMs = 20L,
+                waitBeforeRetry = {},
+                retryJitterMs = { 0L },
+            )
+
+        val error =
+            runCatching {
+                gateway.translate(
+                    TranslationProtocol.Responses,
+                    request("https://example.test/v1/responses"),
+                    onAttempt = attempts::add,
+                )
+            }.exceptionOrNull() as TranslationProtocolException
+
+        assertEquals(GenerationErrorCategory.TemporaryNetwork, error.category)
+        assertTrue(error.retryable)
+        assertEquals(TranslationNetworkGateway.MaxNetworkAttempts, calls)
+        assertEquals(TranslationNetworkGateway.MaxNetworkAttempts, attempts.size)
+        assertTrue(attempts.all { it.error?.message?.contains("timed out") == true })
     }
 
     @Test

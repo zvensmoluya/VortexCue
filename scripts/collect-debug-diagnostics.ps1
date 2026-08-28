@@ -118,9 +118,6 @@ if ([int]$schemaVersion -lt 8) {
     throw "The installed debug APK uses database schema v$schemaVersion; install the latest v8 build first"
 }
 
-if ([string]::IsNullOrWhiteSpace($TaskId)) {
-    $TaskId = Invoke-DeviceSqlite -List "SELECT task_id FROM generation_task ORDER BY created_at_ms DESC LIMIT 1;"
-}
 if (-not [string]::IsNullOrWhiteSpace($TaskId) -and $TaskId -notmatch '^[A-Za-z0-9._:-]+$') {
     throw "Unsafe task id"
 }
@@ -139,6 +136,7 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
 }
 $debugApk = Join-Path $RepositoryRoot "app\build\outputs\apk\debug\app-debug.apk"
 $debugApkSha256 = if (Test-Path -LiteralPath $debugApk) { (Get-FileHash -LiteralPath $debugApk -Algorithm SHA256).Hash } else { "unavailable" }
+$selectedTask = if ([string]::IsNullOrWhiteSpace($TaskId)) { "all-active" } else { $TaskId }
 $deviceSummary = @(
     "serial=$Serial"
     "manufacturer=$(Invoke-AdbText @('-s', $Serial, 'shell', 'getprop', 'ro.product.manufacturer'))"
@@ -146,7 +144,7 @@ $deviceSummary = @(
     "sdk=$(Invoke-AdbText @('-s', $Serial, 'shell', 'getprop', 'ro.build.version.sdk'))"
     "release=$(Invoke-AdbText @('-s', $Serial, 'shell', 'getprop', 'ro.build.version.release'))"
     "package=$Package"
-    "taskId=$TaskId"
+    "taskId=$selectedTask"
     "gitCommit=$gitCommit"
     "gitDirty=$gitDirty"
     "localDebugApkSha256=$debugApkSha256"
@@ -157,9 +155,22 @@ $deviceSummary = @(
 ) -join $NewLine
 Save-DiagnosticText (Join-Path $reportDirectory "environment.txt") $deviceSummary
 
-$taskPredicate = if ([string]::IsNullOrWhiteSpace($TaskId)) { "1 = 0" } else { "task_id = '$TaskId'" }
-$attemptPredicate = if ([string]::IsNullOrWhiteSpace($TaskId)) { "1 = 0" } else { "task_id = '$TaskId'" }
+$taskPredicate = if ([string]::IsNullOrWhiteSpace($TaskId)) {
+    "state NOT IN ('Completed', 'Deleted')"
+} else {
+    "task_id = '$TaskId'"
+}
+$attemptPredicate = if ([string]::IsNullOrWhiteSpace($TaskId)) {
+    "task_id IN (SELECT task_id FROM generation_task WHERE $taskPredicate)"
+} else {
+    "task_id = '$TaskId'"
+}
 $attemptSubquery = "SELECT attempt_id FROM generation_attempt WHERE $attemptPredicate"
+$eventPredicate = if ([string]::IsNullOrWhiteSpace($TaskId)) {
+    "task_id IN (SELECT task_id FROM generation_task WHERE $taskPredicate) OR task_id IS NULL"
+} else {
+    "task_id = '$TaskId' OR task_id IS NULL"
+}
 
 $queries = [ordered]@{
     "task.csv" = "SELECT task_id,content_id,kind,state,stage,queue_position,progress,waiting_for_network,metered_network_allowed,network_wait_reason,paused,needs_attention,scheme_blocked,current_attempt_id,source_result_id,error_category,error_message,created_at_ms,updated_at_ms FROM generation_task WHERE $taskPredicate;"
@@ -168,8 +179,8 @@ $queries = [ordered]@{
     "request_attempts.csv" = "SELECT request_attempt_id,attempt_id,sequence,stage,provider,provider_request_id,work_unit_kind,work_unit_id,operation_ordinal,retry_ordinal,request_bytes,response_bytes,http_status,input_tokens,output_tokens,total_tokens,cost_usd,raw_response_file_name,error_category,error_message,started_at_ms,finished_at_ms,duration_ms,retain_until_ms FROM sync_text_request_attempt WHERE attempt_id IN ($attemptSubquery) ORDER BY started_at_ms,sequence;"
     "asr_windows.csv" = "SELECT window_id,attempt_id,ordinal,owned_start_ms,owned_end_ms,upload_start_ms,upload_end_ms,cut_reason,planner_version,parent_window_id,state,encoded_bytes,transcript_artifact_id,cue_count,detected_language,input_tokens,output_tokens,total_tokens,cost_usd FROM asr_window WHERE attempt_id IN ($attemptSubquery) ORDER BY ordinal;"
     "translation_batches.csv" = "SELECT batch_id,attempt_id,ordinal,first_cue_index,last_cue_index,parent_batch_id,state,format_recovery_count,repair_count,result_artifact_id,cue_count,input_tokens,output_tokens,total_tokens,cost_usd FROM translation_batch WHERE attempt_id IN ($attemptSubquery) ORDER BY ordinal;"
-    "results.csv" = "SELECT result_id,slot_id,content_id,task_id,attempt_id,source_language,target_language,presentation_mode,source_revision_id,target_revision_id,cue_count,completeness,covered_end_ms,completed_window_count,total_window_count,scheme_id,model,policy_id,policy_version,input_tokens,output_tokens,total_tokens,cost_usd,created_at_ms FROM generated_text_result WHERE task_id = '$TaskId' ORDER BY created_at_ms;"
-    "events.csv" = "SELECT event_id,process_session_id,event_type,task_id,attempt_id,work_unit_kind,work_unit_id,stage,outcome,reason,value_ms,value_bytes,created_at_ms,elapsed_realtime_ms FROM sync_text_diagnostic_event WHERE task_id = '$TaskId' OR task_id IS NULL ORDER BY created_at_ms,event_id;"
+    "results.csv" = "SELECT result_id,slot_id,content_id,task_id,attempt_id,source_language,target_language,presentation_mode,source_revision_id,target_revision_id,cue_count,completeness,covered_end_ms,completed_window_count,total_window_count,scheme_id,model,policy_id,policy_version,input_tokens,output_tokens,total_tokens,cost_usd,created_at_ms FROM generated_text_result WHERE task_id IN (SELECT task_id FROM generation_task WHERE $taskPredicate) ORDER BY created_at_ms;"
+    "events.csv" = "SELECT event_id,process_session_id,event_type,task_id,attempt_id,work_unit_kind,work_unit_id,stage,outcome,reason,value_ms,value_bytes,created_at_ms,elapsed_realtime_ms FROM sync_text_diagnostic_event WHERE $eventPredicate ORDER BY created_at_ms,event_id;"
     "artifact_summary.csv" = "SELECT kind,count(*) AS artifact_count,sum(byte_size) AS total_bytes,sum(cue_count) AS cue_count FROM text_artifact GROUP BY kind ORDER BY kind;"
     "lease.csv" = "SELECT lease_key,expires_at_ms,generation FROM sync_text_runner_lease;"
 }
@@ -208,6 +219,8 @@ This bundle is local and was collected from a debuggable APK through adb run-as.
 Credential tables, Android Keystore files, Authorization headers, request bodies, media paths,
 and subtitle text are excluded from the default report. Raw provider responses are included only
 when IncludeRawResponses is true and may contain transcribed or translated content.
+When TaskId is omitted, task and attempt reports include all active (non-terminal) tasks so a
+newly submitted task cannot hide an older task that is holding the queue.
 "@
 Save-DiagnosticText (Join-Path $reportDirectory "README.txt") $readme
 

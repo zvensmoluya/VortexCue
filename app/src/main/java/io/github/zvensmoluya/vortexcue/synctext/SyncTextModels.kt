@@ -177,6 +177,7 @@ enum class GenerationTaskState {
     Waiting,
     Running,
     Paused,
+    Aborted,
     NeedsAttention,
     Completed,
     Deleted,

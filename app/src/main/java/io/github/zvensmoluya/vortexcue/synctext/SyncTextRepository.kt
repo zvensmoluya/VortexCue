@@ -617,6 +617,21 @@ class SyncTextRepository(
         }
     }
 
+    suspend fun abortTask(taskId: String) {
+        val attemptId = dao.task(taskId)?.currentAttemptId
+        if (dao.markTaskAborted(taskId, nowMs()) > 0) {
+            diagnostics.record(
+                SyncTextDiagnosticEventType.TaskStateChanged,
+                taskId = taskId,
+                attemptId = attemptId,
+                outcome = GenerationTaskState.Aborted.name,
+                reason = "User",
+            )
+            scheduler.cancel(taskId)
+            scheduler.schedule()
+        }
+    }
+
     suspend fun resumeTask(taskId: String) {
         var attemptId: String? = null
         database.withWriteTransaction {
@@ -663,6 +678,10 @@ class SyncTextRepository(
 
     suspend fun cancelForContent(contentId: String) {
         dao.activeTasksForContent(contentId).forEach { pauseTask(it.taskId) }
+    }
+
+    suspend fun abortForContent(contentId: String) {
+        dao.activeTasksForContent(contentId).forEach { abortTask(it.taskId) }
     }
 
     suspend fun retryForContent(contentId: String) {
@@ -1445,7 +1464,9 @@ private fun GeneratedTextResultEntity.toDomain(presentationMode: TextPresentatio
     )
 
 private fun GenerationTaskEntity.isTerminal(): Boolean =
-    state == GenerationTaskState.Completed.name || state == GenerationTaskState.Deleted.name
+    state == GenerationTaskState.Completed.name ||
+        state == GenerationTaskState.Deleted.name ||
+        state == GenerationTaskState.Aborted.name
 
 private inline fun <reified T : Enum<T>> String.enumValueOr(default: T): T =
     enumValues<T>().firstOrNull { it.name == this } ?: default

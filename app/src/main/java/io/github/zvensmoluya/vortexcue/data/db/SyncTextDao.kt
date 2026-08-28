@@ -62,10 +62,10 @@ interface SyncTextDao {
     @Query("DELETE FROM sync_text_scheme WHERE scheme_id = :schemeId")
     suspend fun deleteScheme(schemeId: String): Int
 
-    @Query("SELECT * FROM generation_task WHERE state NOT IN ('Completed', 'Deleted') ORDER BY queue_position, created_at_ms")
+    @Query("SELECT * FROM generation_task WHERE state NOT IN ('Completed', 'Deleted', 'Aborted') ORDER BY queue_position, created_at_ms")
     fun observeActiveTasks(): Flow<List<GenerationTaskEntity>>
 
-    @Query("SELECT * FROM generation_task WHERE state NOT IN ('Completed', 'Deleted') ORDER BY queue_position, created_at_ms")
+    @Query("SELECT * FROM generation_task WHERE state NOT IN ('Completed', 'Deleted', 'Aborted') ORDER BY queue_position, created_at_ms")
     suspend fun activeTasks(): List<GenerationTaskEntity>
 
     @Query("SELECT * FROM generation_task WHERE task_id = :taskId")
@@ -77,13 +77,13 @@ interface SyncTextDao {
     @Query("SELECT * FROM generation_task WHERE active_dedupe_key = :dedupeKey LIMIT 1")
     suspend fun activeTaskByDedupeKey(dedupeKey: String): GenerationTaskEntity?
 
-    @Query("SELECT * FROM generation_task WHERE scheme_id = :schemeId AND state NOT IN ('Completed', 'Deleted') ORDER BY queue_position")
+    @Query("SELECT * FROM generation_task WHERE scheme_id = :schemeId AND state NOT IN ('Completed', 'Deleted', 'Aborted') ORDER BY queue_position")
     suspend fun activeTasksForScheme(schemeId: String): List<GenerationTaskEntity>
 
-    @Query("SELECT * FROM generation_task WHERE content_id = :contentId AND state NOT IN ('Completed', 'Deleted') ORDER BY queue_position")
+    @Query("SELECT * FROM generation_task WHERE content_id = :contentId AND state NOT IN ('Completed', 'Deleted', 'Aborted') ORDER BY queue_position")
     suspend fun activeTasksForContent(contentId: String): List<GenerationTaskEntity>
 
-    @Query("SELECT * FROM generation_task WHERE waiting_for_network = 1 AND state NOT IN ('Completed', 'Deleted') ORDER BY queue_position")
+    @Query("SELECT * FROM generation_task WHERE waiting_for_network = 1 AND state NOT IN ('Completed', 'Deleted', 'Aborted') ORDER BY queue_position")
     suspend fun networkWaitingTasks(): List<GenerationTaskEntity>
 
     @Query("SELECT * FROM generation_task WHERE state = 'Waiting' AND paused = 0 AND needs_attention = 0 AND scheme_blocked = 0 AND waiting_for_network = 0 ORDER BY queue_position, created_at_ms LIMIT 1")
@@ -98,7 +98,7 @@ interface SyncTextDao {
     @Query(
         "UPDATE generation_task SET state = 'Paused', paused = 1, waiting_for_network = 0, " +
             "network_wait_reason = NULL, updated_at_ms = :updatedAtMs " +
-            "WHERE task_id = :taskId AND state NOT IN ('Completed', 'Deleted')",
+            "WHERE task_id = :taskId AND state NOT IN ('Completed', 'Deleted', 'Aborted')",
     )
     suspend fun pauseTask(taskId: String, updatedAtMs: Long): Int
 
@@ -110,9 +110,16 @@ interface SyncTextDao {
     suspend fun markTaskDeleted(taskId: String, updatedAtMs: Long): Int
 
     @Query(
+        "UPDATE generation_task SET active_dedupe_key = NULL, state = 'Aborted', paused = 1, " +
+            "waiting_for_network = 0, network_wait_reason = NULL, needs_attention = 0, scheme_blocked = 0, " +
+            "updated_at_ms = :updatedAtMs WHERE task_id = :taskId AND state NOT IN ('Completed', 'Deleted', 'Aborted')",
+    )
+    suspend fun markTaskAborted(taskId: String, updatedAtMs: Long): Int
+
+    @Query(
         "UPDATE generation_task SET state = 'Waiting', paused = 0, needs_attention = 0, scheme_blocked = 0, " +
             "waiting_for_network = 0, network_wait_reason = NULL, error_category = NULL, error_message = NULL, " +
-            "updated_at_ms = :updatedAtMs WHERE task_id = :taskId AND state NOT IN ('Completed', 'Deleted')",
+            "updated_at_ms = :updatedAtMs WHERE task_id = :taskId AND state NOT IN ('Completed', 'Deleted', 'Aborted')",
     )
     suspend fun resumeTask(taskId: String, updatedAtMs: Long): Int
 
@@ -120,7 +127,7 @@ interface SyncTextDao {
         "UPDATE generation_task SET state = 'Waiting', paused = 0, needs_attention = 0, scheme_blocked = 0, " +
             "waiting_for_network = 0, network_wait_reason = NULL, error_category = NULL, error_message = NULL, " +
             "updated_at_ms = :updatedAtMs WHERE scheme_id = :schemeId AND scheme_blocked = 1 " +
-            "AND state NOT IN ('Completed', 'Deleted')",
+            "AND state NOT IN ('Completed', 'Deleted', 'Aborted')",
     )
     suspend fun resumeBlockedSchemeTasks(schemeId: String, updatedAtMs: Long): Int
 
@@ -128,28 +135,28 @@ interface SyncTextDao {
         "UPDATE generation_task SET state = 'Running', stage = :stage, " +
             "progress = CASE WHEN progress > :progress THEN progress ELSE :progress END, " +
             "waiting_for_network = 0, network_wait_reason = NULL, updated_at_ms = :updatedAtMs " +
-            "WHERE task_id = :taskId AND state NOT IN ('Completed', 'Deleted', 'Paused', 'NeedsAttention') " +
+            "WHERE task_id = :taskId AND state NOT IN ('Completed', 'Deleted', 'Aborted', 'Paused', 'NeedsAttention') " +
             "AND paused = 0 AND needs_attention = 0 AND waiting_for_network = 0",
     )
     suspend fun markTaskRunning(taskId: String, stage: String, progress: Float, updatedAtMs: Long): Int
 
     @Query(
         "UPDATE generation_task SET state = 'Waiting', waiting_for_network = 1, network_wait_reason = :reason, " +
-            "updated_at_ms = :updatedAtMs WHERE task_id = :taskId AND state NOT IN ('Completed', 'Deleted', 'Paused', 'NeedsAttention') " +
+            "updated_at_ms = :updatedAtMs WHERE task_id = :taskId AND state NOT IN ('Completed', 'Deleted', 'Aborted', 'Paused', 'NeedsAttention') " +
             "AND paused = 0 AND needs_attention = 0",
     )
     suspend fun markTaskWaitingForNetwork(taskId: String, reason: String, updatedAtMs: Long): Int
 
     @Query(
         "UPDATE generation_task SET waiting_for_network = 0, network_wait_reason = NULL, updated_at_ms = :updatedAtMs " +
-            "WHERE task_id = :taskId AND state NOT IN ('Completed', 'Deleted')",
+            "WHERE task_id = :taskId AND state NOT IN ('Completed', 'Deleted', 'Aborted')",
     )
     suspend fun clearTaskNetworkWait(taskId: String, updatedAtMs: Long): Int
 
     @Query(
         "UPDATE generation_task SET metered_network_allowed = 1, waiting_for_network = 0, network_wait_reason = NULL, " +
             "updated_at_ms = :updatedAtMs WHERE content_id = :contentId AND waiting_for_network = 1 " +
-            "AND network_wait_reason = 'MeteredPermissionRequired' AND state NOT IN ('Completed', 'Deleted')",
+            "AND network_wait_reason = 'MeteredPermissionRequired' AND state NOT IN ('Completed', 'Deleted', 'Aborted')",
     )
     suspend fun allowMeteredNetworkForContent(contentId: String, updatedAtMs: Long): Int
 
@@ -157,7 +164,7 @@ interface SyncTextDao {
         "UPDATE generation_task SET state = CASE WHEN paused = 1 THEN 'Paused' ELSE 'NeedsAttention' END, " +
             "needs_attention = 1, scheme_blocked = :schemeBlocked, waiting_for_network = 0, network_wait_reason = NULL, " +
             "error_category = :category, error_message = :message, updated_at_ms = :updatedAtMs " +
-            "WHERE task_id = :taskId AND state NOT IN ('Completed', 'Deleted')",
+            "WHERE task_id = :taskId AND state NOT IN ('Completed', 'Deleted', 'Aborted')",
     )
     suspend fun markTaskNeedsAttention(
         taskId: String,
@@ -171,7 +178,7 @@ interface SyncTextDao {
         "UPDATE generation_task SET state = CASE WHEN paused = 1 THEN 'Paused' ELSE 'NeedsAttention' END, " +
             "needs_attention = 1, scheme_blocked = 1, waiting_for_network = 0, network_wait_reason = NULL, " +
             "error_category = :category, error_message = :message, updated_at_ms = :updatedAtMs " +
-            "WHERE scheme_id = :schemeId AND state NOT IN ('Completed', 'Deleted')",
+            "WHERE scheme_id = :schemeId AND state NOT IN ('Completed', 'Deleted', 'Aborted')",
     )
     suspend fun markSchemeTasksNeedsAttention(
         schemeId: String,
@@ -180,7 +187,7 @@ interface SyncTextDao {
         updatedAtMs: Long,
     ): Int
 
-    @Query("SELECT COALESCE(MAX(queue_position), -1) FROM generation_task WHERE state NOT IN ('Completed', 'Deleted')")
+    @Query("SELECT COALESCE(MAX(queue_position), -1) FROM generation_task WHERE state NOT IN ('Completed', 'Deleted', 'Aborted')")
     suspend fun maxQueuePosition(): Int
 
     @Insert
@@ -192,7 +199,7 @@ interface SyncTextDao {
     @Query("DELETE FROM generation_task WHERE task_id = :taskId")
     suspend fun deleteTask(taskId: String): Int
 
-    @Query("DELETE FROM generation_task WHERE state IN ('Completed', 'Deleted') AND updated_at_ms < :beforeMs")
+    @Query("DELETE FROM generation_task WHERE state IN ('Completed', 'Deleted', 'Aborted') AND updated_at_ms < :beforeMs")
     suspend fun pruneTerminalTasks(beforeMs: Long): Int
 
     @Query("SELECT * FROM generation_task_snapshot WHERE task_id = :taskId")
@@ -297,7 +304,7 @@ interface SyncTextDao {
             "SELECT current_result_id FROM generated_text_slot WHERE current_result_id IS NOT NULL) " +
             "AND result_id NOT IN (" +
             "SELECT source_result_id FROM generation_task " +
-            "WHERE source_result_id IS NOT NULL AND state NOT IN ('Completed', 'Deleted'))",
+            "WHERE source_result_id IS NOT NULL AND state NOT IN ('Completed', 'Deleted', 'Aborted'))",
     )
     suspend fun pruneObsoleteGeneratedResults(): Int
 
@@ -313,18 +320,18 @@ interface SyncTextDao {
     @Query("DELETE FROM generated_text_result WHERE result_id = :resultId")
     suspend fun deleteGeneratedResult(resultId: String): Int
 
-    @Query("SELECT COUNT(*) FROM generation_task WHERE source_result_id = :resultId AND state NOT IN ('Completed', 'Deleted')")
+    @Query("SELECT COUNT(*) FROM generation_task WHERE source_result_id = :resultId AND state NOT IN ('Completed', 'Deleted', 'Aborted')")
     suspend fun activeSourceResultReferenceCount(resultId: String): Int
 
     @Query(
         "SELECT w.transcript_artifact_id FROM asr_window w " +
             "INNER JOIN generation_attempt a ON a.attempt_id = w.attempt_id " +
             "INNER JOIN generation_task t ON t.task_id = a.task_id " +
-            "WHERE w.transcript_artifact_id IS NOT NULL AND t.state NOT IN ('Completed', 'Deleted') " +
+            "WHERE w.transcript_artifact_id IS NOT NULL AND t.state NOT IN ('Completed', 'Deleted', 'Aborted') " +
             "UNION SELECT b.result_artifact_id FROM translation_batch b " +
             "INNER JOIN generation_attempt a ON a.attempt_id = b.attempt_id " +
             "INNER JOIN generation_task t ON t.task_id = a.task_id " +
-            "WHERE b.result_artifact_id IS NOT NULL AND t.state NOT IN ('Completed', 'Deleted')",
+            "WHERE b.result_artifact_id IS NOT NULL AND t.state NOT IN ('Completed', 'Deleted', 'Aborted')",
     )
     suspend fun recoverableWorkArtifactIds(): List<String>
 
@@ -332,7 +339,7 @@ interface SyncTextDao {
         "UPDATE asr_window SET transcript_artifact_id = NULL " +
             "WHERE transcript_artifact_id = :artifactId AND attempt_id IN (" +
             "SELECT a.attempt_id FROM generation_attempt a INNER JOIN generation_task t ON t.task_id = a.task_id " +
-            "WHERE t.state IN ('Completed', 'Deleted'))",
+            "WHERE t.state IN ('Completed', 'Deleted', 'Aborted'))",
     )
     suspend fun clearTerminalAsrArtifactReference(artifactId: String): Int
 
@@ -340,14 +347,14 @@ interface SyncTextDao {
         "UPDATE translation_batch SET result_artifact_id = NULL " +
             "WHERE result_artifact_id = :artifactId AND attempt_id IN (" +
             "SELECT a.attempt_id FROM generation_attempt a INNER JOIN generation_task t ON t.task_id = a.task_id " +
-            "WHERE t.state IN ('Completed', 'Deleted'))",
+            "WHERE t.state IN ('Completed', 'Deleted', 'Aborted'))",
     )
     suspend fun clearTerminalTranslationArtifactReference(artifactId: String): Int
 
     @Query(
         "UPDATE generation_task SET state = 'NeedsAttention', needs_attention = 1, waiting_for_network = 0, " +
             "error_category = 'Storage', error_message = :message, updated_at_ms = :updatedAtMs " +
-            "WHERE task_id = :taskId AND state != 'Deleted'",
+            "WHERE task_id = :taskId AND state NOT IN ('Deleted', 'Aborted')",
     )
     suspend fun markTaskStorageNeedsAttention(taskId: String, message: String, updatedAtMs: Long): Int
 

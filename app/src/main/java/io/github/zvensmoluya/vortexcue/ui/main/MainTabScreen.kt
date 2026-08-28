@@ -54,6 +54,7 @@ import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Button
@@ -586,6 +587,10 @@ internal fun MainTabScreen(
                 onCancelSync = {
                     selectedItem = null
                     onSyncTextAction(SyncTextAction.CancelForContent(item.contentId))
+                },
+                onAbortSync = {
+                    selectedItem = null
+                    onSyncTextAction(SyncTextAction.AbortForContent(item.contentId))
                 },
                 onRetrySync = {
                     selectedItem = null
@@ -1220,6 +1225,7 @@ private fun ItemActions(
     onSync: () -> Unit,
     onIgnore: (() -> Unit)?,
     onCancelSync: () -> Unit,
+    onAbortSync: () -> Unit,
     onRetrySync: () -> Unit,
     onAllowMeteredSync: () -> Unit,
 ) {
@@ -1240,6 +1246,7 @@ private fun ItemActions(
                 ActionButton("继续同步文字", Icons.Outlined.Refresh, onRetrySync)
             } else {
                 ActionButton("暂停同步文字", Icons.Outlined.Close, onCancelSync)
+                ActionButton("停止生成", Icons.Outlined.Stop, onAbortSync)
             }
         }
         onIgnore?.let { ActionButton("移出内容", Icons.Outlined.DeleteOutline, it) }
