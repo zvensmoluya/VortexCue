@@ -770,12 +770,6 @@ internal fun VortexCueApp(
                         playlistViewId = playerOriginPlaylistViewId
                         destination = AppDestination.Main
                     },
-                    onOpenSources = {
-                        mainTab = MainTab.Playlists
-                        playlistViewId = null
-                        importHubRequest += 1
-                        destination = AppDestination.Main
-                    },
                     onRelinkMedia = {
                         currentContentId?.let { id ->
                             relinkContentId = id
@@ -832,6 +826,14 @@ internal fun VortexCueApp(
                     onRestoreAutomaticTextTrack = { slot ->
                         currentContentId?.let { id ->
                             scope.launch { repository.restoreAutomaticTextTrack(id, slot) }
+                        }
+                    },
+                    onRestoreAutomaticTextTracks = {
+                        currentContentId?.let { id ->
+                            scope.launch {
+                                repository.restoreAutomaticTextTrack(id, TextTrackSlot.Primary)
+                                repository.restoreAutomaticTextTrack(id, TextTrackSlot.Secondary)
+                            }
                         }
                     },
                     onAddTextTrack = { slot ->

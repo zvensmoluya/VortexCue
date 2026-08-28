@@ -36,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.QueueMusic
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Forward10
 import androidx.compose.material.icons.outlined.Lock
@@ -69,6 +70,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -139,7 +141,6 @@ internal fun PlayerScreen(
     onPlayPause: () -> Unit,
     onSurfaceChanged: (PlayerSurface) -> Unit,
     onBackToLibrary: () -> Unit,
-    onOpenSources: () -> Unit,
     onRelinkMedia: () -> Unit,
     onToggleCollected: () -> Unit,
     onQueueSelect: (Int) -> Unit,
@@ -147,6 +148,7 @@ internal fun PlayerScreen(
     onQueueRemove: (Int) -> Unit,
     onSelectTextTrack: (TextTrackSlot, String?) -> Unit,
     onRestoreAutomaticTextTrack: (TextTrackSlot) -> Unit,
+    onRestoreAutomaticTextTracks: () -> Unit,
     onAddTextTrack: (TextTrackSlot) -> Unit,
     syncTextTask: GenerationTaskSummary?,
     syncTextLaunch: SyncTextLaunchUiState?,
@@ -248,7 +250,6 @@ internal fun PlayerScreen(
                 isCollected = isCollected,
                 onPlayPause = onPlayPause,
                 onBackToLibrary = onBackToLibrary,
-                onOpenSources = onOpenSources,
                 onRelinkMedia = onRelinkMedia,
                 onToggleCollected = onToggleCollected,
                 onQueueSelect = onQueueSelect,
@@ -296,11 +297,12 @@ internal fun PlayerScreen(
     }
 
     if (textTracksVisible) {
-        TextTrackDialog(
+        SyncTextSheet(
             contentUnit = contentUnit,
             onDismiss = { textTracksVisible = false },
             onSelectTrack = onSelectTextTrack,
             onRestoreAutomatic = onRestoreAutomaticTextTrack,
+            onRestoreAllAutomatic = onRestoreAutomaticTextTracks,
             onAddTrack = { slot ->
                 textTracksVisible = false
                 onAddTextTrack(slot)
@@ -494,7 +496,6 @@ private fun NormalPlayer(
     isCollected: Boolean,
     onPlayPause: () -> Unit,
     onBackToLibrary: () -> Unit,
-    onOpenSources: () -> Unit,
     onRelinkMedia: () -> Unit,
     onToggleCollected: () -> Unit,
     onQueueSelect: (Int) -> Unit,
@@ -533,8 +534,6 @@ private fun NormalPlayer(
             onBack = onBackToLibrary,
             onOpenSyncText = onManageTextTracks,
             onToggleCollected = onToggleCollected,
-            onAddContent = onOpenSources,
-            onRelinkMedia = onRelinkMedia,
         )
 
         if (playback.playbackState == Player.STATE_BUFFERING) {
@@ -635,12 +634,21 @@ private fun NormalPlayer(
     }
 }
 
+private enum class SyncTextSheetPage {
+    Overview,
+    Primary,
+    Secondary,
+    Timing,
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TextTrackDialog(
+internal fun SyncTextSheet(
     contentUnit: PlayableContentUnit?,
     onDismiss: () -> Unit,
     onSelectTrack: (TextTrackSlot, String?) -> Unit,
     onRestoreAutomatic: (TextTrackSlot) -> Unit,
+    onRestoreAllAutomatic: () -> Unit,
     onAddTrack: (TextTrackSlot) -> Unit,
     generatedText: LoadedGeneratedText?,
     subtitleOffsetMs: Long,
@@ -651,134 +659,451 @@ private fun TextTrackDialog(
     val selection = contentUnit?.activeText ?: ActiveTextSelection()
     val primary = tracks.firstOrNull { it.stableId == selection.primaryTrackId }
     val secondary = tracks.firstOrNull { it.stableId == selection.secondaryTrackId }
-    var timingVisible by rememberSaveable { mutableStateOf(false) }
-    AlertDialog(
+    var page by remember { mutableStateOf(SyncTextSheetPage.Overview) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val title =
+        when (page) {
+            SyncTextSheetPage.Overview -> "同步文字"
+            SyncTextSheetPage.Primary -> "选择主文字"
+            SyncTextSheetPage.Secondary -> "选择第二文字"
+            SyncTextSheetPage.Timing -> "时间校准"
+        }
+
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        title = { Text("同步文字", color = AppPrimaryText) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (generatedText?.targetTimeline != null) {
-                    Text("生成结果展示", color = AppMutedText, fontSize = 11.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        OutlinedButton(
-                            onClick = {
-                                onPresentationModeChanged(generatedText.slotId, TextPresentationMode.TargetOnly)
-                            },
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(
-                                "纯译文",
-                                color = if (generatedText.presentationMode == TextPresentationMode.TargetOnly) AppAccent else AppSecondaryText,
-                                fontSize = 11.sp,
-                            )
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                onPresentationModeChanged(generatedText.slotId, TextPresentationMode.SourceTarget)
-                            },
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(
-                                "译文 + 原文",
-                                color = if (generatedText.presentationMode == TextPresentationMode.SourceTarget) AppAccent else AppSecondaryText,
-                                fontSize = 11.sp,
-                            )
-                        }
-                    }
-                }
-                TextSelectionSummary(
-                    title = "主轨",
-                    track = primary,
-                    mode = selection.primaryMode,
-                    slot = TextTrackSlot.Primary,
-                    onClear = { onSelectTrack(TextTrackSlot.Primary, null) },
-                    onRestoreAutomatic = onRestoreAutomatic,
-                    onAddTrack = onAddTrack,
-                )
-                TextSelectionSummary(
-                    title = "次轨",
-                    track = secondary,
-                    mode = selection.secondaryMode,
-                    slot = TextTrackSlot.Secondary,
-                    onClear = { onSelectTrack(TextTrackSlot.Secondary, null) },
-                    onRestoreAutomatic = onRestoreAutomatic,
-                    onAddTrack = onAddTrack,
-                )
-                Spacer(modifier = Modifier.fillMaxWidth().height(1.dp).background(AppHairline))
-                if (tracks.isEmpty()) {
-                    Text(
-                        "还没有已发现或手动添加的字幕轨。",
-                        color = AppMutedText,
-                        fontSize = 12.sp,
-                    )
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
-                    ) {
-                        itemsIndexed(
-                            items = tracks,
-                            key = { _, track -> track.stableId },
-                        ) { index, track ->
-                            TextTrackChoiceRow(
-                                track = track,
-                                isPrimary = track.stableId == selection.primaryTrackId,
-                                isSecondary = track.stableId == selection.secondaryTrackId,
-                                onSelectPrimary = {
-                                    onSelectTrack(TextTrackSlot.Primary, track.stableId)
-                                },
-                                onSelectSecondary = {
-                                    onSelectTrack(TextTrackSlot.Secondary, track.stableId)
-                                },
-                            )
-                            if (index != tracks.lastIndex) {
-                                Spacer(
-                                    modifier =
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .height(1.dp)
-                                            .background(AppHairline),
-                                )
-                            }
-                        }
-                    }
-                }
-                TextButton(onClick = { timingVisible = !timingVisible }) {
-                    Text(
-                        if (subtitleOffsetMs == 0L) "时间偏移" else "时间偏移 ${formatOffset(subtitleOffsetMs)}",
-                        color = AppMutedText,
-                        fontSize = 11.sp,
-                    )
-                }
-                if (timingVisible) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        IconButton(
-                            onClick = {
-                                onSubtitleOffsetChanged((subtitleOffsetMs - 500L).coerceAtLeast(-60_000L))
-                            },
-                        ) {
-                            Icon(Icons.Outlined.Remove, contentDescription = "字幕提前 0.5 秒", tint = AppSecondaryText)
-                        }
-                        Text(formatOffset(subtitleOffsetMs), color = AppSecondaryText, fontSize = 12.sp)
-                        IconButton(
-                            onClick = {
-                                onSubtitleOffsetChanged((subtitleOffsetMs + 500L).coerceAtMost(60_000L))
-                            },
-                        ) {
-                            Icon(Icons.Outlined.Add, contentDescription = "字幕延后 0.5 秒", tint = AppSecondaryText)
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("完成", color = AppAccent) }
-        },
+        sheetState = sheetState,
         containerColor = AppSurfaceRaised,
-    )
+        scrimColor = Color.Black.copy(alpha = 0.72f),
+        dragHandle = {
+            Box(
+                modifier =
+                    Modifier
+                        .padding(top = 10.dp, bottom = 8.dp)
+                        .size(width = 32.dp, height = 3.dp)
+                        .background(AppHairline, RoundedCornerShape(2.dp)),
+            )
+        },
+    ) {
+        Column(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 620.dp)
+                    .navigationBarsPadding()
+                    .padding(start = 20.dp, end = 20.dp, bottom = 20.dp),
+        ) {
+            SyncTextSheetHeader(
+                title = title,
+                showBack = page != SyncTextSheetPage.Overview,
+                onBack = { page = SyncTextSheetPage.Overview },
+                onDismiss = onDismiss,
+            )
+            when (page) {
+                SyncTextSheetPage.Overview ->
+                    SyncTextOverview(
+                        primary = primary,
+                        secondary = secondary,
+                        primaryMode = selection.primaryMode,
+                        secondaryMode = selection.secondaryMode,
+                        generatedText = generatedText,
+                        subtitleOffsetMs = subtitleOffsetMs,
+                        onOpenPrimary = { page = SyncTextSheetPage.Primary },
+                        onOpenSecondary = { page = SyncTextSheetPage.Secondary },
+                        onOpenTiming = { page = SyncTextSheetPage.Timing },
+                        onRestoreAutomatic = onRestoreAllAutomatic,
+                        onPresentationModeChanged = onPresentationModeChanged,
+                    )
+                SyncTextSheetPage.Primary,
+                SyncTextSheetPage.Secondary,
+                -> {
+                    val slot =
+                        if (page == SyncTextSheetPage.Primary) {
+                            TextTrackSlot.Primary
+                        } else {
+                            TextTrackSlot.Secondary
+                        }
+                    TextTrackPicker(
+                        slot = slot,
+                        tracks = tracks,
+                        selection = selection,
+                        onSelectTrack = { trackId ->
+                            onSelectTrack(slot, trackId)
+                            page = SyncTextSheetPage.Overview
+                        },
+                        onRestoreAutomatic = {
+                            onRestoreAutomatic(slot)
+                            page = SyncTextSheetPage.Overview
+                        },
+                        onAddTrack = { onAddTrack(slot) },
+                    )
+                }
+                SyncTextSheetPage.Timing ->
+                    SubtitleTimingEditor(
+                        subtitleOffsetMs = subtitleOffsetMs,
+                        onSubtitleOffsetChanged = onSubtitleOffsetChanged,
+                    )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SyncTextSheetHeader(
+    title: String,
+    showBack: Boolean,
+    onBack: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (showBack) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回同步文字", tint = AppSecondaryText)
+            }
+        } else {
+            Spacer(modifier = Modifier.size(48.dp))
+        }
+        Text(
+            text = title,
+            modifier = Modifier.weight(1f),
+            color = AppPrimaryText,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+        )
+        IconButton(onClick = onDismiss) {
+            Icon(Icons.Outlined.Close, contentDescription = "关闭同步文字", tint = AppSecondaryText)
+        }
+    }
+}
+
+@Composable
+private fun SyncTextOverview(
+    primary: TimedTextTrack?,
+    secondary: TimedTextTrack?,
+    primaryMode: TextSelectionMode,
+    secondaryMode: TextSelectionMode,
+    generatedText: LoadedGeneratedText?,
+    subtitleOffsetMs: Long,
+    onOpenPrimary: () -> Unit,
+    onOpenSecondary: () -> Unit,
+    onOpenTiming: () -> Unit,
+    onRestoreAutomatic: () -> Unit,
+    onPresentationModeChanged: (String, TextPresentationMode) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (generatedText?.targetTimeline != null) {
+            Text(
+                "显示方式",
+                modifier = Modifier.padding(top = 8.dp, bottom = 8.dp),
+                color = AppSecondaryText,
+                fontSize = 13.sp,
+            )
+            TextPresentationSelector(
+                selectedMode = generatedText.presentationMode,
+                onSelected = { mode -> onPresentationModeChanged(generatedText.slotId, mode) },
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+
+        Text(
+            "文字",
+            modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+            color = AppSecondaryText,
+            fontSize = 13.sp,
+        )
+        SyncTextSlotRow(
+            title = "主文字",
+            value = textSelectionLabel(primary, primaryMode),
+            failureMessage = primary?.failureMessage,
+            onClick = onOpenPrimary,
+        )
+        SyncTextSlotRow(
+            title = "第二文字",
+            value = textSelectionLabel(secondary, secondaryMode),
+            failureMessage = secondary?.failureMessage,
+            onClick = onOpenSecondary,
+        )
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = AppHairline)
+        Text(
+            "校正",
+            modifier = Modifier.padding(bottom = 4.dp),
+            color = AppSecondaryText,
+            fontSize = 13.sp,
+        )
+        SyncTextActionRow(
+            title = "时间校准",
+            value = subtitleOffsetValueLabel(subtitleOffsetMs),
+            onClick = onOpenTiming,
+        )
+        SyncTextActionRow(
+            title = "重新自动匹配",
+            onClick = onRestoreAutomatic,
+        )
+    }
+}
+
+@Composable
+private fun TextPresentationSelector(
+    selectedMode: TextPresentationMode,
+    onSelected: (TextPresentationMode) -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(AppHairline)
+                .padding(1.dp),
+    ) {
+        listOf(
+            TextPresentationMode.TargetOnly to "译文",
+            TextPresentationMode.SourceTarget to "双语",
+        ).forEach { (mode, label) ->
+            val selected = mode == selectedMode
+            Box(
+                modifier =
+                    Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .clip(RoundedCornerShape(13.dp))
+                        .background(if (selected) AppSurfaceSelected else AppSurfaceRaised)
+                        .clickable { onSelected(mode) }
+                        .semantics { contentDescription = "显示方式：$label" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    label,
+                    color = if (selected) AppPrimaryText else AppMutedText,
+                    fontSize = 14.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SyncTextSlotRow(
+    title: String,
+    value: String,
+    failureMessage: String?,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(onClick = onClick)
+                .heightIn(min = 64.dp)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(title, color = AppMutedText, fontSize = 12.sp)
+            Text(
+                value,
+                color = AppPrimaryText,
+                fontSize = 15.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            failureMessage?.let {
+                Text(it, color = AppError, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Text("›", color = AppMutedText, fontSize = 24.sp)
+    }
+}
+
+@Composable
+private fun SyncTextActionRow(
+    title: String,
+    value: String? = null,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(onClick = onClick)
+                .heightIn(min = 56.dp)
+                .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, modifier = Modifier.weight(1f), color = AppPrimaryText, fontSize = 15.sp)
+        value?.let { Text(it, color = AppMutedText, fontSize = 13.sp) }
+        Spacer(modifier = Modifier.width(8.dp))
+        Text("›", color = AppMutedText, fontSize = 24.sp)
+    }
+}
+
+@Composable
+private fun TextTrackPicker(
+    slot: TextTrackSlot,
+    tracks: List<TimedTextTrack>,
+    selection: ActiveTextSelection,
+    onSelectTrack: (String?) -> Unit,
+    onRestoreAutomatic: () -> Unit,
+    onAddTrack: () -> Unit,
+) {
+    val selectedTrackId =
+        if (slot == TextTrackSlot.Primary) selection.primaryTrackId else selection.secondaryTrackId
+    val selectionMode =
+        if (slot == TextTrackSlot.Primary) selection.primaryMode else selection.secondaryMode
+    val availableTracks =
+        tracks.filterNot { slot == TextTrackSlot.Secondary && it.stableId == selection.primaryTrackId }
+
+    LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
+        item(key = "automatic") {
+            TextTrackPickerRow(
+                title = "自动选择",
+                supportingText =
+                    tracks
+                        .firstOrNull { it.stableId == selectedTrackId }
+                        ?.takeIf { selectionMode == TextSelectionMode.Automatic }
+                        ?.let(::textTrackLabel),
+                selected = selectionMode == TextSelectionMode.Automatic,
+                onClick = onRestoreAutomatic,
+            )
+        }
+        if (availableTracks.isEmpty()) {
+            item(key = "empty") {
+                Text(
+                    "没有找到可用文字",
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp),
+                    color = AppMutedText,
+                    fontSize = 13.sp,
+                )
+            }
+        } else {
+            itemsIndexed(
+                items = availableTracks,
+                key = { _, track -> track.stableId },
+            ) { _, track ->
+                TextTrackPickerRow(
+                    title = textTrackLabel(track),
+                    supportingText = textTrackProblemLabel(track),
+                    selected = selectionMode == TextSelectionMode.Manual && track.stableId == selectedTrackId,
+                    onClick = { onSelectTrack(track.stableId) },
+                )
+            }
+        }
+        item(key = "off") {
+            TextTrackPickerRow(
+                title = "关闭",
+                selected = selectionMode == TextSelectionMode.Manual && selectedTrackId == null,
+                onClick = { onSelectTrack(null) },
+            )
+        }
+        item(key = "divider") {
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = AppHairline)
+        }
+        item(key = "file") {
+            SyncTextActionRow(title = "从文件添加文字", onClick = onAddTrack)
+        }
+    }
+}
+
+@Composable
+private fun TextTrackPickerRow(
+    title: String,
+    supportingText: String? = null,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(onClick = onClick)
+                .heightIn(min = 56.dp)
+                .padding(horizontal = 4.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = null,
+            colors =
+                RadioButtonDefaults.colors(
+                    selectedColor = AppAccent,
+                    unselectedColor = AppMutedText,
+                ),
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, color = AppPrimaryText, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            supportingText?.let {
+                Text(
+                    it,
+                    color = AppError,
+                    fontSize = 11.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubtitleTimingEditor(
+    subtitleOffsetMs: Long,
+    onSubtitleOffsetChanged: (Long) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(
+            "让文字与声音对齐",
+            color = AppSecondaryText,
+            fontSize = 13.sp,
+        )
+        Text(
+            subtitleOffsetValueLabel(subtitleOffsetMs),
+            color = AppPrimaryText,
+            fontSize = 30.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            OutlinedButton(
+                onClick = {
+                    onSubtitleOffsetChanged((subtitleOffsetMs - 500L).coerceAtLeast(-60_000L))
+                },
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+            ) {
+                Text("提前 0.5 秒", color = AppSecondaryText)
+            }
+            OutlinedButton(
+                onClick = {
+                    onSubtitleOffsetChanged((subtitleOffsetMs + 500L).coerceAtMost(60_000L))
+                },
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+            ) {
+                Text("延后 0.5 秒", color = AppSecondaryText)
+            }
+        }
+        TextButton(
+            onClick = { onSubtitleOffsetChanged(0L) },
+            enabled = subtitleOffsetMs != 0L,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) {
+            Text("恢复默认", color = if (subtitleOffsetMs == 0L) AppMutedText else AppSecondaryText)
+        }
+    }
 }
 
 @Composable
@@ -828,15 +1153,13 @@ internal fun SyncTextProgressStatus(
 }
 
 @Composable
-private fun PlayerHeader(
+internal fun PlayerHeader(
     title: String,
     artist: String?,
     isCollected: Boolean,
     onBack: () -> Unit,
     onOpenSyncText: () -> Unit,
     onToggleCollected: () -> Unit,
-    onAddContent: () -> Unit,
-    onRelinkMedia: () -> Unit,
 ) {
     var menuVisible by rememberSaveable { mutableStateOf(false) }
     Row(
@@ -883,25 +1206,18 @@ private fun PlayerHeader(
                     },
                 )
                 DropdownMenuItem(
-                    text = { Text(if (isCollected) "移出内容" else "加入内容") },
+                    text = {
+                        Text(if (isCollected) "从“我的内容”移除" else "加入“我的内容”")
+                    },
+                    leadingIcon = {
+                        Icon(
+                            if (isCollected) Icons.Outlined.Remove else Icons.Outlined.Add,
+                            contentDescription = null,
+                        )
+                    },
                     onClick = {
                         menuVisible = false
                         onToggleCollected()
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("添加其他内容") },
-                    leadingIcon = { Icon(Icons.Outlined.Add, contentDescription = null) },
-                    onClick = {
-                        menuVisible = false
-                        onAddContent()
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("重新选择媒体") },
-                    onClick = {
-                        menuVisible = false
-                        onRelinkMedia()
                     },
                 )
             }
@@ -1070,121 +1386,51 @@ private fun SyncTextTerminalStatus(
     }
 }
 
-@Composable
-private fun TextSelectionSummary(
-    title: String,
+private fun textTrackLabel(track: TimedTextTrack): String =
+    when {
+        track.origin == TimedTextOrigin.Generated && track.label?.contains("译文") == true ->
+            "${textTrackLanguageLabel(track)}（翻译）"
+        track.origin == TimedTextOrigin.Generated && track.label?.contains("原文") == true ->
+            "${textTrackLanguageLabel(track)}（原文）"
+        else ->
+            track.label?.takeIf(String::isNotBlank)?.removePrefix("生成")
+                ?: track.language?.takeIf(String::isNotBlank)?.let(::languageLabel)
+                ?: track.locator.displayName.substringBeforeLast('.', track.locator.displayName)
+    }
+
+private fun textTrackLanguageLabel(track: TimedTextTrack): String =
+    track.language?.takeIf(String::isNotBlank)?.let(::languageLabel)
+        ?: track.label
+            ?.substringAfterLast('·', "")
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
+            ?.let(::languageLabel)
+        ?: "文字"
+
+private fun languageLabel(language: String): String =
+    when (language.lowercase(Locale.ROOT).substringBefore('-').substringBefore('_')) {
+        "zh" -> "中文"
+        "ja" -> "日文"
+        "en" -> "英文"
+        "ko" -> "韩文"
+        else -> language
+    }
+
+private fun textSelectionLabel(
     track: TimedTextTrack?,
     mode: TextSelectionMode,
-    slot: TextTrackSlot,
-    onClear: () -> Unit,
-    onRestoreAutomatic: (TextTrackSlot) -> Unit,
-    onAddTrack: (TextTrackSlot) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(title, color = AppMutedText, fontSize = 11.sp)
-                Text(
-                    track?.let(::textTrackLabel) ?: "关闭",
-                    color = AppPrimaryText,
-                    fontSize = 13.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Text(
-                if (mode == TextSelectionMode.Automatic) "自动" else "手动",
-                color = AppMutedText,
-                fontSize = 10.sp,
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            if (mode == TextSelectionMode.Manual) {
-                TextButton(onClick = { onRestoreAutomatic(slot) }) {
-                    Text("恢复自动", color = AppSecondaryText, fontSize = 11.sp)
-                }
-            }
-            TextButton(onClick = onClear) {
-                Text("关闭", color = AppMutedText, fontSize = 11.sp)
-            }
-            TextButton(onClick = { onAddTrack(slot) }) {
-                Text("选择文件", color = AppSecondaryText, fontSize = 11.sp)
-            }
-        }
-        track?.failureMessage?.let { message ->
-            Text(message, color = AppError, fontSize = 11.sp, lineHeight = 15.sp)
-        }
-    }
-}
+): String =
+    track?.let(::textTrackLabel)
+        ?: if (mode == TextSelectionMode.Automatic) "自动选择" else "关闭"
 
-@Composable
-private fun TextTrackChoiceRow(
-    track: TimedTextTrack,
-    isPrimary: Boolean,
-    isSecondary: Boolean,
-    onSelectPrimary: () -> Unit,
-    onSelectSecondary: () -> Unit,
-) {
-    val failed =
-        track.readiness in
-            setOf(
-                TimedTextReadiness.Unreadable,
-                TimedTextReadiness.ParseFailed,
-                TimedTextReadiness.MissingArtifact,
-            )
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        Text(
-            textTrackLabel(track),
-            color = AppPrimaryText,
-            fontSize = 13.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            textTrackDetail(track),
-            color = if (failed) AppError else AppMutedText,
-            fontSize = 10.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            TextButton(onClick = onSelectPrimary, enabled = !isPrimary || failed) {
-                Text(
-                    if (isPrimary && failed) "重试主轨" else if (isPrimary) "当前主轨" else "设为主轨",
-                    color = if (!isPrimary || failed) AppSecondaryText else AppMutedText,
-                    fontSize = 11.sp,
-                )
-            }
-            TextButton(
-                onClick = onSelectSecondary,
-                enabled = (!isSecondary || failed) && !isPrimary,
-            ) {
-                Text(
-                    if (isSecondary && failed) "重试次轨" else if (isSecondary) "当前次轨" else "设为次轨",
-                    color =
-                        if ((!isSecondary || failed) && !isPrimary) {
-                            AppSecondaryText
-                        } else {
-                            AppMutedText
-                        },
-                    fontSize = 11.sp,
-                )
-            }
+private fun textTrackProblemLabel(track: TimedTextTrack): String? =
+    track.failureMessage
+        ?: when (track.readiness) {
+            TimedTextReadiness.Unreadable -> "文字文件无法读取"
+            TimedTextReadiness.ParseFailed -> "文字文件无法解析"
+            TimedTextReadiness.MissingArtifact -> "文字内容需要重新添加"
+            else -> null
         }
-    }
-}
-
-private fun textTrackLabel(track: TimedTextTrack): String =
-    track.label?.takeIf(String::isNotBlank)
-        ?: track.language?.takeIf(String::isNotBlank)
-        ?: track.locator.displayName
 
 private fun PlayableContentUnit.selectedTrack(slot: TextTrackSlot): TimedTextTrack? {
     val trackId =
@@ -1194,29 +1440,6 @@ private fun PlayableContentUnit.selectedTrack(slot: TextTrackSlot): TimedTextTra
         }
     return timedTextTracks.firstOrNull { it.stableId == trackId }
 }
-
-private fun textTrackDetail(track: TimedTextTrack): String =
-    listOfNotNull(
-        when (track.origin) {
-            TimedTextOrigin.Embedded -> "内嵌"
-            TimedTextOrigin.Sidecar -> "外挂"
-            TimedTextOrigin.Lyrics -> "歌词"
-            TimedTextOrigin.Generated -> "生成"
-        },
-        track.format?.uppercase(Locale.ROOT),
-        "默认".takeIf { TimedTextRole.Default in track.roles },
-        "强制".takeIf { TimedTextRole.Forced in track.roles },
-        "SDH".takeIf { TimedTextRole.Sdh in track.roles },
-        "CC".takeIf { TimedTextRole.ClosedCaptions in track.roles },
-        when (track.readiness) {
-            TimedTextReadiness.Unknown -> "待导入"
-            TimedTextReadiness.Ready -> "可用"
-            TimedTextReadiness.PrivateCopy -> "应用副本可用"
-            TimedTextReadiness.Unreadable -> "文件不可读"
-            TimedTextReadiness.ParseFailed -> "无法解析"
-            TimedTextReadiness.MissingArtifact -> "内部资产缺失"
-        },
-    ).joinToString(" · ")
 
 @Composable
 private fun GlowPlayer(
@@ -2115,11 +2338,11 @@ internal fun formatTime(milliseconds: Long): String {
     }
 }
 
-private fun formatOffset(milliseconds: Long): String =
+private fun subtitleOffsetValueLabel(milliseconds: Long): String =
     if (milliseconds == 0L) {
-        "字幕同步"
+        "0.0 秒"
     } else {
-        String.format(Locale.ROOT, "字幕 %+.1f 秒", milliseconds / 1_000f)
+        String.format(Locale.ROOT, "%+.1f 秒", milliseconds / 1_000f)
     }
 
 private fun formatSpeed(speed: Float): String =
