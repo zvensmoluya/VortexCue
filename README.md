@@ -10,6 +10,10 @@
 
 项目尚未发布首个版本，目前仍处于产品与工程验证阶段。界面、数据结构和实现边界可能继续调整，仓库中的开发状态不构成已发布功能或兼容性承诺。
 
+## 许可
+
+VortexCue 源代码使用 [Apache License 2.0](LICENSE) 发布。项目名称、商标、Logo、艺术资源、示例媒体和第三方材料不随源代码许可证授权，具体以 [`NOTICE`](NOTICE) 及各自的权利声明为准。
+
 ## 文档
 
 - [`docs/DOMAIN_CONTEXT.md`](docs/DOMAIN_CONTEXT.md)：长期领域背景与产品设计 DNA；
