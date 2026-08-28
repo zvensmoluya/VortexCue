@@ -76,6 +76,13 @@ enum class TranslationProtocol {
     GoogleGenerateContent,
 }
 
+enum class TranslationReasoningLevel {
+    Off,
+    Low,
+    Medium,
+    High,
+}
+
 enum class TextPresentationMode {
     TargetOnly,
     SourceTarget,
@@ -105,6 +112,7 @@ data class SyncTextScheme(
     val translationEndpoint: String?,
     val translationUserAgent: String? = null,
     val translationModel: String?,
+    val translationReasoningLevel: TranslationReasoningLevel = TranslationReasoningLevel.Off,
     val translationCredentialId: String?,
     val defaultTargetLanguage: String,
     val defaultPresentationMode: TextPresentationMode = TextPresentationMode.TargetOnly,
@@ -123,6 +131,7 @@ data class SyncTextConfig(
     val translationProtocol: TranslationProtocol,
     val translationEndpoint: String?,
     val translationModel: String?,
+    val translationReasoningLevel: TranslationReasoningLevel = TranslationReasoningLevel.Off,
     val translationCredentialId: String?,
     val targetLanguage: String,
     val presentationMode: TextPresentationMode,

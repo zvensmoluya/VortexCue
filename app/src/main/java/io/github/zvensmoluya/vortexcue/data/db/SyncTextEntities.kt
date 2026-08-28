@@ -65,6 +65,8 @@ data class SyncTextSchemeEntity(
     val translationUserAgent: String? = null,
     @ColumnInfo(name = "translation_model")
     val translationModel: String?,
+    @ColumnInfo(name = "translation_reasoning_level", defaultValue = "'Off'")
+    val translationReasoningLevel: String = "Off",
     @ColumnInfo(name = "translation_credential_id")
     val translationCredentialId: String?,
     @ColumnInfo(name = "default_target_language")
@@ -251,6 +253,8 @@ data class GenerationAttemptEntity(
     val translationUserAgent: String? = null,
     @ColumnInfo(name = "translation_model")
     val translationModel: String?,
+    @ColumnInfo(name = "translation_reasoning_level", defaultValue = "'Off'")
+    val translationReasoningLevel: String = "Off",
     @ColumnInfo(name = "translation_credential_id")
     val translationCredentialId: String?,
     @ColumnInfo(name = "policy_id")

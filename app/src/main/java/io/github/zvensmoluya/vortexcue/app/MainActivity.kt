@@ -85,7 +85,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onPostResume() {
         super.onPostResume()
-        appContainer.syncTextScheduler.onAppForeground()
+        appContainer.onAppForeground()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

@@ -51,6 +51,7 @@ class SyncTextRepositoryTest {
     private lateinit var textStorage: TextStorageRepository
     private lateinit var revisionReader: TimelineRevisionReader
     private lateinit var credentials: MemoryCredentialStore
+    private lateinit var scheduler: RecordingSyncTextScheduler
     private lateinit var repository: SyncTextRepository
 
     @Before
@@ -65,6 +66,7 @@ class SyncTextRepositoryTest {
         textStorage = TextStorageRepository(database, artifactStore, nowMs = { clock++ })
         revisionReader = TimelineRevisionReader(textStorage)
         credentials = MemoryCredentialStore()
+        scheduler = RecordingSyncTextScheduler()
         repository =
             SyncTextRepository(
                 database = database,
@@ -73,6 +75,7 @@ class SyncTextRepositoryTest {
                 credentials = credentials,
                 policies = TranslationPolicyRegistry.forTesting(::promptBytes),
                 scope = scope,
+                scheduler = scheduler,
                 nowMs = { clock++ },
                 newId = { "id-${nextId++}" },
             )
@@ -227,6 +230,7 @@ class SyncTextRepositoryTest {
                 translationEndpoint = "https://example.test/v1/responses",
                 translationUserAgent = "PrivateGatewayClient/4.1",
                 translationModel = "model-v1",
+                translationReasoningLevel = TranslationReasoningLevel.High,
                 translationCredentialId = "translation-key",
                 defaultTargetLanguage = "zh",
                 isDefault = true,
@@ -245,9 +249,19 @@ class SyncTextRepositoryTest {
         assertEquals(GenerationTaskKind.SourceGeneration, sourceTask.kind)
         assertNull(database.syncTextDao().taskSnapshot(sourceTask.taskId)?.targetLanguage)
 
-        repository.saveScheme(scheme.copy(translationModel = "model-v2", translationUserAgent = "PrivateGatewayClient/5.0"))
+        repository.saveScheme(
+            scheme.copy(
+                translationModel = "model-v2",
+                translationReasoningLevel = TranslationReasoningLevel.Low,
+                translationUserAgent = "PrivateGatewayClient/5.0",
+            ),
+        )
         val sourceEntity = requireNotNull(database.syncTextDao().task(sourceTask.taskId))
         assertEquals("model-v1", database.syncTextDao().attempt(sourceEntity.currentAttemptId)?.translationModel)
+        assertEquals(
+            TranslationReasoningLevel.High.name,
+            database.syncTextDao().attempt(sourceEntity.currentAttemptId)?.translationReasoningLevel,
+        )
 
         val source = CueIdNormalizer.normalize(listOf(SubtitleCue(0L, 1_000L, "source")))
         val target = source.map { it.copy(text = "target") }
@@ -270,6 +284,10 @@ class SyncTextRepositoryTest {
         assertEquals(sourceResult.resultId, database.syncTextDao().taskSnapshot(firstTranslation.taskId)?.inputSourceResultId)
         val translationTask = requireNotNull(database.syncTextDao().task(firstTranslation.taskId))
         assertEquals("model-v2", database.syncTextDao().attempt(translationTask.currentAttemptId)?.translationModel)
+        assertEquals(
+            TranslationReasoningLevel.Low.name,
+            database.syncTextDao().attempt(translationTask.currentAttemptId)?.translationReasoningLevel,
+        )
 
         val firstResult =
             repository.publishResult(
@@ -407,12 +425,21 @@ class SyncTextRepositoryTest {
                 GenerationRequest(ContentId, GenerationInput.ExistingTrack(TrackId), GenerationOutput.SourceOnly, scheme.schemeId),
             )
 
+        assertTrue(repository.hasSchedulableTasks())
+        scheduler.reset()
         repository.pauseTask(task.taskId)
         assertEquals(GenerationTaskState.Paused.name, database.syncTextDao().task(task.taskId)?.state)
+        assertFalse(repository.hasSchedulableTasks())
+        assertEquals(listOf(task.taskId), scheduler.cancellations)
+        assertEquals(1, scheduler.schedules)
         repository.markRunning(task.taskId, GenerationStage.RecognizingSpeech, 0.5f)
         assertEquals(GenerationTaskState.Paused.name, database.syncTextDao().task(task.taskId)?.state)
+        scheduler.reset()
         repository.resumeTask(task.taskId)
         assertEquals(GenerationTaskState.Waiting.name, database.syncTextDao().task(task.taskId)?.state)
+        assertTrue(repository.hasSchedulableTasks())
+        assertEquals(listOf(task.taskId), scheduler.cancellations)
+        assertEquals(1, scheduler.schedules)
         repository.markWaitingForNetwork(task.taskId, GenerationNetworkWaitReason.MeteredPermissionRequired)
         val meteredWait = requireNotNull(database.syncTextDao().task(task.taskId))
         assertTrue(meteredWait.waitingForNetwork)
@@ -430,16 +457,26 @@ class SyncTextRepositoryTest {
         assertEquals(0.6f, nonRegressed.progress)
         assertEquals(GenerationStage.DecodingAudio.name, nonRegressed.stage)
         repository.resumeTask(task.taskId)
+        scheduler.reset()
         repository.setPauseAll(true)
         assertTrue(database.syncTextDao().queueControl()?.pauseAll == true)
+        assertFalse(repository.hasSchedulableTasks())
+        assertEquals(listOf("sync-text-queue"), scheduler.cancellations)
+        assertEquals(0, scheduler.schedules)
         assertNull(repository.nextRunnableTask())
+        scheduler.reset()
         repository.setPauseAll(false)
+        assertEquals(listOf("sync-text-queue"), scheduler.cancellations)
+        assertEquals(1, scheduler.schedules)
         assertEquals(task.taskId, repository.nextRunnableTask()?.taskId)
 
+        scheduler.reset()
         repository.deleteTask(task.taskId)
         val deleted = requireNotNull(database.syncTextDao().task(task.taskId))
         assertEquals(GenerationTaskState.Deleted.name, deleted.state)
         assertNull(deleted.activeDedupeKey)
+        assertEquals(listOf(task.taskId), scheduler.cancellations)
+        assertEquals(1, scheduler.schedules)
         repository.markRunning(task.taskId, GenerationStage.RecognizingSpeech, 0.75f)
         assertEquals(GenerationTaskState.Deleted.name, database.syncTextDao().task(task.taskId)?.state)
         assertNull(repository.nextRunnableTask())
@@ -549,6 +586,25 @@ class SyncTextRepositoryTest {
         private const val TrackId = "track"
         private var clock = 1_000L
         private var nextId = 1
+    }
+}
+
+private class RecordingSyncTextScheduler : SyncTextScheduler {
+    var schedules = 0
+        private set
+    val cancellations = mutableListOf<String>()
+
+    override fun schedule() {
+        schedules += 1
+    }
+
+    override fun cancel(taskId: String) {
+        cancellations += taskId
+    }
+
+    fun reset() {
+        schedules = 0
+        cancellations.clear()
     }
 }
 

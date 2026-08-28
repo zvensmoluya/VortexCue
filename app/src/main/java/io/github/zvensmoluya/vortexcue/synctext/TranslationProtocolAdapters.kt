@@ -43,6 +43,7 @@ data class TranslationProviderRequest(
     val apiKey: String,
     val systemPrompt: String,
     val userPrompt: String,
+    val reasoningLevel: TranslationReasoningLevel = TranslationReasoningLevel.Off,
     val userAgent: String? = null,
 )
 
@@ -684,6 +685,10 @@ class ResponsesTranslationAdapter(
         buildJsonObject {
             put("model", request.model)
             put("instructions", request.systemPrompt)
+            put("reasoning", buildJsonObject { put("effort", request.reasoningLevel.wireValue()) })
+            if (request.requiresDeepSeekTranslationBounds()) {
+                put("max_output_tokens", DeepSeekTranslationMaxOutputTokens)
+            }
             put(
                 "input",
                 buildJsonArray {
@@ -750,6 +755,15 @@ class AnthropicMessagesTranslationAdapter(
             put("model", request.model)
             put("max_tokens", 16_384)
             put("system", request.systemPrompt)
+            if (request.reasoningLevel == TranslationReasoningLevel.Off) {
+                put("thinking", buildJsonObject { put("type", "disabled") })
+            } else {
+                put("thinking", buildJsonObject { put("type", "adaptive") })
+                put(
+                    "output_config",
+                    buildJsonObject { put("effort", request.reasoningLevel.wireValue()) },
+                )
+            }
             put(
                 "messages",
                 buildJsonArray {
@@ -807,6 +821,23 @@ class ChatCompletionsTranslationAdapter(
         buildJsonObject {
             put("model", request.model)
             put("stream", false)
+            if (request.requiresDeepSeekTranslationBounds()) {
+                put(
+                    "thinking",
+                    buildJsonObject {
+                        put(
+                            "type",
+                            if (request.reasoningLevel == TranslationReasoningLevel.Off) "disabled" else "enabled",
+                        )
+                    },
+                )
+                if (request.reasoningLevel != TranslationReasoningLevel.Off) {
+                    put("reasoning_effort", request.reasoningLevel.deepSeekChatEffort())
+                }
+                put("max_tokens", DeepSeekTranslationMaxOutputTokens)
+            } else {
+                put("reasoning_effort", request.reasoningLevel.wireValue())
+            }
             put(
                 "messages",
                 buildJsonArray {
@@ -858,6 +889,16 @@ class ChatCompletionsTranslationAdapter(
     }
 }
 
+private fun TranslationProviderRequest.requiresDeepSeekTranslationBounds(): Boolean {
+    val host = runCatching { endpoint.toHttpUrl().host }.getOrNull() ?: return false
+    return (host == DeepSeekApiHost || host.endsWith(".$DeepSeekApiHost")) &&
+        model.startsWith(DeepSeekV4ModelPrefix)
+}
+
+private const val DeepSeekApiHost = "api.deepseek.com"
+private const val DeepSeekV4ModelPrefix = "deepseek-v4-"
+private const val DeepSeekTranslationMaxOutputTokens = 16_384
+
 class GoogleGenerateContentTranslationAdapter(
     executor: BoundedHttpExecutor,
     endpointResolver: TranslationEndpointResolver = TranslationEndpointResolver(),
@@ -895,7 +936,22 @@ class GoogleGenerateContentTranslationAdapter(
                     )
                 },
             )
-            put("generationConfig", buildJsonObject { put("maxOutputTokens", 16_384) })
+            put(
+                "generationConfig",
+                buildJsonObject {
+                    put("maxOutputTokens", 16_384)
+                    put(
+                        "thinkingConfig",
+                        buildJsonObject {
+                            if (request.reasoningLevel == TranslationReasoningLevel.Off) {
+                                put("thinkingBudget", 0)
+                            } else {
+                                put("thinkingLevel", request.reasoningLevel.wireValue().uppercase())
+                            }
+                        },
+                    )
+                },
+            )
         }
 
     override fun extractText(root: JsonObject): String =
@@ -942,6 +998,21 @@ fun defaultTranslationAdapters(
         GoogleGenerateContentTranslationAdapter(executor, endpointResolver),
     )
 }
+
+private fun TranslationReasoningLevel.wireValue(): String =
+    when (this) {
+        TranslationReasoningLevel.Off -> "none"
+        else -> name.lowercase()
+    }
+
+private fun TranslationReasoningLevel.deepSeekChatEffort(): String =
+    when (this) {
+        TranslationReasoningLevel.Off -> error("Non-thinking DeepSeek requests do not have reasoning effort")
+        TranslationReasoningLevel.Low -> "low"
+        TranslationReasoningLevel.Medium,
+        TranslationReasoningLevel.High,
+        -> "high"
+    }
 
 private fun JsonObject.string(name: String): String? =
     (get(name) as? JsonPrimitive)?.contentOrNull

@@ -62,4 +62,24 @@ class SyncTextSchedulingTest {
         shouldThrow = false
         assertEquals(UidtScheduleOutcome.Scheduled, gate.retryDeferred())
     }
+
+    @Test
+    fun `foreground reconciliation replaces a job that disappeared after being observed`() {
+        var pending = true
+        var submissions = 0
+        val gate =
+            UidtScheduleGate(
+                hasPendingJob = { pending },
+                submit = {
+                    submissions += 1
+                    1
+                },
+                successCode = 1,
+            )
+
+        assertEquals(UidtScheduleOutcome.AlreadyScheduled, gate.schedule())
+        pending = false
+        assertEquals(UidtScheduleOutcome.Scheduled, gate.schedule())
+        assertEquals(1, submissions)
+    }
 }

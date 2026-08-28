@@ -4,6 +4,9 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -32,8 +35,11 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.shadow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
@@ -50,6 +56,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -65,8 +73,10 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
@@ -78,6 +88,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextOrigin
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextReadiness
 import io.github.zvensmoluya.vortexcue.data.ContentDetails
@@ -91,6 +102,7 @@ import io.github.zvensmoluya.vortexcue.synctext.LanguageTags
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextConfig
 import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocol
+import io.github.zvensmoluya.vortexcue.synctext.TranslationReasoningLevel
 import io.github.zvensmoluya.vortexcue.ui.theme.AppAccent
 import io.github.zvensmoluya.vortexcue.ui.theme.AppBackground
 import io.github.zvensmoluya.vortexcue.ui.theme.AppError
@@ -104,6 +116,7 @@ import java.net.URI
 import java.security.MessageDigest
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlinx.coroutines.launch
 
@@ -142,6 +155,7 @@ private data class TranslationPageDraft(
     val protocol: TranslationProtocol,
     val endpoint: String,
     val model: String,
+    val reasoningLevel: TranslationReasoningLevel,
     val credentialId: String?,
     val secret: String,
     val targetLanguage: String,
@@ -176,6 +190,7 @@ internal fun SyncTextConfigPage(
                 endpoint = existing?.translationEndpoint?.toBaseUrl()
                     ?: TranslationProtocol.Responses.defaultBaseUrl(),
                 model = existing?.translationModel.orEmpty(),
+                reasoningLevel = existing?.translationReasoningLevel ?: TranslationReasoningLevel.Off,
                 credentialId = existing?.translationCredentialId,
                 secret = "",
                 targetLanguage = existing?.targetLanguage ?: "zh-CN",
@@ -240,6 +255,7 @@ internal fun SyncTextConfigPage(
             translationEndpoint = translation.endpoint,
             translationUserAgent = existing?.translationUserAgent,
             translationModel = translation.model,
+            translationReasoningLevel = translation.reasoningLevel,
             translationCredentialId = translation.credentialId,
             translationSecret = null,
             targetLanguage = translation.targetLanguage,
@@ -362,6 +378,7 @@ internal fun SyncTextConfigPage(
                                     translationDraft.protocol,
                                     translationDraft.endpoint,
                                     translationDraft.model,
+                                    translationDraft.reasoningLevel,
                                     translationDraft.credentialId,
                                     translationDraft.secret.takeIf(String::isNotBlank),
                                     fingerprint,
@@ -597,6 +614,16 @@ private fun TranslationPage(
                 onOpen = { onDiscoverModels(draft) },
                 onValueChange = {
                     val next = draft.copy(model = it)
+                    onDraftChanged(next)
+                    onCommit(next)
+                },
+            )
+        }
+        item {
+            ReasoningLevelPicker(
+                value = draft.reasoningLevel,
+                onValueChange = {
+                    val next = draft.copy(reasoningLevel = it)
                     onDraftChanged(next)
                     onCommit(next)
                 },
@@ -1014,6 +1041,162 @@ private fun ModelPicker(
     }
 }
 
+@Composable
+internal fun ReasoningLevelPicker(
+    value: TranslationReasoningLevel,
+    onValueChange: (TranslationReasoningLevel) -> Unit,
+) {
+    val levels = TranslationReasoningLevel.entries
+    val density = LocalDensity.current
+    val haptics = LocalHapticFeedback.current
+    var dragging by remember { mutableStateOf(false) }
+    var visualIndex by remember { mutableIntStateOf(value.ordinal) }
+    var dragPosition by remember { mutableFloatStateOf(value.ordinal.toFloat()) }
+    var lastTickIndex by remember { mutableIntStateOf(value.ordinal) }
+
+    LaunchedEffect(value) {
+        if (!dragging) {
+            visualIndex = value.ordinal
+            dragPosition = value.ordinal.toFloat()
+            lastTickIndex = value.ordinal
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ConfigFieldLabel("思考强度")
+            Text(
+                value.reasoningHint(),
+                color = AppMutedText,
+                fontSize = 12.sp,
+            )
+        }
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(58.dp)
+                .testTag("translation-reasoning-selector"),
+        ) {
+            val segmentWidth = maxWidth / levels.size
+            val segmentWidthPx = with(density) { segmentWidth.toPx() }.coerceAtLeast(1f)
+            val indicatorPosition by animateFloatAsState(
+                targetValue = if (dragging) dragPosition else visualIndex.toFloat(),
+                animationSpec =
+                    if (dragging) {
+                        tween(durationMillis = 40)
+                    } else {
+                        spring(dampingRatio = 0.58f, stiffness = 560f)
+                    },
+                label = "reasoning-selector-position",
+            )
+            val indicatorElevation by animateDpAsState(
+                targetValue = if (dragging) 9.dp else 2.dp,
+                animationSpec = spring(dampingRatio = 0.7f, stiffness = 520f),
+                label = "reasoning-selector-elevation",
+            )
+            val fractionalStretch = abs(indicatorPosition - indicatorPosition.roundToInt()).coerceIn(0f, 0.5f) * 2f
+            val stretch = 7.dp * fractionalStretch
+            val draggableState = rememberDraggableState { delta ->
+                dragPosition =
+                    (dragPosition + delta / segmentWidthPx)
+                        .coerceIn(0f, levels.lastIndex.toFloat())
+                val tickIndex = dragPosition.roundToInt().coerceIn(0, levels.lastIndex)
+                if (tickIndex != lastTickIndex) {
+                    lastTickIndex = tickIndex
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(AppSurfaceRaised, RoundedCornerShape(18.dp))
+                    .border(1.dp, AppHairline, RoundedCornerShape(18.dp))
+                    .draggable(
+                        state = draggableState,
+                        orientation = Orientation.Horizontal,
+                        onDragStarted = {
+                            dragging = true
+                            dragPosition = indicatorPosition
+                            lastTickIndex = dragPosition.roundToInt()
+                        },
+                        onDragStopped = {
+                            val settledIndex = dragPosition.roundToInt().coerceIn(0, levels.lastIndex)
+                            visualIndex = settledIndex
+                            dragPosition = settledIndex.toFloat()
+                            dragging = false
+                            levels[settledIndex].takeIf { it != value }?.let(onValueChange)
+                        },
+                    )
+                    .selectableGroup(),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .offset(
+                            x = segmentWidth * indicatorPosition + 4.dp - stretch / 2,
+                            y = 4.dp,
+                        )
+                        .width(segmentWidth - 8.dp + stretch)
+                        .fillMaxHeight()
+                        .padding(bottom = 8.dp)
+                        .shadow(indicatorElevation, RoundedCornerShape(14.dp), clip = false)
+                        .graphicsLayer {
+                            scaleY = 1f - fractionalStretch * 0.035f
+                        }
+                        .background(AppSurfaceSelected, RoundedCornerShape(14.dp))
+                        .border(1.dp, AppAccent.copy(alpha = 0.34f), RoundedCornerShape(14.dp))
+                        .zIndex(0f)
+                        .testTag("translation-reasoning-indicator"),
+                )
+
+                Row(modifier = Modifier.fillMaxSize().zIndex(1f)) {
+                    levels.forEachIndexed { index, level ->
+                        val proximity = (1f - abs(indicatorPosition - index)).coerceIn(0f, 1f)
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .selectable(
+                                    selected = value == level,
+                                    onClick = {
+                                        if (visualIndex != index) {
+                                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        }
+                                        visualIndex = index
+                                        dragPosition = index.toFloat()
+                                        lastTickIndex = index
+                                        if (level != value) onValueChange(level)
+                                    },
+                                    role = Role.RadioButton,
+                                    indication = null,
+                                    interactionSource = remember { MutableInteractionSource() },
+                                )
+                                .testTag("translation-reasoning-${level.name.lowercase()}"),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                level.reasoningLabel(),
+                                color = lerp(AppSecondaryText, AppPrimaryText, proximity),
+                                fontSize = 14.sp,
+                                fontWeight = if (proximity > 0.6f) FontWeight.SemiBold else FontWeight.Medium,
+                                modifier = Modifier.graphicsLayer {
+                                    val scale = 0.98f + proximity * 0.04f
+                                    scaleX = scale
+                                    scaleY = scale
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TargetLanguagePicker(
@@ -1219,7 +1402,15 @@ private fun SyncTextConfigDraft.isComplete(): Boolean =
         (asrCredentialId != null || asrSecret?.isNotBlank() == true)
 
 private fun TranslationPageDraft.translationFingerprint(): String =
-    fingerprintOf(protocol.name, endpoint.trim(), model.trim(), credentialId.orEmpty(), secret, targetLanguage)
+    fingerprintOf(
+        protocol.name,
+        endpoint.trim(),
+        model.trim(),
+        reasoningLevel.name,
+        credentialId.orEmpty(),
+        secret,
+        targetLanguage,
+    )
 
 private fun AsrPageDraft.asrFingerprint(): String =
     fingerprintOf(profile.name, endpoint.trim(), credentialId.orEmpty(), secret)
@@ -1387,6 +1578,22 @@ private fun TranslationProtocol.label(): String =
         TranslationProtocol.AnthropicMessages -> "Anthropic Messages"
         TranslationProtocol.ChatCompletions -> "OpenAI Chat Completions"
         TranslationProtocol.GoogleGenerateContent -> "Google Gemini"
+    }
+
+private fun TranslationReasoningLevel.reasoningLabel(): String =
+    when (this) {
+        TranslationReasoningLevel.Off -> "关"
+        TranslationReasoningLevel.Low -> "低"
+        TranslationReasoningLevel.Medium -> "中"
+        TranslationReasoningLevel.High -> "高"
+    }
+
+private fun TranslationReasoningLevel.reasoningHint(): String =
+    when (this) {
+        TranslationReasoningLevel.Off -> "速度优先"
+        TranslationReasoningLevel.Low -> "轻量思考"
+        TranslationReasoningLevel.Medium -> "平衡"
+        TranslationReasoningLevel.High -> "质量优先"
     }
 
 private fun TranslationProtocol.defaultEndpoint(): String =

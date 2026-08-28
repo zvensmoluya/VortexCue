@@ -14,6 +14,11 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import io.github.zvensmoluya.vortexcue.synctext.TranslationReasoningLevel
 import io.github.zvensmoluya.vortexcue.ui.theme.VortexCueTheme
 import org.junit.Rule
 import org.junit.Test
@@ -78,5 +83,24 @@ class SyncTextConfigPagerComposeTest {
         compose.waitForIdle()
         compose.onNodeWithTag("sync-text-asr-page").assertIsDisplayed()
         compose.onNodeWithTag("sync-text-config-tab-1").assertIsSelected()
+    }
+
+    @Test
+    fun reasoningSelectorDragsAcrossDiscreteLevelsAndStillSupportsTaps() {
+        compose.setContent {
+            VortexCueTheme {
+                var value by remember { mutableStateOf(TranslationReasoningLevel.Off) }
+                ReasoningLevelPicker(value = value, onValueChange = { value = it })
+            }
+        }
+
+        compose.onNodeWithTag("translation-reasoning-off").assertIsSelected()
+        compose.onNodeWithTag("translation-reasoning-selector").performTouchInput { swipeRight() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("translation-reasoning-high").assertIsSelected()
+
+        compose.onNodeWithTag("translation-reasoning-medium").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("translation-reasoning-medium").assertIsSelected()
     }
 }

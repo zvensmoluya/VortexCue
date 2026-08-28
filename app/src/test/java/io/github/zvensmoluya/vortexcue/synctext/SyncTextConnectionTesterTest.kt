@@ -23,6 +23,7 @@ class SyncTextConnectionTesterTest {
             model = "translation-model",
             apiKey = "secret-key",
             targetLanguage = "zh-CN",
+            reasoningLevel = TranslationReasoningLevel.Medium,
             userAgent = "PrivateGatewayClient/1.0",
         )
 
@@ -32,6 +33,7 @@ class SyncTextConnectionTesterTest {
         assertEquals("https://example.test/v1", request.endpoint)
         assertEquals("translation-model", request.model)
         assertEquals("secret-key", request.apiKey)
+        assertEquals(TranslationReasoningLevel.Medium, request.reasoningLevel)
         assertEquals("PrivateGatewayClient/1.0", request.userAgent)
         assertTrue(request.systemPrompt.contains("professional subtitle translator"))
         assertTrue(request.systemPrompt.contains("natural Simplified Chinese subtitles"))

@@ -571,6 +571,36 @@ class VortexDatabaseTest {
     }
 
     @Test
+    fun versionElevenAddsOffReasoningDefaultsToConfigAndAttemptSnapshots() = runBlocking {
+        val path = temporaryFolder.root.resolve("migration-v11-v12.db").toPath()
+        val helper =
+            MigrationTestHelper(
+                databasePath = path,
+                schemaDirectoryPath = File("schemas").toPath(),
+                driver = BundledSQLiteDriver(),
+                databaseClass = VortexDatabase::class,
+                databaseFactory = { VortexDatabase_Impl() },
+                autoMigrationSpecs = emptyList(),
+            )
+        helper.createDatabase(11).close()
+
+        helper.runMigrationsAndValidate(12, listOf(MIGRATION_11_12)).use { connection ->
+            listOf("sync_text_scheme", "generation_attempt").forEach { table ->
+                connection.prepare("PRAGMA table_info(`$table`)").use { statement ->
+                    var found = false
+                    while (statement.step()) {
+                        if (statement.getText(1) == "translation_reasoning_level") {
+                            found = true
+                            assertEquals("'Off'", statement.getText(4))
+                        }
+                    }
+                    assertTrue(found)
+                }
+            }
+        }
+    }
+
+    @Test
     fun versionSixIsDestructivelyRebuiltAsVersionNine() = runBlocking {
         val path = temporaryFolder.root.resolve("migration-v6-v9.db").toPath()
         val helper =

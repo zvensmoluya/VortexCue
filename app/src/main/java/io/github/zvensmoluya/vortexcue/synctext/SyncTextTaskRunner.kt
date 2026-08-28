@@ -744,6 +744,8 @@ class SyncTextTaskRunner(
         val endpoint = requireNotNull(attempt.translationEndpoint) { "Translation endpoint is missing from the attempt" }
         val model = requireNotNull(attempt.translationModel) { "Translation model is missing from the attempt" }
         val protocol = attempt.translationProtocol.enumValueOr(TranslationProtocol.Responses)
+        val reasoningLevel =
+            attempt.translationReasoningLevel.enumValueOr(TranslationReasoningLevel.Off)
         val operationOrdinal = AtomicInteger(0)
         val batchExecutor =
             TranslationBatchExecutor { systemPrompt, userPrompt ->
@@ -757,6 +759,7 @@ class SyncTextTaskRunner(
                             apiKey = key,
                             systemPrompt = systemPrompt,
                             userPrompt = userPrompt,
+                            reasoningLevel = reasoningLevel,
                             userAgent = attempt.translationUserAgent,
                         ),
                     onAttempt = { networkAttempt ->

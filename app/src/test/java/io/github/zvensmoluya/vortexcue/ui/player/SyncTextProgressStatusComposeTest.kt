@@ -75,6 +75,7 @@ class SyncTextProgressStatusComposeTest {
                     onGenerate = { launches += 1 },
                     onTranslate = {},
                     onCancel = {},
+                    onAbort = {},
                     onRetry = {},
                     onAllowMetered = {},
                 )
@@ -107,6 +108,7 @@ class SyncTextProgressStatusComposeTest {
                     onGenerate = {},
                     onTranslate = { translations += 1 },
                     onCancel = {},
+                    onAbort = {},
                     onRetry = {},
                     onAllowMetered = {},
                 )
@@ -138,6 +140,7 @@ class SyncTextProgressStatusComposeTest {
                     onGenerate = {},
                     onTranslate = {},
                     onCancel = {},
+                    onAbort = {},
                     onRetry = {},
                     onAllowMetered = {},
                 )
@@ -146,6 +149,42 @@ class SyncTextProgressStatusComposeTest {
 
         compose.onNodeWithText("正在启动语音识别").assertIsDisplayed()
         compose.onNodeWithText("生成同步文字").assertDoesNotExist()
+    }
+
+    @Test
+    fun runningTaskOffersPauseAndStopActions() {
+        var pauses = 0
+        var stops = 0
+        compose.setContent {
+            VortexCueTheme {
+                SubtitleStage(
+                    previousText = null,
+                    primaryText = "当前原文",
+                    secondaryText = null,
+                    nextText = null,
+                    hasPrimaryText = true,
+                    hasSecondaryText = false,
+                    hasGeneratedText = true,
+                    hasPartialGeneratedText = false,
+                    canTranslate = false,
+                    task = runningTask(progress = 0.55f),
+                    launch = null,
+                    onGenerate = {},
+                    onTranslate = {},
+                    onCancel = { pauses += 1 },
+                    onAbort = { stops += 1 },
+                    onRetry = {},
+                    onAllowMetered = {},
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("暂停同步文字").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("停止生成").assertIsDisplayed().performClick()
+        compose.runOnIdle {
+            assertEquals(1, pauses)
+            assertEquals(1, stops)
+        }
     }
 
     private fun runningTask(

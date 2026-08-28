@@ -15,6 +15,7 @@ class SyncTextConnectionTester(
         model: String,
         apiKey: String,
         targetLanguage: String,
+        reasoningLevel: TranslationReasoningLevel = TranslationReasoningLevel.Off,
         userAgent: String? = null,
     ) {
         val policy = policies.resolve(targetLanguage)
@@ -32,6 +33,7 @@ class SyncTextConnectionTester(
                         apiKey = apiKey,
                         systemPrompt = systemPrompt,
                         userPrompt = userPrompt,
+                        reasoningLevel = reasoningLevel,
                         userAgent = userAgent,
                     ),
             )

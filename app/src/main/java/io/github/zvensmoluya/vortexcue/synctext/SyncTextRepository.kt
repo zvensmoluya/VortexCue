@@ -124,6 +124,7 @@ class SyncTextRepository(
         protocol: TranslationProtocol,
         endpoint: String,
         model: String,
+        reasoningLevel: TranslationReasoningLevel,
         credentialId: String?,
         apiKey: String? = null,
     ) {
@@ -139,6 +140,7 @@ class SyncTextRepository(
             model = model,
             apiKey = resolvedKey,
             targetLanguage = current?.targetLanguage ?: DefaultProbeTargetLanguage,
+            reasoningLevel = reasoningLevel,
             userAgent = current?.translationUserAgent,
         )
     }
@@ -236,6 +238,7 @@ class SyncTextRepository(
                 translationProtocol = config.translationProtocol,
                 translationEndpoint = config.translationEndpoint,
                 translationModel = config.translationModel,
+                translationReasoningLevel = config.translationReasoningLevel,
                 translationCredentialId = config.translationCredentialId,
                 defaultTargetLanguage = config.targetLanguage,
                 defaultPresentationMode = config.presentationMode,
@@ -251,6 +254,7 @@ class SyncTextRepository(
                 translationProtocol = config.translationProtocol,
                 translationEndpoint = config.translationEndpoint,
                 translationModel = config.translationModel,
+                translationReasoningLevel = config.translationReasoningLevel,
                 translationCredentialId = config.translationCredentialId,
                 defaultTargetLanguage = config.targetLanguage,
                 defaultPresentationMode = config.presentationMode,
@@ -394,6 +398,7 @@ class SyncTextRepository(
         translationEndpoint: String? = null,
         translationUserAgent: String? = null,
         translationModel: String? = null,
+        translationReasoningLevel: TranslationReasoningLevel = TranslationReasoningLevel.Off,
         translationCredentialId: String? = null,
         defaultTargetLanguage: String = DefaultProbeTargetLanguage,
         defaultPresentationMode: TextPresentationMode = TextPresentationMode.TargetOnly,
@@ -410,6 +415,7 @@ class SyncTextRepository(
                 translationEndpoint = translationEndpoint,
                 translationUserAgent = translationUserAgent,
                 translationModel = translationModel,
+                translationReasoningLevel = translationReasoningLevel,
                 translationCredentialId = translationCredentialId,
                 defaultTargetLanguage = defaultTargetLanguage,
                 defaultPresentationMode = defaultPresentationMode,
@@ -613,6 +619,7 @@ class SyncTextRepository(
                 outcome = GenerationTaskState.Paused.name,
                 reason = "User",
             )
+            scheduler.cancel(taskId)
             scheduler.schedule()
         }
     }
@@ -654,11 +661,13 @@ class SyncTextRepository(
                 reason = "UserResume",
             )
         }
+        scheduler.cancel(taskId)
         scheduler.schedule()
     }
 
     suspend fun setPauseAll(paused: Boolean) {
         dao.upsertQueueControl(SyncTextQueueControlEntity(pauseAll = paused, updatedAtMs = nowMs()))
+        scheduler.cancel(QueueSchedulerKey)
         if (!paused) scheduler.schedule()
     }
 
@@ -672,6 +681,7 @@ class SyncTextRepository(
                 outcome = GenerationTaskState.Deleted.name,
                 reason = "User",
             )
+            scheduler.cancel(taskId)
         }
         scheduler.schedule()
     }
@@ -1088,6 +1098,17 @@ class SyncTextRepository(
     internal suspend fun meteredNetworkAllowed(taskId: String): Boolean =
         dao.task(taskId)?.meteredNetworkAllowed == true
 
+    suspend fun hasSchedulableTasks(): Boolean {
+        if (dao.queueControl()?.pauseAll == true) return false
+        return dao.activeTasks().any { task ->
+            !task.paused &&
+                !task.needsAttention &&
+                !task.schemeBlocked &&
+                !task.waitingForNetwork &&
+                task.state in SchedulableTaskStates
+        }
+    }
+
     suspend fun wakeEligibleNetworkTasks(networkState: SyncTextNetworkState) {
         database.withWriteTransaction {
             dao.networkWaitingTasks().forEach { task ->
@@ -1257,6 +1278,7 @@ class SyncTextRepository(
             translationEndpoint = translationEndpoint,
             translationUserAgent = translationUserAgent,
             translationModel = translationModel,
+            translationReasoningLevel = translationReasoningLevel,
             translationCredentialId = translationCredentialId,
             policyId = policy?.policyId ?: NoTranslationPolicyId,
             policyVersion = policy?.version ?: 1,
@@ -1299,6 +1321,7 @@ class SyncTextRepository(
     }
 
     companion object {
+        private const val QueueSchedulerKey = "sync-text-queue"
         private const val DefaultProbeTargetLanguage = "zh-CN"
         private const val SourceSlotKey = "@source"
         private const val NoTranslationPolicyId = "none.v1"
@@ -1308,6 +1331,11 @@ class SyncTextRepository(
         private const val SourcePublishedProgress = 0.55f
         private const val MaxErrorMessageLength = 600
         private const val MaxUserAgentLength = 256
+        private val SchedulableTaskStates =
+            setOf(
+                GenerationTaskState.Waiting.name,
+                GenerationTaskState.Running.name,
+            )
 
         private fun stableSlotId(contentId: String, targetKey: String): String =
             "slot-${sha256("$contentId|$targetKey").take(32)}"
@@ -1336,6 +1364,7 @@ private fun SyncTextSchemeEntity.toDomain() =
         translationEndpoint = translationEndpoint,
         translationUserAgent = translationUserAgent,
         translationModel = translationModel,
+        translationReasoningLevel = translationReasoningLevel.enumValueOr(TranslationReasoningLevel.Off),
         translationCredentialId = translationCredentialId,
         defaultTargetLanguage = defaultTargetLanguage,
         defaultPresentationMode = defaultPresentationMode.enumValueOr(TextPresentationMode.TargetOnly),
@@ -1353,6 +1382,7 @@ private fun SyncTextScheme.toConfig() =
         translationProtocol = translationProtocol,
         translationEndpoint = translationEndpoint,
         translationModel = translationModel,
+        translationReasoningLevel = translationReasoningLevel,
         translationCredentialId = translationCredentialId,
         targetLanguage = defaultTargetLanguage,
         presentationMode = defaultPresentationMode,
@@ -1396,6 +1426,7 @@ private fun SyncTextScheme.toEntity() =
         translationEndpoint = translationEndpoint,
         translationUserAgent = translationUserAgent,
         translationModel = translationModel,
+        translationReasoningLevel = translationReasoningLevel.name,
         translationCredentialId = translationCredentialId,
         defaultTargetLanguage = defaultTargetLanguage,
         defaultPresentationMode = defaultPresentationMode.name,

@@ -29,6 +29,7 @@ import io.github.zvensmoluya.vortexcue.app.MainActivity
 import io.github.zvensmoluya.vortexcue.app.appContainer
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -190,7 +191,8 @@ class SyncTextQueueWorker(
 
 @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
 class SyncTextUidtJobService : JobService() {
-    private var running: Job? = null
+    private val runningLock = Any()
+    private var running: ActiveRun? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onStartJob(params: JobParameters): Boolean {
@@ -205,9 +207,8 @@ class SyncTextUidtJobService : JobService() {
             SyncTextNotification.build(this),
             JOB_END_NOTIFICATION_POLICY_REMOVE,
         )
-        running?.cancel()
-        running =
-            scope.launch {
+        val job =
+            scope.launch(start = CoroutineStart.LAZY) {
                 val container = applicationContext.appContainer
                 container.syncTextTaskRunner.runUntilIdle()
                 val retry = container.syncTextRepository.hasRetryableNetworkWaitingTasks()
@@ -216,14 +217,30 @@ class SyncTextUidtJobService : JobService() {
                     stage = "UIDT",
                     outcome = if (retry) "Retry" else "Completed",
                 )
-                jobFinished(params, retry)
+                val isCurrent =
+                    synchronized(runningLock) {
+                        if (running?.params === params) {
+                            running = null
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                if (isCurrent) jobFinished(params, retry)
             }
+        synchronized(runningLock) {
+            running?.job?.cancel()
+            running = ActiveRun(params, job)
+        }
+        job.start()
         return true
     }
 
     override fun onStopJob(params: JobParameters): Boolean {
-        running?.cancel()
-        running = null
+        synchronized(runningLock) {
+            running?.takeIf { it.params === params }?.job?.cancel()
+            if (running?.params === params) running = null
+        }
         applicationContext.appContainer.syncTextDiagnostics.recordAsync(
             SyncTextDiagnosticEventType.RunnerLifecycle,
             stage = "UIDT",
@@ -233,9 +250,15 @@ class SyncTextUidtJobService : JobService() {
     }
 
     override fun onDestroy() {
+        synchronized(runningLock) { running = null }
         scope.cancel()
         super.onDestroy()
     }
+
+    private data class ActiveRun(
+        val params: JobParameters,
+        val job: Job,
+    )
 }
 
 class SyncTextNetworkMonitor(

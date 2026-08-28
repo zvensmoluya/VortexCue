@@ -857,6 +857,11 @@ internal fun VortexCueApp(
                             dispatchSyncTextAction(SyncTextAction.CancelForContent(id))
                         }
                     },
+                    onAbortSyncText = {
+                        currentContentId?.let { id ->
+                            dispatchSyncTextAction(SyncTextAction.AbortForContent(id))
+                        }
+                    },
                     onRetrySyncText = {
                         currentContentId?.let { id ->
                             dispatchSyncTextAction(SyncTextAction.RetryForContent(id))

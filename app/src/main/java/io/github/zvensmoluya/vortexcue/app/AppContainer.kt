@@ -215,7 +215,15 @@ class AppContainer(context: Context) {
             val generatedRetained = database.syncTextDao().referencedRawResponseFiles().toSet()
             rawResponseStore.pruneExcept(generatedRetained)
             pcmSpool.pruneUnreserved()
-            if (database.syncTextDao().activeTasks().isNotEmpty()) syncTextScheduler.schedule()
+            if (syncTextRepository.hasSchedulableTasks()) syncTextScheduler.schedule()
+        }
+    }
+
+    fun onAppForeground() {
+        syncTextScheduler.onAppForeground()
+        scope.launch {
+            syncTextRepository.wakeEligibleNetworkTasks(syncTextNetworkState)
+            if (syncTextRepository.hasSchedulableTasks()) syncTextScheduler.schedule()
         }
     }
 }

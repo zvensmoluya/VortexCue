@@ -24,6 +24,7 @@ import io.github.zvensmoluya.vortexcue.synctext.SyncTextDiagnosticRecorder
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextRepository
 import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocol
+import io.github.zvensmoluya.vortexcue.synctext.TranslationReasoningLevel
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -47,6 +48,7 @@ data class SyncTextConfigDraft(
     val translationEndpoint: String,
     val translationUserAgent: String?,
     val translationModel: String,
+    val translationReasoningLevel: TranslationReasoningLevel,
     val translationCredentialId: String?,
     val translationSecret: String?,
     val targetLanguage: String,
@@ -120,6 +122,7 @@ sealed interface SyncTextAction {
         val protocol: TranslationProtocol,
         val endpoint: String,
         val model: String,
+        val reasoningLevel: TranslationReasoningLevel,
         val credentialId: String?,
         val apiKey: String?,
         val configurationFingerprint: String,
@@ -245,6 +248,7 @@ class SyncTextUiController(
                     protocol = action.protocol,
                     endpoint = action.endpoint,
                     model = action.model,
+                    reasoningLevel = action.reasoningLevel,
                     credentialId = action.credentialId,
                     apiKey = action.apiKey,
                     configurationFingerprint = action.configurationFingerprint,
@@ -418,6 +422,7 @@ class SyncTextUiController(
         protocol: TranslationProtocol,
         endpoint: String,
         model: String,
+        reasoningLevel: TranslationReasoningLevel,
         credentialId: String?,
         apiKey: String?,
         configurationFingerprint: String,
@@ -430,7 +435,7 @@ class SyncTextUiController(
         }
         scope.launch {
             runCatching {
-                repository.testTranslationConnection(protocol, endpoint, model, credentialId, apiKey)
+                repository.testTranslationConnection(protocol, endpoint, model, reasoningLevel, credentialId, apiKey)
             }.onSuccess {
                 overlay.update {
                     it.copy(
@@ -806,6 +811,7 @@ private fun SyncTextConfigDraft.toConfig(configId: String?): SyncTextConfig =
         translationProtocol = translationProtocol,
         translationEndpoint = translationEndpoint.takeIf { translationConfigured },
         translationModel = translationModel.takeIf { translationConfigured },
+        translationReasoningLevel = translationReasoningLevel,
         translationCredentialId = translationCredentialId.takeIf { translationConfigured },
         targetLanguage = targetLanguage,
         presentationMode = presentationMode,

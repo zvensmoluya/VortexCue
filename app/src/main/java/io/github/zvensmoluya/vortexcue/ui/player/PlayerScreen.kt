@@ -50,6 +50,7 @@ import androidx.compose.material.icons.outlined.Replay10
 import androidx.compose.material.icons.outlined.Shuffle
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.SkipPrevious
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Translate
@@ -152,6 +153,7 @@ internal fun PlayerScreen(
     onGenerateSyncText: () -> Unit,
     onTranslateSyncText: () -> Unit,
     onCancelSyncText: () -> Unit,
+    onAbortSyncText: () -> Unit,
     onRetrySyncText: () -> Unit,
     onAllowMeteredSyncText: () -> Unit,
     onGeneratedPresentationModeChanged: (String, TextPresentationMode) -> Unit,
@@ -256,6 +258,7 @@ internal fun PlayerScreen(
                 onGenerateSyncText = onGenerateSyncText,
                 onTranslateSyncText = onTranslateSyncText,
                 onCancelSyncText = onCancelSyncText,
+                onAbortSyncText = onAbortSyncText,
                 onRetrySyncText = onRetrySyncText,
                 onAllowMeteredSyncText = onAllowMeteredSyncText,
                 onEnterGlow = { onSurfaceChanged(PlayerSurface.Glow) },
@@ -501,6 +504,7 @@ private fun NormalPlayer(
     onGenerateSyncText: () -> Unit,
     onTranslateSyncText: () -> Unit,
     onCancelSyncText: () -> Unit,
+    onAbortSyncText: () -> Unit,
     onRetrySyncText: () -> Unit,
     onAllowMeteredSyncText: () -> Unit,
     onEnterGlow: () -> Unit,
@@ -558,6 +562,7 @@ private fun NormalPlayer(
             onGenerate = onGenerateSyncText,
             onTranslate = onTranslateSyncText,
             onCancel = onCancelSyncText,
+            onAbort = onAbortSyncText,
             onRetry = onRetrySyncText,
             onAllowMetered = onAllowMeteredSyncText,
             modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
@@ -920,6 +925,7 @@ internal fun SubtitleStage(
     onGenerate: () -> Unit,
     onTranslate: () -> Unit,
     onCancel: () -> Unit,
+    onAbort: () -> Unit,
     onRetry: () -> Unit,
     onAllowMetered: () -> Unit,
     modifier: Modifier = Modifier,
@@ -985,6 +991,7 @@ internal fun SubtitleStage(
                     task = task,
                     launch = launch,
                     onCancel = onCancel,
+                    onAbort = onAbort,
                     onAllowMetered = onAllowMetered,
                     modifier = taskModifier,
                 )
@@ -992,6 +999,7 @@ internal fun SubtitleStage(
                 SyncTextTerminalStatus(
                     status = requireNotNull(productStatus),
                     onRetry = onRetry,
+                    onAbort = onAbort,
                     modifier = taskModifier,
                 )
             !hasText ->
@@ -1016,6 +1024,7 @@ private fun SyncTextTaskIndicator(
     task: GenerationTaskSummary?,
     launch: SyncTextLaunchUiState?,
     onCancel: () -> Unit,
+    onAbort: () -> Unit,
     onAllowMetered: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1031,6 +1040,9 @@ private fun SyncTextTaskIndicator(
                 IconButton(onClick = onCancel) {
                     Icon(Icons.Outlined.Pause, contentDescription = "暂停同步文字", tint = AppSecondaryText)
                 }
+                IconButton(onClick = onAbort) {
+                    Icon(Icons.Outlined.Stop, contentDescription = "停止生成", tint = AppError)
+                }
             }
         }
     }
@@ -1040,6 +1052,7 @@ private fun SyncTextTaskIndicator(
 private fun SyncTextTerminalStatus(
     status: String,
     onRetry: () -> Unit,
+    onAbort: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -1050,6 +1063,9 @@ private fun SyncTextTerminalStatus(
         Text(status, color = if (status.contains("失败")) AppError else AppSecondaryText, fontSize = 12.sp)
         IconButton(onClick = onRetry) {
             Icon(Icons.Outlined.Refresh, contentDescription = "继续同步文字", tint = AppSecondaryText)
+        }
+        IconButton(onClick = onAbort) {
+            Icon(Icons.Outlined.Stop, contentDescription = "停止生成", tint = AppError)
         }
     }
 }

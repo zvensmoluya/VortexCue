@@ -7,6 +7,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.Headers.Companion.headersOf
@@ -244,6 +245,69 @@ class TranslationProtocolAdaptersTest {
             assertEquals("response-full", full.requestId)
             assertEquals("response-stream", streamed.requestId)
         }
+    }
+
+    @Test
+    fun `deepseek translation maps reasoning and bounds output`() {
+        val deepSeekRequest =
+            request("https://api.deepseek.com").copy(model = "deepseek-v4-flash")
+        val responses = ResponsesTranslationAdapter(BoundedHttpExecutor(testClient())).requestBodyForTest(deepSeekRequest)
+        val chat = ChatCompletionsTranslationAdapter(BoundedHttpExecutor(testClient())).requestBodyForTest(deepSeekRequest)
+
+        assertEquals("none", responses["reasoning"]?.jsonObject?.get("effort")?.jsonPrimitive?.content)
+        assertEquals("16384", responses["max_output_tokens"]?.jsonPrimitive?.content)
+        assertEquals("disabled", chat["thinking"]?.jsonObject?.get("type")?.jsonPrimitive?.content)
+        assertEquals("16384", chat["max_tokens"]?.jsonPrimitive?.content)
+
+        val generic =
+            ResponsesTranslationAdapter(BoundedHttpExecutor(testClient()))
+                .requestBodyForTest(request("https://example.test").copy(model = "deepseek-v4-flash"))
+        assertEquals("none", generic["reasoning"]?.jsonObject?.get("effort")?.jsonPrimitive?.content)
+        assertFalse("max_output_tokens" in generic)
+
+        val thinking = deepSeekRequest.copy(reasoningLevel = TranslationReasoningLevel.Medium)
+        val thinkingChat = ChatCompletionsTranslationAdapter(BoundedHttpExecutor(testClient())).requestBodyForTest(thinking)
+        assertEquals("enabled", thinkingChat["thinking"]?.jsonObject?.get("type")?.jsonPrimitive?.content)
+        assertEquals("high", thinkingChat["reasoning_effort"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `product reasoning levels map to each protocol contract`() {
+        val executor = BoundedHttpExecutor(testClient())
+        val high = request("https://example.test").copy(reasoningLevel = TranslationReasoningLevel.High)
+
+        val responses = ResponsesTranslationAdapter(executor).requestBodyForTest(high)
+        assertEquals("high", responses["reasoning"]?.jsonObject?.get("effort")?.jsonPrimitive?.content)
+
+        val anthropic = AnthropicMessagesTranslationAdapter(executor).requestBodyForTest(high)
+        assertEquals("adaptive", anthropic["thinking"]?.jsonObject?.get("type")?.jsonPrimitive?.content)
+        assertEquals("high", anthropic["output_config"]?.jsonObject?.get("effort")?.jsonPrimitive?.content)
+        val anthropicOff =
+            AnthropicMessagesTranslationAdapter(executor)
+                .requestBodyForTest(high.copy(reasoningLevel = TranslationReasoningLevel.Off))
+        assertEquals("disabled", anthropicOff["thinking"]?.jsonObject?.get("type")?.jsonPrimitive?.content)
+        assertFalse("output_config" in anthropicOff)
+
+        val chat = ChatCompletionsTranslationAdapter(executor).requestBodyForTest(high)
+        assertEquals("high", chat["reasoning_effort"]?.jsonPrimitive?.content)
+
+        val google = GoogleGenerateContentTranslationAdapter(executor).requestBodyForTest(high)
+        val googleThinking =
+            google["generationConfig"]?.jsonObject?.get("thinkingConfig")?.jsonObject
+        assertEquals("HIGH", googleThinking?.get("thinkingLevel")?.jsonPrimitive?.content)
+        val googleOff =
+            GoogleGenerateContentTranslationAdapter(executor)
+                .requestBodyForTest(high.copy(reasoningLevel = TranslationReasoningLevel.Off))
+        assertEquals(
+            "0",
+            googleOff["generationConfig"]
+                ?.jsonObject
+                ?.get("thinkingConfig")
+                ?.jsonObject
+                ?.get("thinkingBudget")
+                ?.jsonPrimitive
+                ?.content,
+        )
     }
 
     @Test

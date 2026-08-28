@@ -262,3 +262,15 @@ internal val MIGRATION_10_11 =
             connection.execSQL("ALTER TABLE `current_queue_entry` ADD COLUMN `origin_playlist_entry_id` TEXT")
         }
     }
+
+internal val MIGRATION_11_12 =
+    object : Migration(11, 12) {
+        override suspend fun migrate(connection: SQLiteConnection) {
+            connection.execSQL(
+                "ALTER TABLE `sync_text_scheme` ADD COLUMN `translation_reasoning_level` TEXT NOT NULL DEFAULT 'Off'",
+            )
+            connection.execSQL(
+                "ALTER TABLE `generation_attempt` ADD COLUMN `translation_reasoning_level` TEXT NOT NULL DEFAULT 'Off'",
+            )
+        }
+    }
