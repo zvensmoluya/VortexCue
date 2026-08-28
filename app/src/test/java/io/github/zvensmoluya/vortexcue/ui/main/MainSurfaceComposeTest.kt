@@ -6,6 +6,7 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -25,6 +26,8 @@ import io.github.zvensmoluya.vortexcue.data.ContentSummary
 import io.github.zvensmoluya.vortexcue.data.PlaybackItem
 import io.github.zvensmoluya.vortexcue.data.PlaybackRecoveryProjection
 import io.github.zvensmoluya.vortexcue.data.PlaylistSummary
+import io.github.zvensmoluya.vortexcue.data.WorkDetails
+import io.github.zvensmoluya.vortexcue.data.WorkPartSummary
 import io.github.zvensmoluya.vortexcue.data.WorkSummary
 import io.github.zvensmoluya.vortexcue.library.LibraryCoordinatorState
 import io.github.zvensmoluya.vortexcue.ui.player.PlaybackSnapshot
@@ -251,6 +254,63 @@ class MainSurfaceComposeTest {
     }
 
     @Test
+    fun workDetailKeepsOnlyIdentityEditionsAndParts() {
+        var selectedEdition: String? = null
+        val standard = summary("00_standard.wav", durationMs = 300_000L)
+        val withoutSe = summary("00_without_se.wav", durationMs = 300_000L)
+        val bonus = summary("bonus.wav", durationMs = 300_000L)
+        val details =
+            WorkDetails(
+                summary =
+                    WorkSummary(
+                        workId = "work-test",
+                        sourceKey = "folder:test:rj01658524",
+                        releaseCode = "RJ01658524",
+                        title = "RJ01658524",
+                        profileLabel = "WAV 优先 · 标准版 · 包含特典",
+                        partCount = 3,
+                        totalDurationMs = 900_000L,
+                        playbackPartCount = 2,
+                        playbackDurationMs = 600_000L,
+                        lastPlayedAtMs = 1L,
+                        progressContentId = standard.contentId,
+                        progressPositionMs = 60_000L,
+                    ),
+                parts =
+                    listOf(
+                        WorkPartSummary(standard, "正篇", "default", 0L, true),
+                        WorkPartSummary(withoutSe, "正篇", "without-se", 1L, false),
+                        WorkPartSummary(bonus, "特典", "default", 2L, true),
+                    ),
+            )
+
+        compose.setContent {
+            VortexCueTheme {
+                WorkDetailPage(
+                    details = details,
+                    onBack = {},
+                    onPlayFromStart = {},
+                    onPlayPart = {},
+                    onPartLongPress = {},
+                    onSelectEdition = { selectedEdition = it },
+                    onRenameWork = {},
+                    onDeleteWork = {},
+                )
+            }
+        }
+
+        compose.onAllNodesWithText("RJ01658524").assertCountEquals(1)
+        compose.onNodeWithText("内容版本").assertDoesNotExist()
+        compose.onNodeWithText("2 段 · 10分钟").assertDoesNotExist()
+        compose.onNodeWithText("上次听到第 1 段 · 00_standard").assertDoesNotExist()
+        compose.onNodeWithText("继续播放").assertDoesNotExist()
+        compose.onNodeWithText("整部加入歌单").assertDoesNotExist()
+        compose.onNodeWithText("选择段落").assertDoesNotExist()
+        compose.onNodeWithText("无 SE 版").performClick()
+        compose.runOnIdle { assertEquals("without-se", selectedEdition) }
+    }
+
+    @Test
     fun playlistDetailExposesPlayAllAndStartsFromSelectedItem() {
         var playAll = 0
         var selectedIndex = -1
@@ -436,11 +496,11 @@ class MainSurfaceComposeTest {
         }
     }
 
-    private fun summary(name: String): ContentSummary =
+    private fun summary(name: String, durationMs: Long = 0L): ContentSummary =
         ContentSummary(
             contentId = name,
             locatorId = "locator-$name",
-            media = MediaSourceRef(Uri.parse("content://test/$name"), name, "audio/mpeg"),
+            media = MediaSourceRef(Uri.parse("content://test/$name"), name, "audio/mpeg", durationMs = durationMs),
             availability = ContentAvailability.Available,
             disposition = ContentDisposition.Collected,
             lastOpenedAtMs = null,

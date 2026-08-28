@@ -519,20 +519,13 @@ private fun formatWorkDuration(durationMs: Long): String {
 internal fun WorkDetailPage(
     details: WorkDetails,
     onBack: () -> Unit,
-    onContinue: () -> Unit,
     onPlayFromStart: () -> Unit,
     onPlayPart: (Int) -> Unit,
     onPartLongPress: (ContentSummary) -> Unit,
     onSelectEdition: (String) -> Unit,
-    onAddWorkToPlaylist: () -> Unit,
-    onAddPartsToPlaylist: (Set<String>) -> Unit,
     onRenameWork: () -> Unit,
     onDeleteWork: () -> Unit,
 ) {
-    var selectingParts by remember(details.summary.workId) { mutableStateOf(false) }
-    var selectedIds by remember(details.includedParts) {
-        mutableStateOf<Set<String>>(details.includedParts.mapTo(linkedSetOf()) { it.content.contentId })
-    }
     val progressIndex = details.includedParts.indexOfFirst { it.content.contentId == details.summary.progressContentId }
     val hasProgress = progressIndex >= 0 || details.summary.progressPositionMs > 0L
     LazyColumn(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
@@ -544,7 +537,9 @@ internal fun WorkDetailPage(
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Text(details.summary.title, color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(details.summary.releaseCode, color = AppAccent, fontSize = 12.sp)
+                        if (!details.summary.title.equals(details.summary.releaseCode, ignoreCase = true)) {
+                            Text(details.summary.releaseCode, color = AppAccent, fontSize = 12.sp)
+                        }
                     }
                     var menuVisible by remember { mutableStateOf(false) }
                     Box {
@@ -572,56 +567,17 @@ internal fun WorkDetailPage(
                         }
                     }
                 }
-                Text(
-                    "${details.summary.playbackPartCount} 段 · ${formatWorkDuration(details.summary.playbackDurationMs)}",
-                    color = AppSecondaryText,
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
-                )
-                if (progressIndex >= 0) {
-                    Text(
-                        "上次听到第 ${progressIndex + 1} 段 · ${details.includedParts[progressIndex].content.media.displayTitle}",
-                        color = AppMutedText,
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                    )
-                }
-                Button(onClick = onContinue, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(top = 6.dp)) {
-                    Icon(Icons.Outlined.PlayArrow, null)
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (hasProgress) "继续播放" else "播放作品")
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = onAddWorkToPlaylist, modifier = Modifier.weight(1f)) { Text("整部加入歌单") }
-                    TextButton(onClick = { selectingParts = !selectingParts }, modifier = Modifier.weight(1f)) {
-                        Text(if (selectingParts) "取消选择" else "选择段落")
-                    }
-                }
                 if (details.editions.size > 1) {
-                    Text("内容版本", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp, top = 14.dp, bottom = 6.dp))
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                         details.editions.forEachIndexed { index, edition ->
                             SegmentedButton(
                                 selected = edition.isSelected,
                                 onClick = { if (!edition.isSelected) onSelectEdition(edition.key) },
                                 shape = SegmentedButtonDefaults.itemShape(index, details.editions.size),
+                                icon = {},
                                 label = { Text(edition.label, maxLines = 1) },
                             )
                         }
-                    }
-                }
-                if (selectingParts) {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("已选择 ${selectedIds.size} 段", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.weight(1f).padding(start = 8.dp))
-                        Button(
-                            enabled = selectedIds.isNotEmpty(),
-                            onClick = {
-                                onAddPartsToPlaylist(selectedIds)
-                                selectingParts = false
-                            },
-                        ) { Text("加入歌单") }
                     }
                 }
             }
@@ -632,21 +588,11 @@ internal fun WorkDetailPage(
             }
             itemsIndexed(parts, key = { _, part -> part.content.contentId }) { _, part ->
                 val includedIndex = details.includedParts.indexOfFirst { it.content.contentId == part.content.contentId }
-                if (selectingParts) {
-                    SelectableContentRow(
-                        item = part.content,
-                        checked = part.content.contentId in selectedIds,
-                        onChecked = { checked ->
-                            selectedIds = if (checked) selectedIds + part.content.contentId else selectedIds - part.content.contentId
-                        },
-                    )
-                } else {
-                    WorkPartRow(
-                        item = part.content,
-                        onClick = { if (includedIndex >= 0) onPlayPart(includedIndex) },
-                        onLongPress = { onPartLongPress(part.content) },
-                    )
-                }
+                WorkPartRow(
+                    item = part.content,
+                    onClick = { if (includedIndex >= 0) onPlayPart(includedIndex) },
+                    onLongPress = { onPartLongPress(part.content) },
+                )
             }
         }
     }

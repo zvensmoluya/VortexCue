@@ -386,13 +386,6 @@ internal fun MainTabScreen(
                             WorkDetailPage(
                                 details = details,
                                 onBack = { onPlaylistViewChanged(null) },
-                                onContinue = {
-                                    scope.launch {
-                                        val queue = repository.workQueue(details.summary.workId)
-                                        val index = queue.indexOfFirst { it.contentId == details.summary.progressContentId }.coerceAtLeast(0)
-                                        gateway.replaceEntries(queue, index, details.summary.progressPositionMs)
-                                    }
-                                },
                                 onPlayFromStart = {
                                     scope.launch { gateway.replaceEntries(repository.workQueue(details.summary.workId)) }
                                 },
@@ -403,18 +396,7 @@ internal fun MainTabScreen(
                                 onSelectEdition = { editionKey ->
                                     scope.launch {
                                         repository.setWorkEdition(details.summary.workId, editionKey)
-                                        notice = "已切换作品播放版本"
                                     }
-                                },
-                                onAddWorkToPlaylist = {
-                                    membershipWork = details.summary
-                                    membershipWorkPartIds = emptySet()
-                                    membershipInitialIds = emptySet()
-                                },
-                                onAddPartsToPlaylist = { ids ->
-                                    membershipWork = null
-                                    membershipWorkPartIds = ids
-                                    membershipInitialIds = emptySet()
                                 },
                                 onRenameWork = {
                                     workName = details.summary.title

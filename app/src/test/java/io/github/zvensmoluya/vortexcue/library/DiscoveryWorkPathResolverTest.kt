@@ -32,6 +32,11 @@ class DiscoveryWorkPathResolverTest {
             expectedDisplayName = "RJ123456",
             folder = "Downloads/RJ123456/WAV",
         )
+        assertPath(
+            expectedStablePath = "downloads/wav/rj123456",
+            expectedDisplayName = "RJ123456",
+            folder = "Downloads/WAV/RJ123456",
+        )
     }
 
     @Test

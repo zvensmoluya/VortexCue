@@ -58,7 +58,10 @@ private fun inferReleaseTitle(workParts: List<String>, locationLeaf: String, rel
             .takeIf(String::isNotBlank)
     if (titleInLeaf != null) return titleInLeaf
     return workParts.dropLast(1).lastOrNull()
-        ?.takeIf { it.normalizedToken() !in GenericContainerDirectories }
+        ?.takeIf {
+            it.normalizedToken() !in GenericContainerDirectories &&
+                !it.isTechnicalVariantDirectory()
+        }
         ?: releaseCode
 }
 
