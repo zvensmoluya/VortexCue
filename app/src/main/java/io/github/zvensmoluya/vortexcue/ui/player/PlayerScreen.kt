@@ -1142,13 +1142,23 @@ internal fun SyncTextProgressStatus(
                 )
             }
         }
-        Text(
-            presentation.label,
-            color = AppPrimaryText,
-            fontSize = 13.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Column {
+            Text(
+                presentation.label,
+                color = AppPrimaryText,
+                fontSize = 13.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            presentation.streamedTokens?.let { tokens ->
+                Text(
+                    tokens,
+                    color = AppSecondaryText,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                )
+            }
+        }
     }
 }
 

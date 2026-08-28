@@ -78,6 +78,7 @@ class SyncTextTaskRunner(
     private val asr: AsrEngine,
     private val translation: TranslationNetworkGateway,
     private val networkState: SyncTextNetworkState,
+    private val translationActivity: TranslationStreamActivityTracker = TranslationStreamActivityTracker(),
     private val diagnostics: SyncTextDiagnosticRecorder = NoOpSyncTextDiagnosticRecorder,
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val elapsedRealtimeMs: () -> Long = { System.nanoTime() / 1_000_000L },
@@ -242,6 +243,8 @@ class SyncTextTaskRunner(
                 error.message ?: "Sync text task configuration is invalid",
                 true,
             )
+        } finally {
+            translationActivity.clear(task.taskId)
         }
     }
 
@@ -750,6 +753,7 @@ class SyncTextTaskRunner(
         val batchExecutor =
             TranslationBatchExecutor { systemPrompt, userPrompt ->
                 val operation = operationOrdinal.incrementAndGet()
+                val streamId = "${entity.batchId}:$operation"
                 translation.translate(
                     protocol = protocol,
                     request =
@@ -770,6 +774,17 @@ class SyncTextTaskRunner(
                             operationOrdinal = operation,
                             networkAttempt = networkAttempt,
                         )
+                    },
+                    onStreamEvent = { event ->
+                        when (event) {
+                            is TranslationStreamEvent.AttemptStarted ->
+                                translationActivity.beginAttempt(task.taskId, streamId)
+                            is TranslationStreamEvent.ActivityDelta ->
+                                translationActivity.recordDelta(task.taskId, streamId, event.text)
+                            TranslationStreamEvent.AttemptCompleted,
+                            TranslationStreamEvent.AttemptFailed,
+                            -> translationActivity.finishAttempt(task.taskId)
+                        }
                     },
                 )
             }

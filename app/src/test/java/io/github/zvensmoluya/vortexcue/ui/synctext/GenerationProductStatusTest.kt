@@ -85,11 +85,28 @@ class GenerationProductStatusTest {
         assertNull(syncTextProgressPresentation(task(GenerationTaskState.Completed), launch = null))
     }
 
+    @Test
+    fun formatsTranslationStreamActivityWithoutChangingDurableProgress() {
+        assertEquals(
+            SyncTextProgressPresentation("正在翻译", progress = 0.55f, streamedTokens = "3.1k tokens"),
+            syncTextProgressPresentation(
+                task(
+                    state = GenerationTaskState.Running,
+                    stage = GenerationStage.Translating,
+                    progress = 0.55f,
+                    streamedTokenEstimate = 3_120L,
+                ),
+                launch = null,
+            ),
+        )
+    }
+
     private fun task(
         state: GenerationTaskState,
         networkWaitReason: GenerationNetworkWaitReason? = null,
         stage: GenerationStage = GenerationStage.Queued,
         progress: Float = 0f,
+        streamedTokenEstimate: Long? = null,
     ) =
         GenerationTaskSummary(
             taskId = "task",
@@ -106,5 +123,6 @@ class GenerationProductStatusTest {
             paused = state == GenerationTaskState.Paused,
             needsAttention = state == GenerationTaskState.NeedsAttention,
             blockedByScheme = false,
+            streamedTokenEstimate = streamedTokenEstimate,
         )
 }

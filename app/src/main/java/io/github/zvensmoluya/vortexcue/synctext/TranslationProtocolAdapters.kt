@@ -8,7 +8,11 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
@@ -82,6 +86,8 @@ class TranslationProtocolException(
 
 enum class TranslationFailurePhase {
     Transport,
+    FirstOutputTimeout,
+    StreamIdleTimeout,
     StreamingTransport,
     StreamingDecode,
     ResponseDecode,
@@ -99,6 +105,21 @@ interface TranslationProtocolAdapter {
      */
     suspend fun translateStreaming(request: TranslationProviderRequest): TranslationProviderResponse =
         translate(request)
+
+    suspend fun translateStreaming(
+        request: TranslationProviderRequest,
+        onActivity: (String) -> Unit,
+    ): TranslationProviderResponse = translateStreaming(request)
+}
+
+sealed interface TranslationStreamEvent {
+    data class AttemptStarted(val attemptNumber: Int) : TranslationStreamEvent
+
+    data class ActivityDelta(val text: String) : TranslationStreamEvent
+
+    data object AttemptCompleted : TranslationStreamEvent
+
+    data object AttemptFailed : TranslationStreamEvent
 }
 
 class TranslationAdapterRegistry(adapters: List<TranslationProtocolAdapter>) {
@@ -112,7 +133,9 @@ class TranslationNetworkGateway(
     private val registry: TranslationAdapterRegistry,
     private val streamResponses: Boolean = true,
     private val requestBudget: TranslationRequestBudget = TranslationRequestBudget(),
-    private val requestTimeoutMs: Long = DefaultRequestTimeoutMs,
+    private val firstOutputTimeoutMs: Long = DefaultFirstOutputTimeoutMs,
+    private val streamIdleTimeoutMs: Long = DefaultStreamIdleTimeoutMs,
+    private val nonStreamingRequestTimeoutMs: Long = DefaultNonStreamingRequestTimeoutMs,
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val elapsedRealtimeMs: () -> Long = { System.nanoTime() / 1_000_000L },
     private val waitBeforeRetry: suspend (Long) -> Unit = { delay(it) },
@@ -121,13 +144,16 @@ class TranslationNetworkGateway(
     },
 ) {
     init {
-        require(requestTimeoutMs > 0L) { "Translation request timeout must be positive" }
+        require(firstOutputTimeoutMs > 0L) { "Translation first output timeout must be positive" }
+        require(streamIdleTimeoutMs > 0L) { "Translation stream idle timeout must be positive" }
+        require(nonStreamingRequestTimeoutMs > 0L) { "Translation request timeout must be positive" }
     }
 
     suspend fun translate(
         protocol: TranslationProtocol,
         request: TranslationProviderRequest,
         onAttempt: suspend (TranslationNetworkAttempt) -> Unit = {},
+        onStreamEvent: (TranslationStreamEvent) -> Unit = {},
     ): TranslationProviderResponse {
         var lastFailure: TranslationProtocolException? = null
         var attemptEpoch = 0L
@@ -139,19 +165,23 @@ class TranslationNetworkGateway(
                 val permit = requestBudget.acquire()
                 attemptEpoch = permit.cooldownEpoch
                 val response = try {
-                    try {
-                        withTimeout(requestTimeoutMs) {
-                            if (streamResponses) adapter.translateStreaming(request) else adapter.translate(request)
+                    if (streamResponses) {
+                        notifyStreamEvent(onStreamEvent, TranslationStreamEvent.AttemptStarted(index + 1))
+                        awaitStreamingResponse(adapter, request, onStreamEvent)
+                            .also { notifyStreamEvent(onStreamEvent, TranslationStreamEvent.AttemptCompleted) }
+                    } else {
+                        try {
+                            withTimeout(nonStreamingRequestTimeoutMs) { adapter.translate(request) }
+                        } catch (timeout: TimeoutCancellationException) {
+                            throw TranslationProtocolException(
+                                category = GenerationErrorCategory.TemporaryNetwork,
+                                retryable = true,
+                                capacityExceeded = false,
+                                phase = TranslationFailurePhase.Transport,
+                                message = "Translation request timed out after ${nonStreamingRequestTimeoutMs}ms",
+                                cause = timeout,
+                            )
                         }
-                    } catch (timeout: TimeoutCancellationException) {
-                        throw TranslationProtocolException(
-                            category = GenerationErrorCategory.TemporaryNetwork,
-                            retryable = true,
-                            capacityExceeded = false,
-                            phase = TranslationFailurePhase.Transport,
-                            message = "Translation request timed out after ${requestTimeoutMs}ms",
-                            cause = timeout,
-                        )
                     }
                 } finally {
                     permit.release()
@@ -170,6 +200,7 @@ class TranslationNetworkGateway(
                 throw error
             } catch (error: TranslationProtocolException) {
                 lastFailure = error
+                if (streamResponses) notifyStreamEvent(onStreamEvent, TranslationStreamEvent.AttemptFailed)
                 if (error.category == GenerationErrorCategory.RateLimited) requestBudget.degradeToSerial()
                 onAttempt(
                     TranslationNetworkAttempt(
@@ -198,12 +229,80 @@ class TranslationNetworkGateway(
         throw requireNotNull(lastFailure)
     }
 
+    private suspend fun awaitStreamingResponse(
+        adapter: TranslationProtocolAdapter,
+        request: TranslationProviderRequest,
+        onStreamEvent: (TranslationStreamEvent) -> Unit,
+    ): TranslationProviderResponse =
+        coroutineScope {
+            val activity = Channel<Unit>(Channel.CONFLATED)
+            val response =
+                async {
+                    adapter.translateStreaming(request) { delta ->
+                        if (delta.isNotEmpty()) {
+                            activity.trySend(Unit)
+                            notifyStreamEvent(onStreamEvent, TranslationStreamEvent.ActivityDelta(delta))
+                        }
+                    }
+                }
+            var waitingForFirstOutput = true
+            while (true) {
+                val timeoutMs = if (waitingForFirstOutput) firstOutputTimeoutMs else streamIdleTimeoutMs
+                val result =
+                    try {
+                        withTimeout(timeoutMs) {
+                            select<StreamingWaitResult> {
+                                response.onAwait { StreamingWaitResult.Completed(it) }
+                                activity.onReceive { StreamingWaitResult.Activity }
+                            }
+                        }
+                    } catch (timeout: TimeoutCancellationException) {
+                        response.cancel()
+                        val phase =
+                            if (waitingForFirstOutput) {
+                                TranslationFailurePhase.FirstOutputTimeout
+                            } else {
+                                TranslationFailurePhase.StreamIdleTimeout
+                            }
+                        val description = if (waitingForFirstOutput) "produce its first output" else "continue streaming"
+                        throw TranslationProtocolException(
+                            category = GenerationErrorCategory.TemporaryNetwork,
+                            retryable = true,
+                            capacityExceeded = false,
+                            phase = phase,
+                            message = "Translation request did not $description within ${timeoutMs}ms",
+                            cause = timeout,
+                        )
+                    }
+                when (result) {
+                    StreamingWaitResult.Activity -> waitingForFirstOutput = false
+                    is StreamingWaitResult.Completed -> return@coroutineScope result.response
+                }
+            }
+            error("Unreachable")
+        }
+
+    private fun notifyStreamEvent(
+        observer: (TranslationStreamEvent) -> Unit,
+        event: TranslationStreamEvent,
+    ) {
+        runCatching { observer(event) }
+    }
+
     companion object {
         const val MaxNetworkAttempts = 3
-        const val DefaultRequestTimeoutMs = 2 * 60 * 1_000L
+        const val DefaultFirstOutputTimeoutMs = 2 * 60 * 1_000L
+        const val DefaultStreamIdleTimeoutMs = 60 * 1_000L
+        const val DefaultNonStreamingRequestTimeoutMs = 2 * 60 * 1_000L
         private const val MaxRetryJitterMs = 750L
         private val RetryDelaysMs = longArrayOf(500L, 1_500L, 3_000L)
     }
+}
+
+private sealed interface StreamingWaitResult {
+    data object Activity : StreamingWaitResult
+
+    data class Completed(val response: TranslationProviderResponse) : StreamingWaitResult
 }
 
 class SyncTextHttpClient(appVersion: String = "unknown") {
@@ -454,6 +553,7 @@ internal class SseEventReader(
 
 data class StreamingTextEvent(
     val text: String = "",
+    val activityText: String = text,
     val usage: UsageRecord = UsageRecord(),
     val providerRequestId: String? = null,
 )
@@ -507,7 +607,13 @@ abstract class JsonTranslationProtocolAdapter(
         )
     }
 
-    final override suspend fun translateStreaming(request: TranslationProviderRequest): TranslationProviderResponse {
+    final override suspend fun translateStreaming(request: TranslationProviderRequest): TranslationProviderResponse =
+        translateStreaming(request, onActivity = {})
+
+    final override suspend fun translateStreaming(
+        request: TranslationProviderRequest,
+        onActivity: (String) -> Unit,
+    ): TranslationProviderResponse {
         val body = json.encodeToString(JsonObject.serializer(), streamingRequestBody(request))
         val httpRequest =
             Request.Builder()
@@ -522,7 +628,10 @@ abstract class JsonTranslationProtocolAdapter(
         val events = mutableListOf<StreamingTextEvent>()
         val reader = SseEventReader { data ->
             if (data.trim() != "[DONE]" && data.trimStart().startsWith("{")) {
-                events += parseStreamingEvent(data)
+                parseStreamingEvent(data).also { event ->
+                    events += event
+                    if (event.activityText.isNotEmpty()) onActivity(event.activityText)
+                }
             }
         }
         val exchange =
@@ -728,10 +837,17 @@ class ResponsesTranslationAdapter(
         val root = json.parseToJsonElement(data).jsonObject
         val type = root.string("type")
         val text = if (type == "response.output_text.delta") root.string("delta").orEmpty() else ""
+        val reasoning =
+            if (type?.contains("reasoning") == true && type.endsWith(".delta")) {
+                root.string("delta").orEmpty()
+            } else {
+                ""
+            }
         val usageRoot = root.firstNonEmptyObject("usage")
             ?: root.objectValue("response").firstNonEmptyObject("usage")
         return StreamingTextEvent(
             text = text,
+            activityText = text + reasoning,
             usage = usageRoot?.toUsage("input_tokens", "output_tokens", "total_tokens") ?: UsageRecord(),
             providerRequestId = root.string("id") ?: root.objectValue("response").string("id"),
         )
@@ -788,18 +904,21 @@ class AnthropicMessagesTranslationAdapter(
 
     override fun parseStreamingEvent(data: String): StreamingTextEvent {
         val root = json.parseToJsonElement(data).jsonObject
+        val delta = root.objectValue("delta")
         val text =
             if (root.string("type") == "content_block_delta") {
-                root.objectValue("delta").string("text").orEmpty()
+                delta.string("text").orEmpty()
             } else {
                 ""
             }
+        val thinking = if (delta.string("type") == "thinking_delta") delta.string("thinking").orEmpty() else ""
         val usageRoot =
             root.firstNonEmptyObject("usage")
                 ?: root.objectValue("message").firstNonEmptyObject("usage")
                 ?: root.objectValue("message_delta").firstNonEmptyObject("usage")
         return StreamingTextEvent(
             text = text,
+            activityText = text + thinking,
             usage = usageRoot?.toUsage("input_tokens", "output_tokens", "total_tokens") ?: UsageRecord(),
             providerRequestId = root.string("id") ?: root.objectValue("message").string("id"),
         )
@@ -881,8 +1000,10 @@ class ChatCompletionsTranslationAdapter(
                 is JsonArray -> content.mapNotNull { (it as? JsonObject)?.string("text") }.joinToString("\n")
                 else -> ""
             }
+        val reasoning = delta?.string("reasoning_content") ?: delta?.string("reasoning").orEmpty()
         return StreamingTextEvent(
             text = text,
+            activityText = text + reasoning,
             usage = root.objectValue("usage").toUsage("prompt_tokens", "completion_tokens", "total_tokens"),
             providerRequestId = root.string("id"),
         )

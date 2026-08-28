@@ -248,6 +248,7 @@ data class GenerationTaskSummary(
     val blockedByScheme: Boolean,
     val errorCategory: GenerationErrorCategory? = null,
     val errorMessage: String? = null,
+    val streamedTokenEstimate: Long? = null,
 )
 
 data class UsageRecord(

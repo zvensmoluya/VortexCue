@@ -3,6 +3,7 @@ package io.github.zvensmoluya.vortexcue.synctext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
@@ -211,6 +212,34 @@ class TranslationProtocolAdaptersTest {
     }
 
     @Test
+    fun `responses reports reasoning as activity without mixing it into translation text`() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(
+                MockResponse(
+                    headers = headersOf("Content-Type", "text/event-stream"),
+                    body =
+                        """
+                        data: {"type":"response.reasoning_summary_text.delta","delta":"working"}
+
+                        data: {"type":"response.output_text.delta","delta":"[cue-1] one"}
+
+                        data: {"type":"response.completed","response":{"usage":{"output_tokens":3}}}
+
+                        """.trimIndent(),
+                ),
+            )
+            val activity = mutableListOf<String>()
+            val adapter = ResponsesTranslationAdapter(BoundedHttpExecutor(testClient()))
+
+            val response = adapter.translateStreaming(request(server.url("/").toString()), activity::add)
+
+            assertEquals("[cue-1] one", response.text)
+            assertEquals(listOf("working", "[cue-1] one"), activity)
+        }
+    }
+
+    @Test
     fun `responses adapter falls back to provider ids carried in response bodies`() = runBlocking {
         MockWebServer().use { server ->
             server.start()
@@ -379,7 +408,7 @@ class TranslationProtocolAdaptersTest {
         val gateway =
             TranslationNetworkGateway(
                 registry = TranslationAdapterRegistry(listOf(adapter)),
-                requestTimeoutMs = 20L,
+                firstOutputTimeoutMs = 20L,
                 waitBeforeRetry = {},
                 retryJitterMs = { 0L },
             )
@@ -397,7 +426,82 @@ class TranslationProtocolAdaptersTest {
         assertTrue(error.retryable)
         assertEquals(TranslationNetworkGateway.MaxNetworkAttempts, calls)
         assertEquals(TranslationNetworkGateway.MaxNetworkAttempts, attempts.size)
-        assertTrue(attempts.all { it.error?.message?.contains("timed out") == true })
+        assertTrue(attempts.all { it.error?.phase == TranslationFailurePhase.FirstOutputTimeout })
+    }
+
+    @Test
+    fun `stream activity keeps a response alive beyond the first output timeout`() = runBlocking {
+        val events = mutableListOf<TranslationStreamEvent>()
+        val adapter =
+            object : TranslationProtocolAdapter {
+                override val protocol = TranslationProtocol.Responses
+
+                override suspend fun translate(request: TranslationProviderRequest): TranslationProviderResponse =
+                    error("Streaming path expected")
+
+                override suspend fun translateStreaming(
+                    request: TranslationProviderRequest,
+                    onActivity: (String) -> Unit,
+                ): TranslationProviderResponse {
+                    repeat(3) {
+                        delay(200L)
+                        onActivity("abcd")
+                    }
+                    return TranslationProviderResponse("done", UsageRecord(), byteArrayOf(), 200, 1L, 1L, null, request.endpoint)
+                }
+            }
+        val gateway =
+            TranslationNetworkGateway(
+                registry = TranslationAdapterRegistry(listOf(adapter)),
+                firstOutputTimeoutMs = 500L,
+                streamIdleTimeoutMs = 500L,
+            )
+
+        val response =
+            gateway.translate(
+                TranslationProtocol.Responses,
+                request("https://example.test/v1/responses"),
+                onStreamEvent = events::add,
+            )
+
+        assertEquals("done", response.text)
+        assertEquals(3, events.filterIsInstance<TranslationStreamEvent.ActivityDelta>().size)
+        assertTrue(events.first() is TranslationStreamEvent.AttemptStarted)
+        assertTrue(events.last() is TranslationStreamEvent.AttemptCompleted)
+    }
+
+    @Test
+    fun `gateway times out a stream that becomes idle after output`() = runBlocking {
+        val adapter =
+            object : TranslationProtocolAdapter {
+                override val protocol = TranslationProtocol.Responses
+
+                override suspend fun translate(request: TranslationProviderRequest): TranslationProviderResponse =
+                    error("Streaming path expected")
+
+                override suspend fun translateStreaming(
+                    request: TranslationProviderRequest,
+                    onActivity: (String) -> Unit,
+                ): TranslationProviderResponse {
+                    onActivity("first")
+                    awaitCancellation()
+                }
+            }
+        val gateway =
+            TranslationNetworkGateway(
+                registry = TranslationAdapterRegistry(listOf(adapter)),
+                firstOutputTimeoutMs = 100L,
+                streamIdleTimeoutMs = 20L,
+                waitBeforeRetry = {},
+                retryJitterMs = { 0L },
+            )
+
+        val error =
+            runCatching {
+                gateway.translate(TranslationProtocol.Responses, request("https://example.test/v1/responses"))
+            }.exceptionOrNull() as TranslationProtocolException
+
+        assertEquals(TranslationFailurePhase.StreamIdleTimeout, error.phase)
     }
 
     @Test

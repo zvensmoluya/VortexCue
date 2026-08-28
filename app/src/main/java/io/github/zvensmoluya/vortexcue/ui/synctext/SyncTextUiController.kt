@@ -25,6 +25,7 @@ import io.github.zvensmoluya.vortexcue.synctext.SyncTextRepository
 import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocol
 import io.github.zvensmoluya.vortexcue.synctext.TranslationReasoningLevel
+import io.github.zvensmoluya.vortexcue.synctext.TranslationStreamActivityTracker
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -185,6 +186,7 @@ private data class OverlayState(
 
 class SyncTextUiController(
     private val repository: SyncTextRepository,
+    private val translationActivity: TranslationStreamActivityTracker = TranslationStreamActivityTracker(),
     private val audio: AudioWindowExtractor,
     private val materializeCandidate: suspend (String) -> String,
     private val scope: CoroutineScope,
@@ -203,12 +205,16 @@ class SyncTextUiController(
             repository.config,
             repository.credentialMetadata,
             repository.tasks,
+            translationActivity.tokenEstimates,
             overlay,
-        ) { config, credentials, tasks, local ->
+        ) { config, credentials, tasks, tokenEstimates, local ->
             SyncTextUiState(
                 config = config,
                 credentials = credentials,
-                tasks = tasks,
+                tasks =
+                    tasks.map { task ->
+                        task.copy(streamedTokenEstimate = tokenEstimates[task.taskId]?.takeIf { it > 0L })
+                    },
                 generationContent = local.generationContent,
                 audioTracks = local.audioTracks,
                 inspectingAudioTracks = local.inspectingAudioTracks,

@@ -124,8 +124,9 @@ Endpoint 可以使用界面模板或自定义 HTTPS 地址。Model 只允许手�
 - 禁止跨源重定向，连接失败不交给 OkHttp 隐式重试；
 - 不记录请求 / 响应正文和认证头；错误信息必须脱敏；
 - 请求与响应使用 kotlinx.serialization 的结构化 JSON API；响应体上限 8 MiB；
-- LLM 翻译默认使用各协议的 SSE 流式响应；网络层只保留一个全局 `streamResponses` 开关以便兼容不支持流式的自定义 Endpoint。流式只改变响应接收方式，仍须累计完整正文后执行严格 cue ID 校验，不发布半成品结果；
+- LLM 翻译默认使用各协议的 SSE 流式响应；网络层只保留一个全局 `streamResponses` 开关以便兼容不支持流式的自定义 Endpoint。接收到的文字或可见思考 delta 同时产生仅驻留内存的活动信号，供前台显示粗略实时 token 计数；计数不写入 Room、不参与任务进度，也不替代上游最终 usage。流式正文仍须累计完整后执行严格 cue ID 校验，不发布半成品结果；
 - Chat Completions / Responses / Anthropic 分别解析各自 SSE 事件；Google 使用 `streamGenerateContent`。WebSocket 不作为 V1 普通批次翻译传输协议；
+- 流式请求分别限制首次有效输出等待时间和相邻有效 delta 的空闲时间；收到有效 delta 后不得继续套用固定 120 秒总时长限制。非流式兼容路径仍使用有限的整体请求超时；
 - OpenRouter ASR 的 base64 由流式 `RequestBody` 写出，不构造完整 base64 字符串；
 - 只显示上游真实返回的 usage / cost，不根据模型名估造价格。
 

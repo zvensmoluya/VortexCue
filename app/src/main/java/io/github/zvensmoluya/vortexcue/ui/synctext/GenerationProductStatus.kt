@@ -5,10 +5,12 @@ import io.github.zvensmoluya.vortexcue.synctext.GenerationStage
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskKind
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskState
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskSummary
+import java.util.Locale
 
 internal data class SyncTextProgressPresentation(
     val label: String,
     val progress: Float?,
+    val streamedTokens: String? = null,
 )
 
 internal fun syncTextProgressPresentation(
@@ -38,8 +40,22 @@ internal fun syncTextProgressPresentation(
                 }
             else -> activeTask.stage.progressLabel(activeTask.kind)
         }
-    return SyncTextProgressPresentation(label, activeTask.progress.coerceIn(0f, 1f))
+    return SyncTextProgressPresentation(
+        label = label,
+        progress = activeTask.progress.coerceIn(0f, 1f),
+        streamedTokens =
+            activeTask.streamedTokenEstimate
+                ?.takeIf { activeTask.stage == GenerationStage.Translating && it > 0L }
+                ?.let(::formatStreamedTokens),
+    )
 }
+
+internal fun formatStreamedTokens(tokens: Long): String =
+    when {
+        tokens < 1_000L -> "$tokens tokens"
+        tokens < 10_000L -> String.format(Locale.US, "%.1fk tokens", tokens / 1_000.0)
+        else -> "${tokens / 1_000L}k tokens"
+    }
 
 private fun GenerationStage.progressLabel(kind: GenerationTaskKind): String =
     when (this) {

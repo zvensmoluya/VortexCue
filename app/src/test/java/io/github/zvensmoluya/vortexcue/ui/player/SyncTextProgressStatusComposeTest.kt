@@ -56,6 +56,27 @@ class SyncTextProgressStatusComposeTest {
     }
 
     @Test
+    fun showsLightweightTokenActivityWhileTranslating() {
+        compose.setContent {
+            VortexCueTheme {
+                SyncTextProgressStatus(
+                    task =
+                        runningTask(
+                            progress = 0.55f,
+                            kind = GenerationTaskKind.TranslationDerivation,
+                            stage = GenerationStage.Translating,
+                            streamedTokenEstimate = 3_120L,
+                        ),
+                    launch = null,
+                )
+            }
+        }
+
+        compose.onNodeWithText("正在翻译").assertIsDisplayed()
+        compose.onNodeWithText("3.1k tokens").assertIsDisplayed()
+    }
+
+    @Test
     fun emptySubtitleStageOffersOneDirectGenerationAction() {
         var launches = 0
         compose.setContent {
@@ -190,20 +211,24 @@ class SyncTextProgressStatusComposeTest {
     private fun runningTask(
         progress: Float,
         state: GenerationTaskState = GenerationTaskState.Running,
+        kind: GenerationTaskKind = GenerationTaskKind.SourceGeneration,
+        stage: GenerationStage = GenerationStage.RecognizingSpeech,
+        streamedTokenEstimate: Long? = null,
     ) =
         GenerationTaskSummary(
             taskId = "task",
             contentId = "content",
             schemeId = "config",
-            kind = GenerationTaskKind.SourceGeneration,
+            kind = kind,
             queuePosition = 0,
             state = state,
-            stage = GenerationStage.RecognizingSpeech,
+            stage = stage,
             progress = progress,
             targetLanguage = null,
             waitingForNetwork = false,
             paused = false,
             needsAttention = false,
             blockedByScheme = false,
+            streamedTokenEstimate = streamedTokenEstimate,
         )
 }
