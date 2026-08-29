@@ -108,14 +108,26 @@ interface TranslationProtocolAdapter {
 
     suspend fun translateStreaming(
         request: TranslationProviderRequest,
-        onActivity: (String) -> Unit,
+        onActivity: (TranslationStreamActivity) -> Unit,
     ): TranslationProviderResponse = translateStreaming(request)
 }
+
+enum class TranslationStreamActivityKind {
+    Reasoning,
+    Output,
+}
+
+data class TranslationStreamActivity(
+    val kind: TranslationStreamActivityKind,
+    val text: String,
+)
 
 sealed interface TranslationStreamEvent {
     data class AttemptStarted(val attemptNumber: Int) : TranslationStreamEvent
 
-    data class ActivityDelta(val text: String) : TranslationStreamEvent
+    data class ReasoningDelta(val text: String) : TranslationStreamEvent
+
+    data class OutputDelta(val text: String) : TranslationStreamEvent
 
     data object AttemptCompleted : TranslationStreamEvent
 
@@ -153,7 +165,7 @@ class TranslationNetworkGateway(
         protocol: TranslationProtocol,
         request: TranslationProviderRequest,
         onAttempt: suspend (TranslationNetworkAttempt) -> Unit = {},
-        onStreamEvent: (TranslationStreamEvent) -> Unit = {},
+        onStreamEvent: suspend (TranslationStreamEvent) -> Unit = {},
     ): TranslationProviderResponse {
         var lastFailure: TranslationProtocolException? = null
         var attemptEpoch = 0L
@@ -232,17 +244,14 @@ class TranslationNetworkGateway(
     private suspend fun awaitStreamingResponse(
         adapter: TranslationProtocolAdapter,
         request: TranslationProviderRequest,
-        onStreamEvent: (TranslationStreamEvent) -> Unit,
+        onStreamEvent: suspend (TranslationStreamEvent) -> Unit,
     ): TranslationProviderResponse =
         coroutineScope {
-            val activity = Channel<Unit>(Channel.CONFLATED)
+            val activity = Channel<TranslationStreamActivity>(Channel.UNLIMITED)
             val response =
                 async {
                     adapter.translateStreaming(request) { delta ->
-                        if (delta.isNotEmpty()) {
-                            activity.trySend(Unit)
-                            notifyStreamEvent(onStreamEvent, TranslationStreamEvent.ActivityDelta(delta))
-                        }
+                        if (delta.text.isNotEmpty()) activity.trySend(delta)
                     }
                 }
             var waitingForFirstOutput = true
@@ -253,7 +262,7 @@ class TranslationNetworkGateway(
                         withTimeout(timeoutMs) {
                             select<StreamingWaitResult> {
                                 response.onAwait { StreamingWaitResult.Completed(it) }
-                                activity.onReceive { StreamingWaitResult.Activity }
+                                activity.onReceive { StreamingWaitResult.Activity(it) }
                             }
                         }
                     } catch (timeout: TimeoutCancellationException) {
@@ -275,18 +284,32 @@ class TranslationNetworkGateway(
                         )
                     }
                 when (result) {
-                    StreamingWaitResult.Activity -> waitingForFirstOutput = false
-                    is StreamingWaitResult.Completed -> return@coroutineScope result.response
+                    is StreamingWaitResult.Activity -> {
+                        waitingForFirstOutput = false
+                        notifyStreamEvent(onStreamEvent, result.activity.toEvent())
+                    }
+                    is StreamingWaitResult.Completed -> {
+                        while (true) {
+                            val pending = activity.tryReceive().getOrNull() ?: break
+                            notifyStreamEvent(onStreamEvent, pending.toEvent())
+                        }
+                        return@coroutineScope result.response
+                    }
                 }
             }
             error("Unreachable")
         }
 
-    private fun notifyStreamEvent(
-        observer: (TranslationStreamEvent) -> Unit,
+    private suspend fun notifyStreamEvent(
+        observer: suspend (TranslationStreamEvent) -> Unit,
         event: TranslationStreamEvent,
     ) {
-        runCatching { observer(event) }
+        try {
+            observer(event)
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            // UI/runtime observation must never change the network result.
+        }
     }
 
     companion object {
@@ -300,10 +323,16 @@ class TranslationNetworkGateway(
 }
 
 private sealed interface StreamingWaitResult {
-    data object Activity : StreamingWaitResult
+    data class Activity(val activity: TranslationStreamActivity) : StreamingWaitResult
 
     data class Completed(val response: TranslationProviderResponse) : StreamingWaitResult
 }
+
+private fun TranslationStreamActivity.toEvent(): TranslationStreamEvent =
+    when (kind) {
+        TranslationStreamActivityKind.Reasoning -> TranslationStreamEvent.ReasoningDelta(text)
+        TranslationStreamActivityKind.Output -> TranslationStreamEvent.OutputDelta(text)
+    }
 
 class SyncTextHttpClient(appVersion: String = "unknown") {
     val client: OkHttpClient =
@@ -553,10 +582,19 @@ internal class SseEventReader(
 
 data class StreamingTextEvent(
     val text: String = "",
-    val activityText: String = text,
+    val reasoningText: String = "",
     val usage: UsageRecord = UsageRecord(),
     val providerRequestId: String? = null,
-)
+) {
+    val activities: List<TranslationStreamActivity>
+        get() =
+            buildList {
+                if (reasoningText.isNotEmpty()) {
+                    add(TranslationStreamActivity(TranslationStreamActivityKind.Reasoning, reasoningText))
+                }
+                if (text.isNotEmpty()) add(TranslationStreamActivity(TranslationStreamActivityKind.Output, text))
+            }
+}
 
 abstract class JsonTranslationProtocolAdapter(
     private val executor: BoundedHttpExecutor,
@@ -612,7 +650,7 @@ abstract class JsonTranslationProtocolAdapter(
 
     final override suspend fun translateStreaming(
         request: TranslationProviderRequest,
-        onActivity: (String) -> Unit,
+        onActivity: (TranslationStreamActivity) -> Unit,
     ): TranslationProviderResponse {
         val body = json.encodeToString(JsonObject.serializer(), streamingRequestBody(request))
         val httpRequest =
@@ -630,7 +668,7 @@ abstract class JsonTranslationProtocolAdapter(
             if (data.trim() != "[DONE]" && data.trimStart().startsWith("{")) {
                 parseStreamingEvent(data).also { event ->
                     events += event
-                    if (event.activityText.isNotEmpty()) onActivity(event.activityText)
+                    event.activities.forEach(onActivity)
                 }
             }
         }
@@ -847,7 +885,7 @@ class ResponsesTranslationAdapter(
             ?: root.objectValue("response").firstNonEmptyObject("usage")
         return StreamingTextEvent(
             text = text,
-            activityText = text + reasoning,
+            reasoningText = reasoning,
             usage = usageRoot?.toUsage("input_tokens", "output_tokens", "total_tokens") ?: UsageRecord(),
             providerRequestId = root.string("id") ?: root.objectValue("response").string("id"),
         )
@@ -918,7 +956,7 @@ class AnthropicMessagesTranslationAdapter(
                 ?: root.objectValue("message_delta").firstNonEmptyObject("usage")
         return StreamingTextEvent(
             text = text,
-            activityText = text + thinking,
+            reasoningText = thinking,
             usage = usageRoot?.toUsage("input_tokens", "output_tokens", "total_tokens") ?: UsageRecord(),
             providerRequestId = root.string("id") ?: root.objectValue("message").string("id"),
         )
@@ -1003,7 +1041,7 @@ class ChatCompletionsTranslationAdapter(
         val reasoning = delta?.string("reasoning_content") ?: delta?.string("reasoning").orEmpty()
         return StreamingTextEvent(
             text = text,
-            activityText = text + reasoning,
+            reasoningText = reasoning,
             usage = root.objectValue("usage").toUsage("prompt_tokens", "completion_tokens", "total_tokens"),
             providerRequestId = root.string("id"),
         )

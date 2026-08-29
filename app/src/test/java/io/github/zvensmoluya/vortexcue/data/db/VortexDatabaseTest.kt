@@ -5,6 +5,8 @@ import androidx.room3.Room
 import androidx.room3.withWriteTransaction
 import androidx.room3.testing.MigrationTestHelper
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import io.github.zvensmoluya.vortexcue.synctext.GenerationRuntimePhase
+import io.github.zvensmoluya.vortexcue.synctext.GenerationRuntimeStatusWriter
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -98,6 +100,72 @@ class VortexDatabaseTest {
         contentDao.upsertDisposition(ContentDispositionEntity("first", true, 2L))
 
         assertEquals(true, contentDao.disposition("first")?.isCollected)
+    }
+
+    @Test
+    fun streamActivitySurvivesWriterRecreationAndOnlyPublishesRealDeltas() = runBlocking {
+        insertContent("stream", "content://media/stream")
+        val syncTextDao = database.syncTextDao()
+        syncTextDao.upsertCredential(
+            CredentialMetadataEntity("credential", "Credential", "Shared", "••••", 1L, 1L),
+        )
+        syncTextDao.upsertScheme(
+            SyncTextSchemeEntity(
+                schemeId = "scheme",
+                name = "Scheme",
+                asrProfile = "OpenRouter",
+                asrCredentialId = "credential",
+                translationProtocol = "OpenAIChatCompletions",
+                translationEndpoint = null,
+                translationModel = "model",
+                translationCredentialId = "credential",
+                defaultTargetLanguage = "zh-CN",
+                defaultPresentationMode = "Primary",
+                isDefault = true,
+                createdAtMs = 1L,
+                updatedAtMs = 1L,
+            ),
+        )
+        syncTextDao.upsertTask(
+            GenerationTaskEntity(
+                taskId = "task",
+                contentId = "stream",
+                schemeId = "scheme",
+                kind = "TranslationDerivation",
+                activeDedupeKey = "stream-translation",
+                state = "Running",
+                stage = "Translating",
+                queuePosition = 0,
+                progress = 0f,
+                targetLanguage = "zh-CN",
+                waitingForNetwork = false,
+                paused = false,
+                needsAttention = false,
+                schemeBlocked = false,
+                currentAttemptId = "attempt",
+                createdAtMs = 1L,
+                updatedAtMs = 1L,
+            ),
+        )
+
+        var now = 1_000L
+        val firstWriter = GenerationRuntimeStatusWriter(syncTextDao) { now }
+        firstWriter.updateTask("task", GenerationRuntimePhase.PreparingTranslation)
+        firstWriter.recordTaskStreamActivity("task", "abcd")
+        now += 100L
+        firstWriter.recordTaskStreamActivity("task", "界")
+
+        assertEquals(4, syncTextDao.runtimeStatus("task:task")?.observedItemCount)
+        firstWriter.flushTaskStreamActivity("task")
+        assertEquals(8, syncTextDao.runtimeStatus("task:task")?.observedItemCount)
+
+        now += 250L
+        val restoredWriter = GenerationRuntimeStatusWriter(syncTextDao) { now }
+        restoredWriter.recordTaskStreamActivity("task", "xy")
+
+        val restored = syncTextDao.runtimeStatus("task:task")
+        assertEquals(10, restored?.observedItemCount)
+        assertEquals(GenerationRuntimePhase.PreparingTranslation.name, restored?.phase)
     }
 
     @Test
@@ -596,6 +664,35 @@ class VortexDatabaseTest {
                     }
                     assertTrue(found)
                 }
+            }
+        }
+    }
+
+    @Test
+    fun versionTwelveAddsDurableGenerationRuntimeFacts() = runBlocking {
+        val path = temporaryFolder.root.resolve("migration-v12-v13.db").toPath()
+        val helper =
+            MigrationTestHelper(
+                databasePath = path,
+                schemaDirectoryPath = File("schemas").toPath(),
+                driver = BundledSQLiteDriver(),
+                databaseClass = VortexDatabase::class,
+                databaseFactory = { VortexDatabase_Impl() },
+                autoMigrationSpecs = emptyList(),
+            )
+        helper.createDatabase(12).close()
+
+        helper.runMigrationsAndValidate(13, listOf(MIGRATION_12_13)).use { connection ->
+            connection.prepare("PRAGMA table_info(generation_runtime_status)").use { statement ->
+                val columns = buildSet {
+                    while (statement.step()) add(statement.getText(1))
+                }
+                assertTrue("runtime_id" in columns)
+                assertTrue("task_id" in columns)
+                assertTrue("phase" in columns)
+                assertTrue("observed_item_count" in columns)
+                assertTrue("expected_item_count" in columns)
+                assertTrue("phase_started_at_ms" in columns)
             }
         }
     }

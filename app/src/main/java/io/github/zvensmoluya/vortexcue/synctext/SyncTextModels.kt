@@ -213,6 +213,35 @@ enum class GenerationStage {
     Completed,
 }
 
+enum class GenerationRuntimePhase {
+    Planning,
+    MaterializingText,
+    ExtractingAudio,
+    AwaitingAsr,
+    RetryingAsr,
+    PreparingTranslation,
+    AwaitingTranslation,
+    ModelReasoning,
+    ReceivingTranslation,
+    ValidatingTranslation,
+    RetryingTranslation,
+    Splitting,
+    Publishing,
+    Completed,
+}
+
+enum class GenerationWorkUnitKind {
+    AsrWindow,
+    TranslationBatch,
+}
+
+enum class GenerationWorkUnitState {
+    Waiting,
+    Running,
+    Completed,
+    Failed,
+}
+
 enum class GenerationErrorCategory {
     Configuration,
     Authentication,
@@ -248,7 +277,24 @@ data class GenerationTaskSummary(
     val blockedByScheme: Boolean,
     val errorCategory: GenerationErrorCategory? = null,
     val errorMessage: String? = null,
+    val runtimePhase: GenerationRuntimePhase? = null,
+    val runtimePhaseStartedAtMs: Long? = null,
     val streamedTokenEstimate: Long? = null,
+    val streamActivityRevision: Long? = null,
+    val workUnits: List<GenerationWorkUnitSummary> = emptyList(),
+)
+
+data class GenerationWorkUnitSummary(
+    val workUnitId: String,
+    val kind: GenerationWorkUnitKind,
+    val ordinal: Int,
+    val state: GenerationWorkUnitState,
+    val runtimePhase: GenerationRuntimePhase? = null,
+    val runtimePhaseStartedAtMs: Long? = null,
+    val observedItemCount: Int? = null,
+    val expectedItemCount: Int? = null,
+    val operationOrdinal: Int? = null,
+    val retryOrdinal: Int? = null,
 )
 
 data class UsageRecord(

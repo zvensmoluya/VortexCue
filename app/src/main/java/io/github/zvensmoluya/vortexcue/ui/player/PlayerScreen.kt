@@ -1,9 +1,16 @@
 package io.github.zvensmoluya.vortexcue.ui.player
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -90,6 +97,8 @@ import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
@@ -116,8 +125,10 @@ import io.github.zvensmoluya.vortexcue.synctext.GeneratedResultCompleteness
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskState
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskSummary
 import io.github.zvensmoluya.vortexcue.synctext.GenerationNetworkWaitReason
+import io.github.zvensmoluya.vortexcue.synctext.GenerationWorkUnitState
 import io.github.zvensmoluya.vortexcue.ui.queue.QueueItemRow
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextLaunchUiState
+import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextProgressPresentation
 import io.github.zvensmoluya.vortexcue.ui.synctext.generationProductStatus
 import io.github.zvensmoluya.vortexcue.ui.synctext.syncTextProgressPresentation
 import io.github.zvensmoluya.vortexcue.ui.theme.*
@@ -1110,52 +1121,185 @@ private fun SubtitleTimingEditor(
 internal fun SyncTextProgressStatus(
     task: GenerationTaskSummary?,
     launch: SyncTextLaunchUiState?,
+    expanded: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val presentation = syncTextProgressPresentation(task, launch) ?: return
-    Row(
-        modifier = modifier.heightIn(min = 52.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
-    ) {
-        Box(modifier = Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-            val progress = presentation.progress
-            if (progress == null) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(36.dp),
-                    color = AppAccent,
-                    strokeWidth = 3.dp,
-                )
-            } else {
-                CircularProgressIndicator(
-                    progress = { progress },
-                    modifier = Modifier.size(40.dp),
-                    color = AppAccent,
-                    strokeWidth = 3.dp,
-                    trackColor = AppHairline,
-                )
-                Text(
-                    "${(progress * 100).roundToInt()}%",
-                    color = AppPrimaryText,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-        }
-        Column {
+    if (expanded) {
+        Column(
+            modifier = modifier.heightIn(min = 180.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            WorkUnitRing(presentation = presentation, size = 112.dp)
+            Spacer(Modifier.height(20.dp))
             Text(
                 presentation.label,
                 color = AppPrimaryText,
-                fontSize = 13.sp,
+                fontSize = 16.sp,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
             )
-            presentation.streamedTokens?.let { tokens ->
+            presentation.detail?.let { detail ->
+                Spacer(Modifier.height(6.dp))
                 Text(
-                    tokens,
+                    detail,
                     color = AppSecondaryText,
-                    fontSize = 11.sp,
-                    maxLines = 1,
+                    fontSize = 12.sp,
+                    maxLines = 2,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+    } else {
+        Row(
+            modifier = modifier.heightIn(min = 52.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+        ) {
+            if (presentation.showWorkUnitRing) {
+                WorkUnitRing(presentation = presentation, size = 44.dp)
+            } else {
+                StreamActivityGlyph(presentation = presentation)
+            }
+            Column {
+                Text(
+                    presentation.label,
+                    color = AppPrimaryText,
+                    fontSize = 13.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                presentation.detail?.let { detail ->
+                    Text(
+                        detail,
+                        color = AppSecondaryText,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StreamActivityGlyph(presentation: SyncTextProgressPresentation) {
+    val glow = remember { Animatable(0.16f) }
+    val initialRevision = remember { presentation.streamActivityRevision }
+    LaunchedEffect(presentation.streamActivityRevision) {
+        if (
+            presentation.streamActivityRevision != null &&
+                presentation.streamActivityRevision != initialRevision
+        ) {
+            glow.snapTo(1f)
+            glow.animateTo(0.16f, animationSpec = tween(850))
+        }
+    }
+    Canvas(
+        modifier =
+            Modifier.size(30.dp).semantics {
+                contentDescription = presentation.label
+            },
+    ) {
+        val stroke = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
+        drawArc(
+            color = AppHairline,
+            startAngle = 140f,
+            sweepAngle = 260f,
+            useCenter = false,
+            style = stroke,
+        )
+        drawArc(
+            color = AppAccent.copy(alpha = 0.25f + glow.value * 0.75f),
+            startAngle = 300f,
+            sweepAngle = 80f,
+            useCenter = false,
+            style = stroke,
+        )
+    }
+}
+
+@Composable
+private fun WorkUnitRing(
+    presentation: SyncTextProgressPresentation,
+    size: androidx.compose.ui.unit.Dp,
+) {
+    val total = presentation.totalUnitCount
+    val completed = presentation.completedUnitCount.coerceIn(0, total.coerceAtLeast(0))
+    val transition = rememberInfiniteTransition(label = "同步文字运行脉冲")
+    val pulse by
+        transition.animateFloat(
+            initialValue = 0.38f,
+            targetValue = 0.92f,
+            animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+            label = "活动分段亮度",
+        )
+    Box(
+        modifier =
+            Modifier.size(size).semantics {
+                contentDescription =
+                    if (total > 0) {
+                        "${presentation.label}，已完成 $completed/$total"
+                    } else {
+                        presentation.label
+                    }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (total <= 0) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(size * 0.82f),
+                color = AppAccent,
+                strokeWidth = if (size > 60.dp) 5.dp else 3.dp,
+                trackColor = AppHairline,
+            )
+        } else {
+            val segmentCount = total.coerceAtMost(16)
+            val completedSegments = (completed.toFloat() / total * segmentCount).toInt().coerceIn(0, segmentCount)
+            val activeSegments =
+                if (presentation.activeUnitCount > 0 && completedSegments < segmentCount) {
+                    ((presentation.activeUnitCount.toFloat() / total * segmentCount).coerceAtLeast(1f)).toInt()
+                } else {
+                    0
+                }
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val gap = if (segmentCount <= 8) 10f else 5f
+                val step = 360f / segmentCount
+                val stroke = Stroke(width = if (size > 60.dp) 5.dp.toPx() else 3.dp.toPx(), cap = StrokeCap.Round)
+                repeat(segmentCount) { index ->
+                    val color =
+                        if (total <= 16 && presentation.unitStates.size == total) {
+                            when (presentation.unitStates[index]) {
+                                GenerationWorkUnitState.Completed -> AppAccent
+                                GenerationWorkUnitState.Running -> AppAccent.copy(alpha = pulse)
+                                GenerationWorkUnitState.Failed -> AppError
+                                GenerationWorkUnitState.Waiting -> AppHairline
+                            }
+                        } else {
+                            when {
+                                index < completedSegments -> AppAccent
+                                index < completedSegments + activeSegments -> AppAccent.copy(alpha = pulse)
+                                else -> AppHairline
+                            }
+                        }
+                    drawArc(
+                        color = color,
+                        startAngle = -90f + index * step + gap / 2f,
+                        sweepAngle = step - gap,
+                        useCenter = false,
+                        style = stroke,
+                    )
+                }
+            }
+            if (total > 1) {
+                Text(
+                    "$completed/$total",
+                    color = AppPrimaryText,
+                    fontSize = if (size > 60.dp) 20.sp else 9.sp,
+                    fontWeight = FontWeight.SemiBold,
                 )
             }
         }
@@ -1319,6 +1463,7 @@ internal fun SubtitleStage(
                     onCancel = onCancel,
                     onAbort = onAbort,
                     onAllowMetered = onAllowMetered,
+                    expanded = !hasText,
                     modifier = taskModifier,
                 )
             retryable ->
@@ -1352,22 +1497,45 @@ private fun SyncTextTaskIndicator(
     onCancel: () -> Unit,
     onAbort: () -> Unit,
     onAllowMetered: () -> Unit,
+    expanded: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
-        if (launch == null) Spacer(Modifier.size(48.dp))
-        SyncTextProgressStatus(task = task, launch = launch, modifier = Modifier.weight(1f))
-        if (launch == null) {
-            if (task?.networkWaitReason == GenerationNetworkWaitReason.MeteredPermissionRequired) {
-                TextButton(onClick = onAllowMetered) {
-                    Text("允许本次", color = AppSecondaryText, fontSize = 12.sp)
+    if (expanded) {
+        Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+            SyncTextProgressStatus(task = task, launch = launch, expanded = true, modifier = Modifier.fillMaxWidth())
+            if (launch == null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                    if (task?.networkWaitReason == GenerationNetworkWaitReason.MeteredPermissionRequired) {
+                        TextButton(onClick = onAllowMetered) {
+                            Text("允许本次", color = AppSecondaryText, fontSize = 12.sp)
+                        }
+                    } else {
+                        IconButton(onClick = onCancel) {
+                            Icon(Icons.Outlined.Pause, contentDescription = "暂停同步文字", tint = AppSecondaryText)
+                        }
+                        IconButton(onClick = onAbort) {
+                            Icon(Icons.Outlined.Stop, contentDescription = "停止生成", tint = AppError)
+                        }
+                    }
                 }
-            } else {
-                IconButton(onClick = onCancel) {
-                    Icon(Icons.Outlined.Pause, contentDescription = "暂停同步文字", tint = AppSecondaryText)
-                }
-                IconButton(onClick = onAbort) {
-                    Icon(Icons.Outlined.Stop, contentDescription = "停止生成", tint = AppError)
+            }
+        }
+    } else {
+        Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+            if (launch == null) Spacer(Modifier.size(48.dp))
+            SyncTextProgressStatus(task = task, launch = launch, modifier = Modifier.weight(1f))
+            if (launch == null) {
+                if (task?.networkWaitReason == GenerationNetworkWaitReason.MeteredPermissionRequired) {
+                    TextButton(onClick = onAllowMetered) {
+                        Text("允许本次", color = AppSecondaryText, fontSize = 12.sp)
+                    }
+                } else {
+                    IconButton(onClick = onCancel) {
+                        Icon(Icons.Outlined.Pause, contentDescription = "暂停同步文字", tint = AppSecondaryText)
+                    }
+                    IconButton(onClick = onAbort) {
+                        Icon(Icons.Outlined.Stop, contentDescription = "停止生成", tint = AppError)
+                    }
                 }
             }
         }

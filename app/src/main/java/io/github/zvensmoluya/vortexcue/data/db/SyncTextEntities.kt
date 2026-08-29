@@ -421,6 +421,44 @@ data class TranslationBatchEntity(
 )
 
 @Entity(
+    tableName = "generation_runtime_status",
+    foreignKeys = [
+        ForeignKey(
+            entity = GenerationTaskEntity::class,
+            parentColumns = ["task_id"],
+            childColumns = ["task_id"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("task_id"), Index("work_unit_id")],
+)
+data class GenerationRuntimeStatusEntity(
+    @PrimaryKey
+    @ColumnInfo(name = "runtime_id")
+    val runtimeId: String,
+    @ColumnInfo(name = "task_id")
+    val taskId: String,
+    @ColumnInfo(name = "work_unit_kind")
+    val workUnitKind: String?,
+    @ColumnInfo(name = "work_unit_id")
+    val workUnitId: String?,
+    val phase: String,
+    @ColumnInfo(name = "observed_item_count")
+    val observedItemCount: Int?,
+    @ColumnInfo(name = "expected_item_count")
+    val expectedItemCount: Int?,
+    @ColumnInfo(name = "operation_ordinal")
+    val operationOrdinal: Int?,
+    @ColumnInfo(name = "retry_ordinal")
+    val retryOrdinal: Int?,
+    @ColumnInfo(name = "phase_started_at_ms")
+    val phaseStartedAtMs: Long,
+    @ColumnInfo(name = "updated_at_ms")
+    val updatedAtMs: Long,
+)
+
+@Entity(
     tableName = "sync_text_request_attempt",
     foreignKeys = [
         ForeignKey(

@@ -78,7 +78,6 @@ class SyncTextTaskRunner(
     private val asr: AsrEngine,
     private val translation: TranslationNetworkGateway,
     private val networkState: SyncTextNetworkState,
-    private val translationActivity: TranslationStreamActivityTracker = TranslationStreamActivityTracker(),
     private val diagnostics: SyncTextDiagnosticRecorder = NoOpSyncTextDiagnosticRecorder,
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val elapsedRealtimeMs: () -> Long = { System.nanoTime() / 1_000_000L },
@@ -86,6 +85,7 @@ class SyncTextTaskRunner(
 ) {
     private val dao = database.syncTextDao()
     private val contentDao = database.contentDao()
+    private val runtimeStatus = GenerationRuntimeStatusWriter(dao, nowMs)
 
     suspend fun runUntilIdle(): Boolean {
         val ownerId = newId()
@@ -161,6 +161,7 @@ class SyncTextTaskRunner(
             if (kind == GenerationTaskKind.SourceGeneration) {
                 if (repository.isTerminal(task.taskId)) return
                 ensureRunnable(task.taskId)
+                runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.Publishing)
                 repository.publishResult(
                     taskId = task.taskId,
                     sourceLanguage = snapshot.sourceLanguage ?: source.language,
@@ -243,8 +244,6 @@ class SyncTextTaskRunner(
                 error.message ?: "Sync text task configuration is invalid",
                 true,
             )
-        } finally {
-            translationActivity.clear(task.taskId)
         }
     }
 
@@ -264,6 +263,7 @@ class SyncTextTaskRunner(
         attempt: GenerationAttemptEntity,
     ): SourceWork {
         if (task.kind.enumValueOr(GenerationTaskKind.SourceGeneration) == GenerationTaskKind.TranslationDerivation) {
+            runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.PreparingTranslation)
             val frozenResultId = requireNotNull(snapshot.inputSourceResultId) { "Translation source result is missing" }
             require(task.sourceResultId == frozenResultId && attempt.sourceResultId == frozenResultId) {
                 "Translation source result snapshot does not match the task"
@@ -275,6 +275,7 @@ class SyncTextTaskRunner(
             return requireNotNull(loadSourceResult(frozenResultId)) { "Translation source result is unavailable" }
         }
         return if (snapshot.sourceTrackId != null) {
+            runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.MaterializingText)
             repository.markRunning(task.taskId, GenerationStage.MaterializingText, 0.08f)
             ensureRunnable(task.taskId)
             try {
@@ -311,6 +312,7 @@ class SyncTextTaskRunner(
         snapshot: GenerationTaskSnapshotEntity,
         attempt: GenerationAttemptEntity,
     ): SourceWork {
+        runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.Planning)
         repository.markRunning(task.taskId, GenerationStage.DecodingAudio, 0.05f)
         val activeLocatorId = contentDao.activeLocator(task.contentId)?.locatorId
             ?: throw AudioDecodeException("Content has no active media locator")
@@ -464,14 +466,29 @@ class SyncTextTaskRunner(
             outcome = "Started",
             valueMs = plan.uploadEndMs - plan.uploadStartMs,
         )
+        dao.upsertAsrWindow(entity.copy(state = RunningState, errorMessage = null))
+        runtimeStatus.updateWorkUnit(
+            taskId = task.taskId,
+            phase = GenerationRuntimePhase.ExtractingAudio,
+            workUnitKind = GenerationWorkUnitKind.AsrWindow,
+            workUnitId = entity.windowId,
+        )
         val wav = spool.reserve(task.taskId, plan.windowId)
         var finalFailure: AsrException? = null
         try {
             audio.extract(mediaUri, snapshot.audioTrackId, plan, wav)
+            dao.upsertAsrWindow(entity.copy(state = RunningState, encodedBytes = wav.length(), errorMessage = null))
             val key = repository.credentialSecret(attempt.asrCredentialId)
             for (index in 0 until MaxAsrAttempts) {
                 ensureRunnable(task.taskId)
                 repository.markRunning(task.taskId, GenerationStage.RecognizingSpeech, 0.10f)
+                runtimeStatus.updateWorkUnit(
+                    taskId = task.taskId,
+                    phase = GenerationRuntimePhase.AwaitingAsr,
+                    workUnitKind = GenerationWorkUnitKind.AsrWindow,
+                    workUnitId = entity.windowId,
+                    retryOrdinal = index + 1,
+                )
                 val startedAtMs = nowMs()
                 val startedElapsedMs = elapsedRealtimeMs()
                 try {
@@ -521,6 +538,12 @@ class SyncTextTaskRunner(
                             ),
                         )
                     }
+                    runtimeStatus.updateWorkUnit(
+                        taskId = task.taskId,
+                        phase = GenerationRuntimePhase.Completed,
+                        workUnitKind = GenerationWorkUnitKind.AsrWindow,
+                        workUnitId = entity.windowId,
+                    )
                     diagnostics.record(
                         SyncTextDiagnosticEventType.WorkUnitLifecycle,
                         taskId = task.taskId,
@@ -558,6 +581,13 @@ class SyncTextTaskRunner(
                         repository.markWaitingForNetwork(task.taskId, waitReason)
                         throw TaskDeferredException()
                     }
+                    runtimeStatus.updateWorkUnit(
+                        taskId = task.taskId,
+                        phase = GenerationRuntimePhase.RetryingAsr,
+                        workUnitKind = GenerationWorkUnitKind.AsrWindow,
+                        workUnitId = entity.windowId,
+                        retryOrdinal = index + 2,
+                    )
                     delay(AsrRetryPolicy.delayMs(error, index))
                 }
             }
@@ -570,6 +600,12 @@ class SyncTextTaskRunner(
             val nextOrdinal = dao.nextAsrWindowOrdinal(attempt.attemptId)
             val split = runCatching { planner.split(plan, mediaDurationMs, nextOrdinal) }.getOrNull()
             if (split != null) {
+                runtimeStatus.updateWorkUnit(
+                    taskId = task.taskId,
+                    phase = GenerationRuntimePhase.Splitting,
+                    workUnitKind = GenerationWorkUnitKind.AsrWindow,
+                    workUnitId = entity.windowId,
+                )
                 val children = listOf(split.first, split.second).map { it.toEntity(attempt.attemptId) }
                 database.withWriteTransaction {
                     dao.upsertAsrWindow(entity.copy(state = SplitState, errorMessage = failure.message?.take(600)))
@@ -634,6 +670,7 @@ class SyncTextTaskRunner(
         source: SourceWork,
         targetLanguage: String,
     ) {
+        runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.PreparingTranslation)
         val policy = policies.resolve(targetLanguage)
         verifyPolicySnapshot(attempt, policy)
         val normalizedSource = CueIdNormalizer.normalize(source.cues)
@@ -683,6 +720,7 @@ class SyncTextTaskRunner(
                     .copy(startMs = cue.startMs, endMs = cue.endMs, stableId = cue.stableId)
             }
         ensureRunnable(task.taskId)
+        runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.Publishing)
         repository.markRunning(task.taskId, GenerationStage.Publishing, 0.98f)
         repository.publishResult(
             taskId = task.taskId,
@@ -743,6 +781,14 @@ class SyncTextTaskRunner(
             stage = GenerationStage.Translating.name,
             outcome = "Started",
         )
+        dao.upsertTranslationBatch(entity.copy(state = RunningState, errorMessage = null))
+        runtimeStatus.updateWorkUnit(
+            taskId = task.taskId,
+            phase = GenerationRuntimePhase.PreparingTranslation,
+            workUnitKind = GenerationWorkUnitKind.TranslationBatch,
+            workUnitId = entity.batchId,
+            expectedItemCount = plan.translateOnly.size,
+        )
         val key = repository.credentialSecret(requireNotNull(attempt.translationCredentialId))
         val endpoint = requireNotNull(attempt.translationEndpoint) { "Translation endpoint is missing from the attempt" }
         val model = requireNotNull(attempt.translationModel) { "Translation model is missing from the attempt" }
@@ -753,7 +799,9 @@ class SyncTextTaskRunner(
         val batchExecutor =
             TranslationBatchExecutor { systemPrompt, userPrompt ->
                 val operation = operationOrdinal.incrementAndGet()
-                val streamId = "${entity.batchId}:$operation"
+                val expectedIds = plan.translateOnly.mapNotNull(SubtitleCue::stableId).toSet()
+                val receivedIds = mutableSetOf<String>()
+                val outputBuffer = StringBuilder()
                 translation.translate(
                     protocol = protocol,
                     request =
@@ -777,13 +825,77 @@ class SyncTextTaskRunner(
                     },
                     onStreamEvent = { event ->
                         when (event) {
-                            is TranslationStreamEvent.AttemptStarted ->
-                                translationActivity.beginAttempt(task.taskId, streamId)
-                            is TranslationStreamEvent.ActivityDelta ->
-                                translationActivity.recordDelta(task.taskId, streamId, event.text)
-                            TranslationStreamEvent.AttemptCompleted,
-                            TranslationStreamEvent.AttemptFailed,
-                            -> translationActivity.finishAttempt(task.taskId)
+                            is TranslationStreamEvent.AttemptStarted -> {
+                                outputBuffer.clear()
+                                receivedIds.clear()
+                                runtimeStatus.updateWorkUnit(
+                                    taskId = task.taskId,
+                                    phase =
+                                        if (operation > 1 || event.attemptNumber > 1) {
+                                            GenerationRuntimePhase.RetryingTranslation
+                                        } else {
+                                            GenerationRuntimePhase.AwaitingTranslation
+                                        },
+                                    workUnitKind = GenerationWorkUnitKind.TranslationBatch,
+                                    workUnitId = entity.batchId,
+                                    observedItemCount = 0,
+                                    expectedItemCount = expectedIds.size,
+                                    operationOrdinal = operation,
+                                    retryOrdinal = event.attemptNumber,
+                                )
+                            }
+                            is TranslationStreamEvent.ReasoningDelta -> {
+                                runtimeStatus.recordTaskStreamActivity(task.taskId, event.text)
+                                runtimeStatus.updateWorkUnit(
+                                    taskId = task.taskId,
+                                    phase = GenerationRuntimePhase.ModelReasoning,
+                                    workUnitKind = GenerationWorkUnitKind.TranslationBatch,
+                                    workUnitId = entity.batchId,
+                                    observedItemCount = receivedIds.size,
+                                    expectedItemCount = expectedIds.size,
+                                    operationOrdinal = operation,
+                                )
+                            }
+                            is TranslationStreamEvent.OutputDelta -> {
+                                runtimeStatus.recordTaskStreamActivity(task.taskId, event.text)
+                                outputBuffer.append(event.text)
+                                expectedIds.forEach { cueId ->
+                                    if (cueId !in receivedIds && outputBuffer.contains("[$cueId]")) receivedIds += cueId
+                                }
+                                runtimeStatus.updateWorkUnit(
+                                    taskId = task.taskId,
+                                    phase = GenerationRuntimePhase.ReceivingTranslation,
+                                    workUnitKind = GenerationWorkUnitKind.TranslationBatch,
+                                    workUnitId = entity.batchId,
+                                    observedItemCount = receivedIds.size,
+                                    expectedItemCount = expectedIds.size,
+                                    operationOrdinal = operation,
+                                )
+                            }
+                            TranslationStreamEvent.AttemptCompleted -> {
+                                runtimeStatus.flushTaskStreamActivity(task.taskId)
+                                runtimeStatus.updateWorkUnit(
+                                    taskId = task.taskId,
+                                    phase = GenerationRuntimePhase.ValidatingTranslation,
+                                    workUnitKind = GenerationWorkUnitKind.TranslationBatch,
+                                    workUnitId = entity.batchId,
+                                    observedItemCount = receivedIds.size,
+                                    expectedItemCount = expectedIds.size,
+                                    operationOrdinal = operation,
+                                )
+                            }
+                            TranslationStreamEvent.AttemptFailed -> {
+                                runtimeStatus.flushTaskStreamActivity(task.taskId)
+                                runtimeStatus.updateWorkUnit(
+                                    taskId = task.taskId,
+                                    phase = GenerationRuntimePhase.RetryingTranslation,
+                                    workUnitKind = GenerationWorkUnitKind.TranslationBatch,
+                                    workUnitId = entity.batchId,
+                                    observedItemCount = receivedIds.size,
+                                    expectedItemCount = expectedIds.size,
+                                    operationOrdinal = operation,
+                                )
+                            }
                         }
                     },
                 )
@@ -817,6 +929,14 @@ class SyncTextTaskRunner(
                     ),
                 )
             }
+            runtimeStatus.updateWorkUnit(
+                taskId = task.taskId,
+                phase = GenerationRuntimePhase.Completed,
+                workUnitKind = GenerationWorkUnitKind.TranslationBatch,
+                workUnitId = entity.batchId,
+                observedItemCount = output.targetCues.size,
+                expectedItemCount = plan.translateOnly.size,
+            )
             diagnostics.record(
                 SyncTextDiagnosticEventType.WorkUnitLifecycle,
                 taskId = task.taskId,
@@ -857,6 +977,13 @@ class SyncTextTaskRunner(
                 throw error
             }
             val (leftPlan, rightPlan) = TranslationBatchPlanner().split(plan)
+            runtimeStatus.updateWorkUnit(
+                taskId = task.taskId,
+                phase = GenerationRuntimePhase.Splitting,
+                workUnitKind = GenerationWorkUnitKind.TranslationBatch,
+                workUnitId = entity.batchId,
+                expectedItemCount = plan.translateOnly.size,
+            )
             val children =
                 database.withWriteTransaction {
                     val firstOrdinal = dao.nextTranslationBatchOrdinal(attempt.attemptId)
@@ -1061,6 +1188,7 @@ class SyncTextTaskRunner(
         private const val SourceProgress = 0.55f
         private const val TranslationProgressRange = 0.42f
         private const val CompletedState = "Completed"
+        private const val RunningState = "Running"
         private const val FailedState = "Failed"
         private const val SplitState = "Split"
         private const val AsrWorkUnitKind = "AsrWindow"

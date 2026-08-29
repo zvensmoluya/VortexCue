@@ -274,3 +274,34 @@ internal val MIGRATION_11_12 =
             )
         }
     }
+
+internal val MIGRATION_12_13 =
+    object : Migration(12, 13) {
+        override suspend fun migrate(connection: SQLiteConnection) {
+            connection.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `generation_runtime_status` (
+                    `runtime_id` TEXT NOT NULL,
+                    `task_id` TEXT NOT NULL,
+                    `work_unit_kind` TEXT,
+                    `work_unit_id` TEXT,
+                    `phase` TEXT NOT NULL,
+                    `observed_item_count` INTEGER,
+                    `expected_item_count` INTEGER,
+                    `operation_ordinal` INTEGER,
+                    `retry_ordinal` INTEGER,
+                    `phase_started_at_ms` INTEGER NOT NULL,
+                    `updated_at_ms` INTEGER NOT NULL,
+                    PRIMARY KEY(`runtime_id`),
+                    FOREIGN KEY(`task_id`) REFERENCES `generation_task`(`task_id`) ON UPDATE CASCADE ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            connection.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_generation_runtime_status_task_id` ON `generation_runtime_status` (`task_id`)",
+            )
+            connection.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_generation_runtime_status_work_unit_id` ON `generation_runtime_status` (`work_unit_id`)",
+            )
+        }
+    }

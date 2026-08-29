@@ -37,7 +37,6 @@ import io.github.zvensmoluya.vortexcue.synctext.TranslationEndpointResolver
 import io.github.zvensmoluya.vortexcue.synctext.TranslationModelCatalog
 import io.github.zvensmoluya.vortexcue.synctext.TranslationNetworkGateway
 import io.github.zvensmoluya.vortexcue.synctext.TranslationPolicyRegistry
-import io.github.zvensmoluya.vortexcue.synctext.TranslationStreamActivityTracker
 import io.github.zvensmoluya.vortexcue.synctext.defaultTranslationAdapters
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextUiController
 import io.github.zvensmoluya.vortexcue.text.PrivateTextArtifactStore
@@ -102,7 +101,6 @@ class AppContainer(context: Context) {
     val syncTextNetworkState = AndroidSyncTextNetworkState(appContext)
     private val syncTextHttpClient = SyncTextHttpClient(appContext.appVersionName())
     private val translationEndpointResolver = TranslationEndpointResolver()
-    private val translationStreamActivity = TranslationStreamActivityTracker()
     private val translationNetworkGateway =
         TranslationNetworkGateway(
             TranslationAdapterRegistry(defaultTranslationAdapters(syncTextHttpClient, translationEndpointResolver)),
@@ -143,7 +141,6 @@ class AppContainer(context: Context) {
     val syncTextUiController =
         SyncTextUiController(
             repository = syncTextRepository,
-            translationActivity = translationStreamActivity,
             audio = audioWindowExtractor,
             materializeCandidate = { candidateId ->
                 textImportCoordinator.importCandidate(
@@ -175,7 +172,6 @@ class AppContainer(context: Context) {
             asr = asrEngine,
             translation = translationNetworkGateway,
             networkState = syncTextNetworkState,
-            translationActivity = translationStreamActivity,
             diagnostics = syncTextDiagnostics,
         )
     private val syncTextNetworkMonitor =

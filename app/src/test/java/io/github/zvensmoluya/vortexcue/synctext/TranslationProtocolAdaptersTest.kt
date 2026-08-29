@@ -229,13 +229,19 @@ class TranslationProtocolAdaptersTest {
                         """.trimIndent(),
                 ),
             )
-            val activity = mutableListOf<String>()
+            val activity = mutableListOf<TranslationStreamActivity>()
             val adapter = ResponsesTranslationAdapter(BoundedHttpExecutor(testClient()))
 
             val response = adapter.translateStreaming(request(server.url("/").toString()), activity::add)
 
             assertEquals("[cue-1] one", response.text)
-            assertEquals(listOf("working", "[cue-1] one"), activity)
+            assertEquals(
+                listOf(
+                    TranslationStreamActivity(TranslationStreamActivityKind.Reasoning, "working"),
+                    TranslationStreamActivity(TranslationStreamActivityKind.Output, "[cue-1] one"),
+                ),
+                activity,
+            )
         }
     }
 
@@ -441,11 +447,11 @@ class TranslationProtocolAdaptersTest {
 
                 override suspend fun translateStreaming(
                     request: TranslationProviderRequest,
-                    onActivity: (String) -> Unit,
+                    onActivity: (TranslationStreamActivity) -> Unit,
                 ): TranslationProviderResponse {
                     repeat(3) {
                         delay(200L)
-                        onActivity("abcd")
+                        onActivity(TranslationStreamActivity(TranslationStreamActivityKind.Output, "abcd"))
                     }
                     return TranslationProviderResponse("done", UsageRecord(), byteArrayOf(), 200, 1L, 1L, null, request.endpoint)
                 }
@@ -465,7 +471,7 @@ class TranslationProtocolAdaptersTest {
             )
 
         assertEquals("done", response.text)
-        assertEquals(3, events.filterIsInstance<TranslationStreamEvent.ActivityDelta>().size)
+        assertEquals(3, events.filterIsInstance<TranslationStreamEvent.OutputDelta>().size)
         assertTrue(events.first() is TranslationStreamEvent.AttemptStarted)
         assertTrue(events.last() is TranslationStreamEvent.AttemptCompleted)
     }
@@ -481,9 +487,9 @@ class TranslationProtocolAdaptersTest {
 
                 override suspend fun translateStreaming(
                     request: TranslationProviderRequest,
-                    onActivity: (String) -> Unit,
+                    onActivity: (TranslationStreamActivity) -> Unit,
                 ): TranslationProviderResponse {
-                    onActivity("first")
+                    onActivity(TranslationStreamActivity(TranslationStreamActivityKind.Output, "first"))
                     awaitCancellation()
                 }
             }

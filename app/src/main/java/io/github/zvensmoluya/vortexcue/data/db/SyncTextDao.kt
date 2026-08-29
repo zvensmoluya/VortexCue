@@ -68,6 +68,27 @@ interface SyncTextDao {
     @Query("SELECT * FROM generation_task WHERE state NOT IN ('Completed', 'Deleted', 'Aborted') ORDER BY queue_position, created_at_ms")
     suspend fun activeTasks(): List<GenerationTaskEntity>
 
+    @Query(
+        "SELECT w.* FROM asr_window w " +
+            "INNER JOIN generation_task t ON t.current_attempt_id = w.attempt_id " +
+            "WHERE t.state NOT IN ('Completed', 'Deleted', 'Aborted') ORDER BY w.owned_start_ms, w.ordinal",
+    )
+    fun observeActiveAsrWindows(): Flow<List<AsrWindowEntity>>
+
+    @Query(
+        "SELECT b.* FROM translation_batch b " +
+            "INNER JOIN generation_task t ON t.current_attempt_id = b.attempt_id " +
+            "WHERE t.state NOT IN ('Completed', 'Deleted', 'Aborted') ORDER BY b.first_cue_index, b.ordinal",
+    )
+    fun observeActiveTranslationBatches(): Flow<List<TranslationBatchEntity>>
+
+    @Query(
+        "SELECT r.* FROM generation_runtime_status r " +
+            "INNER JOIN generation_task t ON t.task_id = r.task_id " +
+            "WHERE t.state NOT IN ('Completed', 'Deleted', 'Aborted') ORDER BY r.updated_at_ms, r.runtime_id",
+    )
+    fun observeActiveRuntimeStatuses(): Flow<List<GenerationRuntimeStatusEntity>>
+
     @Query("SELECT * FROM generation_task WHERE task_id = :taskId")
     fun observeTask(taskId: String): Flow<GenerationTaskEntity?>
 
@@ -246,6 +267,12 @@ interface SyncTextDao {
 
     @Upsert
     suspend fun upsertTranslationBatch(entity: TranslationBatchEntity)
+
+    @Query("SELECT * FROM generation_runtime_status WHERE runtime_id = :runtimeId")
+    suspend fun runtimeStatus(runtimeId: String): GenerationRuntimeStatusEntity?
+
+    @Upsert
+    suspend fun upsertRuntimeStatus(entity: GenerationRuntimeStatusEntity)
 
     @Query("SELECT COALESCE(MAX(sequence), 0) + 1 FROM sync_text_request_attempt WHERE attempt_id = :attemptId")
     suspend fun nextRequestSequence(attemptId: String): Int

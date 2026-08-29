@@ -5,6 +5,10 @@ import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskState
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskSummary
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskKind
 import io.github.zvensmoluya.vortexcue.synctext.GenerationNetworkWaitReason
+import io.github.zvensmoluya.vortexcue.synctext.GenerationRuntimePhase
+import io.github.zvensmoluya.vortexcue.synctext.GenerationWorkUnitKind
+import io.github.zvensmoluya.vortexcue.synctext.GenerationWorkUnitState
+import io.github.zvensmoluya.vortexcue.synctext.GenerationWorkUnitSummary
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -43,14 +47,17 @@ class GenerationProductStatusTest {
     @Test
     fun presentsLaunchBeforeTaskProgressIsAvailable() {
         assertEquals(
-            SyncTextProgressPresentation("正在启动语音识别", progress = null),
+            SyncTextProgressPresentation("正在启动语音识别"),
             syncTextProgressPresentation(
                 task = null,
                 launch = SyncTextLaunchUiState("content", SyncTextLaunchKind.Generation),
             ),
         )
         assertEquals(
-            SyncTextProgressPresentation("正在启动翻译", progress = null),
+            SyncTextProgressPresentation(
+                label = "正在启动翻译",
+                showWorkUnitRing = false,
+            ),
             syncTextProgressPresentation(
                 task = task(GenerationTaskState.Completed),
                 launch = SyncTextLaunchUiState("content", SyncTextLaunchKind.Translation),
@@ -59,20 +66,35 @@ class GenerationProductStatusTest {
     }
 
     @Test
-    fun presentsDeterminateTaskProgressAndWaitReason() {
+    fun presentsCommittedUnitsAndWaitReasonWithoutPercentages() {
+        val runningUnit =
+            GenerationWorkUnitSummary(
+                workUnitId = "window-1",
+                kind = GenerationWorkUnitKind.AsrWindow,
+                ordinal = 0,
+                state = GenerationWorkUnitState.Running,
+                runtimePhase = GenerationRuntimePhase.AwaitingAsr,
+            )
         assertEquals(
-            SyncTextProgressPresentation("正在语音识别", progress = 0.42f),
+            SyncTextProgressPresentation(
+                label = "等待识别结果",
+                detail = "1 段进行中",
+                completedUnitCount = 0,
+                totalUnitCount = 1,
+                activeUnitCount = 1,
+                unitStates = listOf(GenerationWorkUnitState.Running),
+            ),
             syncTextProgressPresentation(
                 task(
                     state = GenerationTaskState.Running,
                     stage = GenerationStage.RecognizingSpeech,
-                    progress = 0.42f,
+                    workUnits = listOf(runningUnit),
                 ),
                 launch = null,
             ),
         )
         assertEquals(
-            SyncTextProgressPresentation("等待网络", progress = 0.6f),
+            SyncTextProgressPresentation("等待网络"),
             syncTextProgressPresentation(
                 task(
                     state = GenerationTaskState.Waiting,
@@ -86,15 +108,37 @@ class GenerationProductStatusTest {
     }
 
     @Test
-    fun formatsTranslationStreamActivityWithoutChangingDurableProgress() {
+    fun presentsObservedTranslationRowsAndDurableStreamActivity() {
+        val receiving =
+            GenerationWorkUnitSummary(
+                workUnitId = "batch-1",
+                kind = GenerationWorkUnitKind.TranslationBatch,
+                ordinal = 0,
+                state = GenerationWorkUnitState.Running,
+                runtimePhase = GenerationRuntimePhase.ReceivingTranslation,
+                observedItemCount = 17,
+                expectedItemCount = 60,
+            )
         assertEquals(
-            SyncTextProgressPresentation("正在翻译", progress = 0.55f, streamedTokens = "3.1k tokens"),
+            SyncTextProgressPresentation(
+                label = "正在接收译文",
+                detail = "17/60 · ≈3.1k tokens",
+                completedUnitCount = 0,
+                totalUnitCount = 1,
+                activeUnitCount = 1,
+                unitStates = listOf(GenerationWorkUnitState.Running),
+                streamedTokens = "≈3.1k tokens",
+                streamActivityRevision = 12_345L,
+                showWorkUnitRing = false,
+            ),
             syncTextProgressPresentation(
                 task(
                     state = GenerationTaskState.Running,
                     stage = GenerationStage.Translating,
-                    progress = 0.55f,
+                    kind = GenerationTaskKind.TranslationDerivation,
+                    workUnits = listOf(receiving),
                     streamedTokenEstimate = 3_120L,
+                    streamActivityRevision = 12_345L,
                 ),
                 launch = null,
             ),
@@ -106,13 +150,16 @@ class GenerationProductStatusTest {
         networkWaitReason: GenerationNetworkWaitReason? = null,
         stage: GenerationStage = GenerationStage.Queued,
         progress: Float = 0f,
+        kind: GenerationTaskKind = GenerationTaskKind.SourceGeneration,
+        workUnits: List<GenerationWorkUnitSummary> = emptyList(),
         streamedTokenEstimate: Long? = null,
+        streamActivityRevision: Long? = null,
     ) =
         GenerationTaskSummary(
             taskId = "task",
             contentId = "content",
             schemeId = "config",
-            kind = GenerationTaskKind.SourceGeneration,
+            kind = kind,
             queuePosition = 0,
             state = state,
             stage = stage,
@@ -124,5 +171,7 @@ class GenerationProductStatusTest {
             needsAttention = state == GenerationTaskState.NeedsAttention,
             blockedByScheme = false,
             streamedTokenEstimate = streamedTokenEstimate,
+            streamActivityRevision = streamActivityRevision,
+            workUnits = workUnits,
         )
 }

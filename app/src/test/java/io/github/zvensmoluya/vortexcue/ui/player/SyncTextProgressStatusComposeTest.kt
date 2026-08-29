@@ -10,6 +10,10 @@ import io.github.zvensmoluya.vortexcue.synctext.GenerationStage
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskKind
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskState
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskSummary
+import io.github.zvensmoluya.vortexcue.synctext.GenerationRuntimePhase
+import io.github.zvensmoluya.vortexcue.synctext.GenerationWorkUnitKind
+import io.github.zvensmoluya.vortexcue.synctext.GenerationWorkUnitState
+import io.github.zvensmoluya.vortexcue.synctext.GenerationWorkUnitSummary
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextLaunchKind
 import io.github.zvensmoluya.vortexcue.ui.synctext.SyncTextLaunchUiState
 import io.github.zvensmoluya.vortexcue.ui.theme.VortexCueTheme
@@ -41,7 +45,7 @@ class SyncTextProgressStatusComposeTest {
     }
 
     @Test
-    fun showsDeterminateAsrProgress() {
+    fun showsSegmentedAsrActivityWithoutPercentage() {
         compose.setContent {
             VortexCueTheme {
                 SyncTextProgressStatus(
@@ -51,12 +55,14 @@ class SyncTextProgressStatusComposeTest {
             }
         }
 
-        compose.onNodeWithText("正在语音识别").assertIsDisplayed()
-        compose.onNodeWithText("42%").assertIsDisplayed()
+        compose.onNodeWithText("等待识别结果").assertIsDisplayed()
+        compose.onNodeWithText("1 段进行中").assertIsDisplayed()
+        compose.onNodeWithText("0/1").assertDoesNotExist()
+        compose.onNodeWithText("42%").assertDoesNotExist()
     }
 
     @Test
-    fun showsLightweightTokenActivityWhileTranslating() {
+    fun showsObservedTranslationRowsAndDurableTokenActivity() {
         compose.setContent {
             VortexCueTheme {
                 SyncTextProgressStatus(
@@ -65,15 +71,29 @@ class SyncTextProgressStatusComposeTest {
                             progress = 0.55f,
                             kind = GenerationTaskKind.TranslationDerivation,
                             stage = GenerationStage.Translating,
+                            workUnits =
+                                listOf(
+                                    GenerationWorkUnitSummary(
+                                        workUnitId = "batch-1",
+                                        kind = GenerationWorkUnitKind.TranslationBatch,
+                                        ordinal = 0,
+                                        state = GenerationWorkUnitState.Running,
+                                        runtimePhase = GenerationRuntimePhase.ReceivingTranslation,
+                                        observedItemCount = 17,
+                                        expectedItemCount = 60,
+                                    ),
+                                ),
                             streamedTokenEstimate = 3_120L,
+                            streamActivityRevision = 12_345L,
                         ),
                     launch = null,
                 )
             }
         }
 
-        compose.onNodeWithText("正在翻译").assertIsDisplayed()
-        compose.onNodeWithText("3.1k tokens").assertIsDisplayed()
+        compose.onNodeWithText("正在接收译文").assertIsDisplayed()
+        compose.onNodeWithText("17/60 · ≈3.1k tokens").assertIsDisplayed()
+        compose.onNodeWithText("0/1").assertDoesNotExist()
     }
 
     @Test
@@ -213,7 +233,22 @@ class SyncTextProgressStatusComposeTest {
         state: GenerationTaskState = GenerationTaskState.Running,
         kind: GenerationTaskKind = GenerationTaskKind.SourceGeneration,
         stage: GenerationStage = GenerationStage.RecognizingSpeech,
+        workUnits: List<GenerationWorkUnitSummary> =
+            if (state == GenerationTaskState.Running) {
+                listOf(
+                    GenerationWorkUnitSummary(
+                        workUnitId = "window-1",
+                        kind = GenerationWorkUnitKind.AsrWindow,
+                        ordinal = 0,
+                        state = GenerationWorkUnitState.Running,
+                        runtimePhase = GenerationRuntimePhase.AwaitingAsr,
+                    ),
+                )
+            } else {
+                emptyList()
+            },
         streamedTokenEstimate: Long? = null,
+        streamActivityRevision: Long? = null,
     ) =
         GenerationTaskSummary(
             taskId = "task",
@@ -230,5 +265,7 @@ class SyncTextProgressStatusComposeTest {
             needsAttention = false,
             blockedByScheme = false,
             streamedTokenEstimate = streamedTokenEstimate,
+            streamActivityRevision = streamActivityRevision,
+            workUnits = workUnits,
         )
 }

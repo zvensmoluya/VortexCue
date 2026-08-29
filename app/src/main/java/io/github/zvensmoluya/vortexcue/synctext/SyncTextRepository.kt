@@ -7,16 +7,19 @@ import io.github.zvensmoluya.vortexcue.core.model.TimedTextMatchBasis
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextOrigin
 import io.github.zvensmoluya.vortexcue.core.model.TimedTextReadiness
 import io.github.zvensmoluya.vortexcue.core.model.stableTimedTextTrackId
+import io.github.zvensmoluya.vortexcue.data.db.AsrWindowEntity
 import io.github.zvensmoluya.vortexcue.data.db.CredentialMetadataEntity
 import io.github.zvensmoluya.vortexcue.data.db.GeneratedTextResultEntity
 import io.github.zvensmoluya.vortexcue.data.db.GeneratedTextSlotEntity
 import io.github.zvensmoluya.vortexcue.data.db.GenerationAttemptEntity
+import io.github.zvensmoluya.vortexcue.data.db.GenerationRuntimeStatusEntity
 import io.github.zvensmoluya.vortexcue.data.db.GenerationTaskEntity
 import io.github.zvensmoluya.vortexcue.data.db.GenerationTaskSnapshotEntity
 import io.github.zvensmoluya.vortexcue.data.db.SyncTextQueueControlEntity
 import io.github.zvensmoluya.vortexcue.data.db.SyncTextSchemeEntity
 import io.github.zvensmoluya.vortexcue.data.db.TextSelectionEntity
 import io.github.zvensmoluya.vortexcue.data.db.TimedTextTrackEntity
+import io.github.zvensmoluya.vortexcue.data.db.TranslationBatchEntity
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleCue
 import io.github.zvensmoluya.vortexcue.text.CanonicalTextCue
@@ -100,9 +103,36 @@ class SyncTextRepository(
             .stateIn(scope, SharingStarted.Eagerly, false)
 
     val tasks: StateFlow<List<GenerationTaskSummary>> =
-        combine(dao.observeActiveTasks(), dao.observeQueueControl()) { entities, control ->
+        combine(
+            dao.observeActiveTasks(),
+            dao.observeQueueControl(),
+            dao.observeActiveRuntimeStatuses(),
+            dao.observeActiveAsrWindows(),
+            dao.observeActiveTranslationBatches(),
+        ) { entities, control, runtimeStatuses, asrWindows, translationBatches ->
+            val runtimeByWorkUnit = runtimeStatuses.mapNotNull { status -> status.workUnitId?.let { it to status } }.toMap()
+            val taskRuntime = runtimeStatuses.filter { it.workUnitId == null }.associateBy(GenerationRuntimeStatusEntity::taskId)
+            val asrByAttempt = asrWindows.groupBy(AsrWindowEntity::attemptId)
+            val translationByAttempt = translationBatches.groupBy(TranslationBatchEntity::attemptId)
             entities.mapIndexed { index, entity ->
-                entity.toSummary(queuePosition = index, pauseAll = control?.pauseAll == true)
+                val aheadCount = entities.take(index).count(GenerationTaskEntity::occupiesRunner)
+                val workUnits =
+                    when (entity.kind.enumValueOr(GenerationTaskKind.SourceGeneration)) {
+                        GenerationTaskKind.SourceGeneration ->
+                            asrByAttempt[entity.currentAttemptId].orEmpty()
+                                .filterNot { it.state == "Split" }
+                                .map { it.toWorkUnitSummary(runtimeByWorkUnit[it.windowId]) }
+                        GenerationTaskKind.TranslationDerivation ->
+                            translationByAttempt[entity.currentAttemptId].orEmpty()
+                                .filterNot { it.state == "Split" }
+                                .map { it.toWorkUnitSummary(runtimeByWorkUnit[it.batchId]) }
+                    }
+                entity.toSummary(
+                    queuePosition = aheadCount,
+                    pauseAll = control?.pauseAll == true,
+                    runtime = taskRuntime[entity.taskId],
+                    workUnits = workUnits,
+                )
             }
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
@@ -1445,7 +1475,12 @@ private fun CredentialMetadataEntity.toDomain() =
         updatedAtMs = updatedAtMs,
     )
 
-private fun GenerationTaskEntity.toSummary(queuePosition: Int, pauseAll: Boolean) =
+private fun GenerationTaskEntity.toSummary(
+    queuePosition: Int,
+    pauseAll: Boolean,
+    runtime: GenerationRuntimeStatusEntity? = null,
+    workUnits: List<GenerationWorkUnitSummary> = emptyList(),
+) =
     GenerationTaskSummary(
         taskId = taskId,
         contentId = contentId,
@@ -1463,6 +1498,39 @@ private fun GenerationTaskEntity.toSummary(queuePosition: Int, pauseAll: Boolean
         blockedByScheme = schemeBlocked,
         errorCategory = errorCategory?.enumValueOr(GenerationErrorCategory.Configuration),
         errorMessage = errorMessage,
+        runtimePhase = runtime?.phase?.enumValueOr(GenerationRuntimePhase.Planning),
+        runtimePhaseStartedAtMs = runtime?.phaseStartedAtMs,
+        streamedTokenEstimate = runtime?.observedItemCount?.takeIf { it > 0 }?.let { (it.toLong() + 3L) / 4L },
+        streamActivityRevision = runtime?.takeIf { it.observedItemCount?.let { count -> count > 0 } == true }?.updatedAtMs,
+        workUnits = workUnits,
+    )
+
+private fun AsrWindowEntity.toWorkUnitSummary(runtime: GenerationRuntimeStatusEntity?) =
+    GenerationWorkUnitSummary(
+        workUnitId = windowId,
+        kind = GenerationWorkUnitKind.AsrWindow,
+        ordinal = ordinal,
+        state = state.enumValueOr(GenerationWorkUnitState.Waiting),
+        runtimePhase = runtime?.phase?.enumValueOr(GenerationRuntimePhase.Planning),
+        runtimePhaseStartedAtMs = runtime?.phaseStartedAtMs,
+        observedItemCount = runtime?.observedItemCount,
+        expectedItemCount = runtime?.expectedItemCount,
+        operationOrdinal = runtime?.operationOrdinal,
+        retryOrdinal = runtime?.retryOrdinal,
+    )
+
+private fun TranslationBatchEntity.toWorkUnitSummary(runtime: GenerationRuntimeStatusEntity?) =
+    GenerationWorkUnitSummary(
+        workUnitId = batchId,
+        kind = GenerationWorkUnitKind.TranslationBatch,
+        ordinal = ordinal,
+        state = state.enumValueOr(GenerationWorkUnitState.Waiting),
+        runtimePhase = runtime?.phase?.enumValueOr(GenerationRuntimePhase.PreparingTranslation),
+        runtimePhaseStartedAtMs = runtime?.phaseStartedAtMs,
+        observedItemCount = runtime?.observedItemCount,
+        expectedItemCount = runtime?.expectedItemCount,
+        operationOrdinal = runtime?.operationOrdinal,
+        retryOrdinal = runtime?.retryOrdinal,
     )
 
 private fun GeneratedTextResultEntity.toDomain(presentationMode: TextPresentationMode) =
@@ -1498,6 +1566,14 @@ private fun GenerationTaskEntity.isTerminal(): Boolean =
     state == GenerationTaskState.Completed.name ||
         state == GenerationTaskState.Deleted.name ||
         state == GenerationTaskState.Aborted.name
+
+private fun GenerationTaskEntity.occupiesRunner(): Boolean =
+    state == GenerationTaskState.Running.name ||
+        state == GenerationTaskState.Waiting.name &&
+        !waitingForNetwork &&
+        !paused &&
+        !needsAttention &&
+        !schemeBlocked
 
 private inline fun <reified T : Enum<T>> String.enumValueOr(default: T): T =
     enumValues<T>().firstOrNull { it.name == this } ?: default
