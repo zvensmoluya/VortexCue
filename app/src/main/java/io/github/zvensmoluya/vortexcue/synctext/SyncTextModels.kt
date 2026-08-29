@@ -180,6 +180,8 @@ data class GenerationRequest(
     val sourceLanguage: String? = null,
     val allowMeteredNetwork: Boolean = false,
     val allowAsrFallback: Boolean = false,
+    val mediaLocatorId: String? = null,
+    val activationTrackId: String? = null,
 )
 
 enum class GenerationTaskState {

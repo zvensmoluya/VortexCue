@@ -310,11 +310,24 @@ interface SyncTextDao {
     @Query("SELECT * FROM generated_text_slot WHERE content_id = :contentId ORDER BY target_key")
     fun observeGeneratedSlots(contentId: String): Flow<List<GeneratedTextSlotEntity>>
 
+    @Query(
+        "SELECT * FROM generated_text_slot WHERE content_id = :contentId " +
+            "AND (target_language = :targetLanguage OR (target_language IS NULL AND :targetLanguage IS NULL)) " +
+            "ORDER BY updated_at_ms DESC, slot_id DESC",
+    )
+    suspend fun generatedSlotsForTarget(
+        contentId: String,
+        targetLanguage: String?,
+    ): List<GeneratedTextSlotEntity>
+
     @Query("SELECT * FROM generated_text_slot ORDER BY content_id, target_key")
     suspend fun generatedSlots(): List<GeneratedTextSlotEntity>
 
     @Upsert
     suspend fun upsertGeneratedSlot(entity: GeneratedTextSlotEntity)
+
+    @Query("DELETE FROM generated_text_slot WHERE slot_id = :slotId")
+    suspend fun deleteGeneratedSlot(slotId: String): Int
 
     @Query("UPDATE generated_text_slot SET presentation_mode = :mode, updated_at_ms = :updatedAtMs WHERE slot_id = :slotId")
     suspend fun updateGeneratedSlotPresentationMode(slotId: String, mode: String, updatedAtMs: Long): Int

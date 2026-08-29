@@ -165,6 +165,8 @@ internal fun PlayerScreen(
     syncTextLaunch: SyncTextLaunchUiState?,
     onGenerateSyncText: () -> Unit,
     onTranslateSyncText: () -> Unit,
+    onRegenerateTranslation: () -> Unit,
+    onRegenerateFromAudio: () -> Unit,
     onCancelSyncText: () -> Unit,
     onAbortSyncText: () -> Unit,
     onRetrySyncText: () -> Unit,
@@ -181,6 +183,7 @@ internal fun PlayerScreen(
     modifier: Modifier = Modifier,
 ) {
     var textTracksVisible by rememberSaveable { mutableStateOf(false) }
+    var regenerationVisible by rememberSaveable { mutableStateOf(false) }
     var timerVisible by rememberSaveable { mutableStateOf(false) }
     val canDisplayTimedText =
         shouldDisplayTimedText(
@@ -322,6 +325,28 @@ internal fun PlayerScreen(
             subtitleOffsetMs = session.subtitleOffsetMs,
             onSubtitleOffsetChanged = onSubtitleOffsetChanged,
             onPresentationModeChanged = onGeneratedPresentationModeChanged,
+            canRegenerate = syncTextTask == null && syncTextLaunch == null,
+            onRegenerate = {
+                textTracksVisible = false
+                if (session.generatedText?.targetTimeline != null) {
+                    regenerationVisible = true
+                } else {
+                    onRegenerateFromAudio()
+                }
+            },
+        )
+    }
+    if (regenerationVisible) {
+        RegenerateSyncTextSheet(
+            onRetranslate = {
+                regenerationVisible = false
+                onRegenerateTranslation()
+            },
+            onRecognizeAgain = {
+                regenerationVisible = false
+                onRegenerateFromAudio()
+            },
+            onDismiss = { regenerationVisible = false },
         )
     }
     if (timerVisible) {
@@ -665,6 +690,8 @@ internal fun SyncTextSheet(
     subtitleOffsetMs: Long,
     onSubtitleOffsetChanged: (Long) -> Unit,
     onPresentationModeChanged: (String, TextPresentationMode) -> Unit,
+    canRegenerate: Boolean = true,
+    onRegenerate: () -> Unit = {},
 ) {
     val tracks = contentUnit?.timedTextTracks.orEmpty()
     val selection = contentUnit?.activeText ?: ActiveTextSelection()
@@ -723,6 +750,8 @@ internal fun SyncTextSheet(
                         onOpenTiming = { page = SyncTextSheetPage.Timing },
                         onRestoreAutomatic = onRestoreAllAutomatic,
                         onPresentationModeChanged = onPresentationModeChanged,
+                        canRegenerate = canRegenerate,
+                        onRegenerate = onRegenerate,
                     )
                 SyncTextSheetPage.Primary,
                 SyncTextSheetPage.Secondary,
@@ -803,6 +832,8 @@ private fun SyncTextOverview(
     onOpenTiming: () -> Unit,
     onRestoreAutomatic: () -> Unit,
     onPresentationModeChanged: (String, TextPresentationMode) -> Unit,
+    canRegenerate: Boolean,
+    onRegenerate: () -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -857,6 +888,42 @@ private fun SyncTextOverview(
             title = "重新自动匹配",
             onClick = onRestoreAutomatic,
         )
+        if (canRegenerate) {
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = AppHairline)
+            SyncTextActionRow(
+                title = "重新生成",
+                onClick = onRegenerate,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RegenerateSyncTextSheet(
+    onRetranslate: () -> Unit,
+    onRecognizeAgain: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = AppSurfaceRaised,
+        scrimColor = Color.Black.copy(alpha = 0.72f),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 20.dp, end = 20.dp, bottom = 20.dp),
+        ) {
+            SyncTextSheetHeader(
+                title = "重新生成",
+                showBack = false,
+                onBack = {},
+                onDismiss = onDismiss,
+            )
+            SyncTextActionRow(title = "重新翻译", onClick = onRetranslate)
+            SyncTextActionRow(title = "从声音重新生成", onClick = onRecognizeAgain)
+        }
     }
 }
 
@@ -1567,9 +1634,9 @@ private fun SyncTextTerminalStatus(
 private fun textTrackLabel(track: TimedTextTrack): String =
     when {
         track.origin == TimedTextOrigin.Generated && track.label?.contains("译文") == true ->
-            "${textTrackLanguageLabel(track)}（翻译）"
+            "${textTrackLanguageLabel(track)}（${if (track.label.contains("上一版")) "翻译，上一版" else "翻译"}）"
         track.origin == TimedTextOrigin.Generated && track.label?.contains("原文") == true ->
-            "${textTrackLanguageLabel(track)}（原文）"
+            "${textTrackLanguageLabel(track)}（${if (track.label.contains("上一版")) "原文，上一版" else "原文"}）"
         else ->
             track.label?.takeIf(String::isNotBlank)?.removePrefix("生成")
                 ?: track.language?.takeIf(String::isNotBlank)?.let(::languageLabel)

@@ -118,10 +118,18 @@ class SyncTextRepository(
                 val aheadCount = entities.take(index).count(GenerationTaskEntity::occupiesRunner)
                 val workUnits =
                     when (entity.kind.enumValueOr(GenerationTaskKind.SourceGeneration)) {
-                        GenerationTaskKind.SourceGeneration ->
-                            asrByAttempt[entity.currentAttemptId].orEmpty()
-                                .filterNot { it.state == "Split" }
-                                .map { it.toWorkUnitSummary(runtimeByWorkUnit[it.windowId]) }
+                        GenerationTaskKind.SourceGeneration -> {
+                            val translationUnits = translationByAttempt[entity.currentAttemptId].orEmpty()
+                            if (translationUnits.isNotEmpty()) {
+                                translationUnits
+                                    .filterNot { it.state == "Split" }
+                                    .map { it.toWorkUnitSummary(runtimeByWorkUnit[it.batchId]) }
+                            } else {
+                                asrByAttempt[entity.currentAttemptId].orEmpty()
+                                    .filterNot { it.state == "Split" }
+                                    .map { it.toWorkUnitSummary(runtimeByWorkUnit[it.windowId]) }
+                            }
+                        }
                         GenerationTaskKind.TranslationDerivation ->
                             translationByAttempt[entity.currentAttemptId].orEmpty()
                                 .filterNot { it.state == "Split" }
@@ -462,21 +470,43 @@ class SyncTextRepository(
 
     suspend fun submit(request: GenerationRequest): GenerationTaskSummary {
         val normalized = request.normalized()
-        if (normalized.output is GenerationOutput.Translated) {
-            val sourceResultId = normalized.generatedSourceResultId()
-                ?: throw IllegalArgumentException("Translation requires a generated source result")
+        val generatedSourceResultId = normalized.generatedSourceResultId()
+        if (normalized.output is GenerationOutput.Translated && generatedSourceResultId != null) {
             return submitTranslation(
-                sourceResultId = sourceResultId,
+                sourceResultId = generatedSourceResultId,
                 schemeId = normalized.schemeId,
                 targetLanguage = normalized.output.targetLanguage,
                 presentationMode = normalized.output.presentationMode,
                 allowMeteredNetwork = normalized.allowMeteredNetwork,
+                activationTrackId = normalized.activationTrackId,
             )
         }
         val scheme = requireNotNull(dao.scheme(normalized.schemeId)) { "Sync text scheme does not exist" }
         requireNotNull(contentDao.content(normalized.contentId)) { "Content does not exist" }
         validateInput(normalized)
         require(credentials.contains(scheme.asrCredentialId)) { "ASR credential is unavailable" }
+        val translated = normalized.output as? GenerationOutput.Translated
+        val targetLanguage = translated?.targetLanguage?.let(LanguageTags::normalize)
+        val policy = targetLanguage?.let(policies::resolve)
+        if (translated != null) {
+            require(!scheme.translationEndpoint.isNullOrBlank()) { "Translation endpoint is not configured" }
+            require(!scheme.translationModel.isNullOrBlank()) { "Translation model is not configured" }
+            val credentialId = requireNotNull(scheme.translationCredentialId) { "Translation credential is not configured" }
+            require(credentials.contains(credentialId)) { "Translation credential is unavailable" }
+        }
+        val mediaLocatorId =
+            if (normalized.input is GenerationInput.AudioTrack) {
+                normalized.mediaLocatorId ?: requireNotNull(contentDao.activeLocator(normalized.contentId)?.locatorId) {
+                    "Content has no active media locator"
+                }
+            } else {
+                null
+            }
+        mediaLocatorId?.let { locatorId ->
+            require(contentDao.locator(locatorId)?.contentId == normalized.contentId) {
+                "Media locator does not belong to the requested content"
+            }
+        }
 
         val dedupeKey = sourceDedupeKey(normalized.contentId)
         dao.activeTaskByDedupeKey(dedupeKey)?.let { return it.toSummary(it.queuePosition, false) }
@@ -495,7 +525,7 @@ class SyncTextRepository(
                 stage = GenerationStage.Queued.name,
                 queuePosition = 0,
                 progress = 0f,
-                targetLanguage = null,
+                targetLanguage = targetLanguage,
                 waitingForNetwork = false,
                 meteredNetworkAllowed = normalized.allowMeteredNetwork,
                 paused = false,
@@ -510,13 +540,20 @@ class SyncTextRepository(
             dao.activeTaskByDedupeKey(dedupeKey)?.let { return@withWriteTransaction }
             val queued = task.copy(queuePosition = dao.maxQueuePosition() + 1)
             dao.insertTask(queued)
-            dao.insertTaskSnapshot(normalized.toSnapshot(taskId, timestamp, inputSourceResultId = null))
+            dao.insertTaskSnapshot(
+                normalized.toSnapshot(
+                    taskId = taskId,
+                    timestamp = timestamp,
+                    inputSourceResultId = null,
+                    mediaLocatorId = mediaLocatorId,
+                ),
+            )
             dao.insertAttempt(
                 scheme.toAttempt(
                     taskId = taskId,
                     attemptId = attemptId,
                     ordinal = 0,
-                    policy = null,
+                    policy = policy,
                     sourceResultId = null,
                     timestamp = timestamp,
                 ),
@@ -540,12 +577,71 @@ class SyncTextRepository(
         targetLanguage: String? = null,
         presentationMode: TextPresentationMode? = null,
         allowMeteredNetwork: Boolean = false,
+        activationTrackId: String? = null,
     ): GenerationTaskSummary {
         val source = requireNotNull(dao.generatedResult(sourceResultId)) { "Source result does not exist" }
         require(source.targetLanguage == null) { "Translation input must be a source result" }
         require(source.completeness == GeneratedResultCompleteness.Final.name) {
             "Translation requires a final source result"
         }
+        return submitTranslationRevision(
+            contentId = source.contentId,
+            sourceRevisionId = source.sourceRevisionId,
+            sourceRevisionHash = source.sourceSha256,
+            sourceLanguage = source.sourceLanguage,
+            sourceResultId = source.resultId,
+            schemeId = schemeId,
+            targetLanguage = targetLanguage,
+            presentationMode = presentationMode,
+            allowMeteredNetwork = allowMeteredNetwork,
+            activationTrackId = activationTrackId,
+        )
+    }
+
+    suspend fun submitTranslationFromSlot(
+        slotId: String,
+        schemeId: String? = null,
+        targetLanguage: String? = null,
+        presentationMode: TextPresentationMode? = null,
+        allowMeteredNetwork: Boolean = false,
+        activationTrackId: String? = null,
+    ): GenerationTaskSummary {
+        val selected = requireNotNull(dao.currentGeneratedResult(slotId)) { "Selected generated text is unavailable" }
+        require(selected.completeness == GeneratedResultCompleteness.Final.name) {
+            "Translation requires final source text"
+        }
+        return submitTranslationRevision(
+            contentId = selected.contentId,
+            sourceRevisionId = selected.sourceRevisionId,
+            sourceRevisionHash = selected.sourceSha256,
+            sourceLanguage = selected.sourceLanguage,
+            sourceResultId = selected.resultId.takeIf { selected.targetLanguage == null },
+            schemeId = schemeId,
+            targetLanguage = targetLanguage,
+            presentationMode = presentationMode,
+            allowMeteredNetwork = allowMeteredNetwork,
+            activationTrackId = activationTrackId,
+        )
+    }
+
+    private suspend fun submitTranslationRevision(
+        contentId: String,
+        sourceRevisionId: String,
+        sourceRevisionHash: String,
+        sourceLanguage: String?,
+        sourceResultId: String?,
+        schemeId: String?,
+        targetLanguage: String?,
+        presentationMode: TextPresentationMode?,
+        allowMeteredNetwork: Boolean,
+        activationTrackId: String?,
+    ): GenerationTaskSummary {
+        val revision = requireNotNull(textStorage.revision(sourceRevisionId)) { "Translation source text is unavailable" }
+        require(
+            revision.contentId == contentId &&
+                revision.contentHash == sourceRevisionHash &&
+                revision.completeness == TimelineCompleteness.Final,
+        ) { "Translation source text does not match its frozen revision" }
         val scheme = requireNotNull(
             schemeId?.let { dao.scheme(it) } ?: dao.defaultScheme() ?: dao.schemes().firstOrNull(),
         ) { "Sync text configuration does not exist" }
@@ -555,11 +651,11 @@ class SyncTextRepository(
         require(endpoint.isNotBlank() && model.isNotBlank()) { "Translation configuration is incomplete" }
         require(credentials.contains(credentialId)) { "Translation credential is unavailable" }
         val normalizedTarget = LanguageTags.normalize(targetLanguage ?: scheme.defaultTargetLanguage)
-        require(LanguageTags.normalizeOrNull(source.sourceLanguage) != normalizedTarget) {
+        require(LanguageTags.normalizeOrNull(sourceLanguage) != normalizedTarget) {
             "Source and target languages are the same"
         }
         val mode = presentationMode ?: scheme.defaultPresentationMode.enumValueOr(TextPresentationMode.TargetOnly)
-        val dedupeKey = translationDedupeKey(source.contentId, sourceResultId, normalizedTarget)
+        val dedupeKey = translationDedupeKey(contentId, sourceRevisionId, normalizedTarget)
         dao.activeTaskByDedupeKey(dedupeKey)?.let { return it.toSummary(it.queuePosition, false) }
 
         val timestamp = nowMs()
@@ -569,7 +665,7 @@ class SyncTextRepository(
         val task =
             GenerationTaskEntity(
                 taskId = taskId,
-                contentId = source.contentId,
+                contentId = contentId,
                 schemeId = scheme.schemeId,
                 kind = GenerationTaskKind.TranslationDerivation.name,
                 activeDedupeKey = dedupeKey,
@@ -599,12 +695,15 @@ class SyncTextRepository(
                     embeddedTrackId = null,
                     audioTrackId = null,
                     inputSourceResultId = sourceResultId,
-                    sourceLanguage = source.sourceLanguage,
+                    sourceLanguage = sourceLanguage,
                     targetLanguage = normalizedTarget,
                     presentationMode = mode.name,
                     allowMeteredNetwork = allowMeteredNetwork,
                     allowAsrFallback = false,
                     submittedAtMs = timestamp,
+                    inputSourceRevisionId = sourceRevisionId,
+                    inputSourceRevisionHash = sourceRevisionHash,
+                    activationTrackId = activationTrackId,
                 ),
             )
             dao.insertAttempt(
@@ -753,6 +852,7 @@ class SyncTextRepository(
             val previous = requireNotNull(attempts.lastOrNull())
             val target = snapshot.targetLanguage
             val policy = target?.let(policies::resolve)
+            val hasFrozenSource = task.sourceResultId != null || snapshot.inputSourceRevisionId != null
             val attemptId = newId()
             changedAttemptId = attemptId
             val timestamp = nowMs()
@@ -771,9 +871,8 @@ class SyncTextRepository(
                     schemeId = schemeId,
                     currentAttemptId = attemptId,
                     state = GenerationTaskState.Waiting.name,
-                    stage =
-                        if (task.sourceResultId == null) GenerationStage.Queued.name else GenerationStage.SourcePublished.name,
-                    progress = if (task.sourceResultId == null) 0f else SourcePublishedProgress,
+                    stage = if (hasFrozenSource) GenerationStage.SourcePublished.name else GenerationStage.Queued.name,
+                    progress = if (hasFrozenSource) SourcePublishedProgress else 0f,
                     paused = false,
                     needsAttention = false,
                     schemeBlocked = false,
@@ -819,9 +918,11 @@ class SyncTextRepository(
         }
 
     suspend fun currentSourceResult(contentId: String): GeneratedTextResult? {
-        val slot = dao.generatedSlot(contentId, SourceSlotKey) ?: return null
-        val result = dao.currentGeneratedResult(slot.slotId) ?: return null
-        return result.toDomain(slot.presentationMode.enumValueOr(TextPresentationMode.TargetOnly))
+        val slot = dao.generatedSlotsForTarget(contentId, null).firstNotNullOfOrNull { candidate ->
+            dao.currentGeneratedResult(candidate.slotId)
+                ?.let { candidate to it }
+        } ?: return null
+        return slot.second.toDomain(slot.first.presentationMode.enumValueOr(TextPresentationMode.TargetOnly))
     }
 
     suspend fun publishResult(
@@ -843,6 +944,7 @@ class SyncTextRepository(
         partialArtifactIds: List<String> = emptyList(),
     ): GeneratedTextResult {
         val taskBeforeWrite = requireNotNull(dao.task(taskId)) { "Task no longer exists" }
+        val taskSnapshot = requireNotNull(dao.taskSnapshot(taskId)) { "Task snapshot no longer exists" }
         val attempt = requireNotNull(dao.attempt(taskBeforeWrite.currentAttemptId))
         val normalizedSourceLanguage = LanguageTags.normalizeOrNull(sourceLanguage)
         val normalizedTargetLanguage = LanguageTags.normalizeOrNull(targetLanguage)
@@ -923,7 +1025,7 @@ class SyncTextRepository(
                     ) {
                         throw TaskPublicationDeferredException()
                     }
-                    val targetKey = normalizedTargetLanguage ?: SourceSlotKey
+                    val targetKey = variantTargetKey(taskId, normalizedTargetLanguage)
                     val timestamp = nowMs()
                     val existingSlot = dao.generatedSlot(task.contentId, targetKey)
                     val slotId = existingSlot?.slotId ?: stableSlotId(task.contentId, targetKey)
@@ -974,13 +1076,25 @@ class SyncTextRepository(
                     dao.insertGeneratedResult(entity)
                     dao.upsertGeneratedSlot(slot)
                     upsertGeneratedTrack(entity, slot)
-                    activateGeneratedTrackWhenAllowed(task.contentId, slotId)
+                    val shouldActivate =
+                        completeTask ||
+                            normalizedTargetLanguage == null && taskSnapshot.activationTrackId == null
+                    if (shouldActivate) {
+                        activateGeneratedTrackWhenAllowed(
+                            contentId = task.contentId,
+                            slotId = slotId,
+                            expectedTrackId = taskSnapshot.activationTrackId,
+                        )
+                    }
                     val replacementCandidate = existingSlot?.currentResultId?.let { dao.generatedResult(it) }
                     replaced =
                         replacementCandidate?.takeIf {
                             dao.activeSourceResultReferenceCount(it.resultId) == 0
                         }
                     replaced?.let { dao.deleteGeneratedResult(it.resultId) }
+                    if (completeness == GeneratedResultCompleteness.Final) {
+                        retainLatestGeneratedVariants(task.contentId, normalizedTargetLanguage)
+                    }
                     val sourceResultId = if (normalizedTargetLanguage == null) resultId else task.sourceResultId
                     dao.upsertAttempt(
                         attempt.copy(
@@ -1239,17 +1353,60 @@ class SyncTextRepository(
         )
     }
 
-    private suspend fun activateGeneratedTrackWhenAllowed(contentId: String, slotId: String) {
+    private suspend fun activateGeneratedTrackWhenAllowed(
+        contentId: String,
+        slotId: String,
+        expectedTrackId: String?,
+    ) {
         val trackId = stableTimedTextTrackId(contentId, TimedTextOrigin.Generated, "generated:$slotId")
         val current = contentDao.textSelections(contentId).firstOrNull { it.slot == TextTrackSlot.Primary.name }
-        if (current == null || current.mode == TextSelectionMode.Automatic.name) {
+        if (
+            current == null ||
+            current.mode == TextSelectionMode.Automatic.name ||
+            expectedTrackId != null && current.selectedTrackId == expectedTrackId
+        ) {
             contentDao.upsertTextSelection(
                 TextSelectionEntity(
                     contentId = contentId,
                     slot = TextTrackSlot.Primary.name,
                     selectedTrackId = trackId,
-                    mode = TextSelectionMode.Automatic.name,
+                    mode = current?.mode ?: TextSelectionMode.Automatic.name,
                 ),
+            )
+        }
+    }
+
+    private suspend fun retainLatestGeneratedVariants(
+        contentId: String,
+        targetLanguage: String?,
+    ) {
+        val slots =
+            dao.generatedSlotsForTarget(contentId, targetLanguage).filter { slot ->
+                dao.currentGeneratedResult(slot.slotId)?.completeness == GeneratedResultCompleteness.Final.name
+            }
+        val selectedTrackIds = contentDao.textSelections(contentId).mapNotNullTo(mutableSetOf()) { it.selectedTrackId }
+        val retainedSlotIds = slots.take(MaxRetainedGeneratedVariants).mapTo(mutableSetOf()) { it.slotId }
+        slots.forEach { slot ->
+            val trackId = stableTimedTextTrackId(contentId, TimedTextOrigin.Generated, "generated:${slot.slotId}")
+            if (trackId in selectedTrackIds) retainedSlotIds += slot.slotId
+        }
+        slots.filterNot { it.slotId in retainedSlotIds }.forEach { slot ->
+            val result = dao.currentGeneratedResult(slot.slotId)
+            if (result == null || dao.activeSourceResultReferenceCount(result.resultId) == 0) {
+                dao.deleteGeneratedSlot(slot.slotId)
+            }
+        }
+        dao.generatedSlotsForTarget(contentId, targetLanguage).forEachIndexed { index, slot ->
+            val result = dao.currentGeneratedResult(slot.slotId) ?: return@forEachIndexed
+            val baseLabel =
+                if (result.targetLanguage == null) {
+                    "生成原文"
+                } else {
+                    "生成译文 · ${result.targetLanguage}"
+                }
+            contentDao.updateGeneratedTrackLabel(
+                slotId = slot.slotId,
+                label = if (index == 0) baseLabel else "$baseLabel · 上一版",
             )
         }
     }
@@ -1258,6 +1415,8 @@ class SyncTextRepository(
         copy(
             contentId = contentId.trim().also { require(it.isNotBlank()) },
             sourceLanguage = LanguageTags.normalizeOrNull(sourceLanguage),
+            mediaLocatorId = mediaLocatorId?.trim()?.takeIf(String::isNotBlank),
+            activationTrackId = activationTrackId?.trim()?.takeIf(String::isNotBlank),
             output =
                 when (val value = output) {
                     GenerationOutput.SourceOnly -> value
@@ -1270,6 +1429,7 @@ class SyncTextRepository(
         taskId: String,
         timestamp: Long,
         inputSourceResultId: String?,
+        mediaLocatorId: String?,
     ): GenerationTaskSnapshotEntity {
         val translated = output as? GenerationOutput.Translated
         return GenerationTaskSnapshotEntity(
@@ -1285,6 +1445,8 @@ class SyncTextRepository(
             allowMeteredNetwork = allowMeteredNetwork,
             allowAsrFallback = allowAsrFallback,
             submittedAtMs = timestamp,
+            mediaLocatorId = mediaLocatorId,
+            activationTrackId = activationTrackId,
         )
     }
 
@@ -1353,7 +1515,6 @@ class SyncTextRepository(
     companion object {
         private const val QueueSchedulerKey = "sync-text-queue"
         private const val DefaultProbeTargetLanguage = "zh-CN"
-        private const val SourceSlotKey = "@source"
         private const val NoTranslationPolicyId = "none.v1"
         private const val AsrWindowMs = 300_000L
         private const val AsrOverlapMs = 3_000L
@@ -1361,6 +1522,7 @@ class SyncTextRepository(
         private const val SourcePublishedProgress = 0.55f
         private const val MaxErrorMessageLength = 600
         private const val MaxUserAgentLength = 256
+        private const val MaxRetainedGeneratedVariants = 2
         private val SchedulableTaskStates =
             setOf(
                 GenerationTaskState.Waiting.name,
@@ -1370,11 +1532,14 @@ class SyncTextRepository(
         private fun stableSlotId(contentId: String, targetKey: String): String =
             "slot-${sha256("$contentId|$targetKey").take(32)}"
 
+        private fun variantTargetKey(taskId: String, targetLanguage: String?): String =
+            if (targetLanguage == null) "@source:$taskId" else "$targetLanguage:$taskId"
+
         private fun sourceDedupeKey(contentId: String): String =
             sha256("$contentId|${GenerationTaskKind.SourceGeneration.name}")
 
-        private fun translationDedupeKey(contentId: String, sourceResultId: String, targetLanguage: String): String =
-            sha256("$contentId|${GenerationTaskKind.TranslationDerivation.name}|$sourceResultId|$targetLanguage")
+        private fun translationDedupeKey(contentId: String, sourceRevisionId: String, targetLanguage: String): String =
+            sha256("$contentId|${GenerationTaskKind.TranslationDerivation.name}|$sourceRevisionId|$targetLanguage")
 
         private fun sha256(value: String): String =
             MessageDigest.getInstance("SHA-256")

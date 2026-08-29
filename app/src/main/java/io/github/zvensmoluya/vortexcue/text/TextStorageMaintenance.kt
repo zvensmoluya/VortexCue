@@ -73,9 +73,11 @@ class TextStorageMaintenance(
             .forEach { taskId -> syncDao.markTaskStorageNeedsAttention(taskId, message, timestamp) }
         syncDao.activeTasks().forEach { task ->
             val hasInvalidSource = task.sourceResultId?.let(resultsById::get)?.resultId in invalidResultIds
-            val sourceTrackId = syncDao.taskSnapshot(task.taskId)?.sourceTrackId
+            val snapshot = syncDao.taskSnapshot(task.taskId)
+            val sourceTrackId = snapshot?.sourceTrackId
             val hasInvalidInputRevision =
-                tracks.firstOrNull { it.trackId == sourceTrackId }?.revisionId in invalidRevisionIds
+                tracks.firstOrNull { it.trackId == sourceTrackId }?.revisionId in invalidRevisionIds ||
+                    snapshot?.inputSourceRevisionId in invalidRevisionIds
             val hasInvalidWorkArtifact =
                 syncDao.attemptsForTask(task.taskId).any { attempt ->
                     syncDao.asrWindows(attempt.attemptId).any { it.transcriptArtifactId in invalidArtifactIds } ||
@@ -152,6 +154,9 @@ class TextStorageMaintenance(
         val reachableRevisionIds =
             buildSet {
                 tracks.mapNotNullTo(this) { it.revisionId }
+                syncDao.activeTasks().mapNotNullTo(this) { task ->
+                    syncDao.taskSnapshot(task.taskId)?.inputSourceRevisionId
+                }
                 results.forEach { result ->
                     add(result.sourceRevisionId)
                     result.targetRevisionId?.let(::add)

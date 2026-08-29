@@ -19,6 +19,7 @@ import io.github.zvensmoluya.vortexcue.text.CanonicalTextNormalizer
 import io.github.zvensmoluya.vortexcue.text.TextArtifactKind
 import io.github.zvensmoluya.vortexcue.text.TextArtifactPayload
 import io.github.zvensmoluya.vortexcue.text.TextStorageRepository
+import io.github.zvensmoluya.vortexcue.text.TimelineCompleteness
 import io.github.zvensmoluya.vortexcue.text.TimelineRevisionReader
 import java.io.IOException
 import java.util.UUID
@@ -148,7 +149,10 @@ class SyncTextTaskRunner(
         try {
             val snapshot = requireNotNull(repository.taskSnapshot(task.taskId))
             val kind = task.kind.enumValueOr(GenerationTaskKind.SourceGeneration)
-            val requiresNetwork = kind == GenerationTaskKind.TranslationDerivation || snapshot.sourceTrackId == null
+            val requiresNetwork =
+                kind == GenerationTaskKind.TranslationDerivation ||
+                    snapshot.sourceTrackId == null ||
+                    snapshot.targetLanguage != null
             val networkWaitReason = networkState.waitReason(task.meteredNetworkAllowed)
             if (requiresNetwork && networkWaitReason != null) {
                 repository.markWaitingForNetwork(task.taskId, networkWaitReason)
@@ -159,20 +163,53 @@ class SyncTextTaskRunner(
             val attempt = requireNotNull(repository.currentAttempt(task.taskId))
             val source = resolveSource(task, snapshot, attempt)
             if (kind == GenerationTaskKind.SourceGeneration) {
-                if (repository.isTerminal(task.taskId)) return
+                val targetLanguage = snapshot.targetLanguage
+                if (targetLanguage == null) {
+                    if (repository.isTerminal(task.taskId)) return
+                    ensureRunnable(task.taskId)
+                    runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.Publishing)
+                    repository.publishResult(
+                        taskId = task.taskId,
+                        sourceLanguage = snapshot.sourceLanguage ?: source.language,
+                        targetLanguage = null,
+                        presentationMode = TextPresentationMode.TargetOnly,
+                        sourceCues = source.cues,
+                        targetCues = null,
+                        usage = source.usage,
+                        sourceModel = null,
+                        completeTask = true,
+                        sourceRevisionId = source.revisionId,
+                    )
+                    return
+                }
                 ensureRunnable(task.taskId)
-                runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.Publishing)
-                repository.publishResult(
-                    taskId = task.taskId,
-                    sourceLanguage = snapshot.sourceLanguage ?: source.language,
-                    targetLanguage = null,
-                    presentationMode = TextPresentationMode.TargetOnly,
-                    sourceCues = source.cues,
-                    targetCues = null,
-                    usage = source.usage,
-                    sourceModel = null,
-                    completeTask = true,
-                    sourceRevisionId = source.revisionId,
+                val publishedSource =
+                    if (source.revisionId != null) {
+                        source
+                    } else {
+                        runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.Publishing)
+                        val result =
+                            repository.publishResult(
+                                taskId = task.taskId,
+                                sourceLanguage = snapshot.sourceLanguage ?: source.language,
+                                targetLanguage = null,
+                                presentationMode = TextPresentationMode.TargetOnly,
+                                sourceCues = source.cues,
+                                targetCues = null,
+                                usage = source.usage,
+                                sourceModel = null,
+                                completeTask = false,
+                                completeness = GeneratedResultCompleteness.Final,
+                                sourceRevisionId = source.revisionId,
+                            )
+                        source.copy(resultId = result.resultId, revisionId = result.sourceRevisionId)
+                    }
+                translateAndPublish(
+                    task,
+                    snapshot,
+                    requireNotNull(repository.currentAttempt(task.taskId)),
+                    publishedSource,
+                    targetLanguage,
                 )
                 return
             }
@@ -264,6 +301,23 @@ class SyncTextTaskRunner(
     ): SourceWork {
         if (task.kind.enumValueOr(GenerationTaskKind.SourceGeneration) == GenerationTaskKind.TranslationDerivation) {
             runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.PreparingTranslation)
+            snapshot.inputSourceRevisionId?.let { revisionId ->
+                val revision = requireNotNull(textStorage.revision(revisionId)) { "Translation source revision is unavailable" }
+                require(
+                    revision.contentId == task.contentId &&
+                        revision.contentHash == snapshot.inputSourceRevisionHash &&
+                        revision.completeness == TimelineCompleteness.Final,
+                ) {
+                    "Translation source revision snapshot does not match the task"
+                }
+                return SourceWork(
+                    cues = revisionReader.read(revisionId).toSubtitleCues(),
+                    language = snapshot.sourceLanguage,
+                    usage = UsageRecord(),
+                    resultId = snapshot.inputSourceResultId,
+                    revisionId = revisionId,
+                )
+            }
             val frozenResultId = requireNotNull(snapshot.inputSourceResultId) { "Translation source result is missing" }
             require(task.sourceResultId == frozenResultId && attempt.sourceResultId == frozenResultId) {
                 "Translation source result snapshot does not match the task"
@@ -314,10 +368,11 @@ class SyncTextTaskRunner(
     ): SourceWork {
         runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.Planning)
         repository.markRunning(task.taskId, GenerationStage.DecodingAudio, 0.05f)
-        val activeLocatorId = contentDao.activeLocator(task.contentId)?.locatorId
+        val activeLocatorId = snapshot.mediaLocatorId ?: contentDao.activeLocator(task.contentId)?.locatorId
             ?: throw AudioDecodeException("Content has no active media locator")
         val media = contentDao.locator(activeLocatorId)
             ?: throw AudioDecodeException("Active media locator is unavailable")
+        require(media.contentId == task.contentId) { "Frozen media locator does not belong to the task content" }
         val mediaUri = Uri.parse(media.uriValue)
         val durationMs =
             media.durationMs.takeIf { it > 0L }
@@ -372,7 +427,7 @@ class SyncTextTaskRunner(
                                     targetCues = null,
                                     usage = prefixWork.map(WindowTranscript::usage).sumRealUsage(),
                                     sourceModel = AsrProfile.fromStoredValue(attempt.asrProfile).modelId,
-                                    completeTask = prefix.size == roots.size,
+                                    completeTask = prefix.size == roots.size && snapshot.targetLanguage == null,
                                     completeness =
                                         if (prefix.size == roots.size) {
                                             GeneratedResultCompleteness.Final

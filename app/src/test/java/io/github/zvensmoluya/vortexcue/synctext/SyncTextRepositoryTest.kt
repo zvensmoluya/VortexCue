@@ -2,11 +2,14 @@ package io.github.zvensmoluya.vortexcue.synctext
 
 import androidx.room3.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import io.github.zvensmoluya.vortexcue.core.model.TextSelectionMode
+import io.github.zvensmoluya.vortexcue.core.model.TextTrackSlot
 import io.github.zvensmoluya.vortexcue.data.db.ActiveMediaLocatorEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentEntity
 import io.github.zvensmoluya.vortexcue.data.db.ContentIdentityEntity
 import io.github.zvensmoluya.vortexcue.data.db.MediaLocatorEntity
 import io.github.zvensmoluya.vortexcue.data.db.SyncTextRunnerLeaseEntity
+import io.github.zvensmoluya.vortexcue.data.db.TextSelectionEntity
 import io.github.zvensmoluya.vortexcue.data.db.TimedTextTrackEntity
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase_Impl
@@ -217,7 +220,7 @@ class SyncTextRepositoryTest {
     }
 
     @Test
-    fun `task snapshots dedupe attempts and generated slot replacement stay atomic`() = runBlocking {
+    fun `task snapshots dedupe attempts and keep latest generated alternatives atomic`() = runBlocking {
         insertContentWithTextTrack()
         repository.saveCredential("asr-key", "ASR", CredentialPurpose.Asr, "asr-secret")
         repository.saveCredential("translation-key", "Translation", CredentialPurpose.Translation, "translation-secret")
@@ -312,9 +315,9 @@ class SyncTextRepositoryTest {
                 completeTask = true,
             )
 
-        assertEquals(firstResult.slotId, secondResult.slotId)
+        assertFalse(firstResult.slotId == secondResult.slotId)
         assertEquals(secondResult.resultId, database.syncTextDao().currentGeneratedResult(secondResult.slotId)?.resultId)
-        assertNull(database.syncTextDao().generatedResult(firstResult.resultId))
+        assertEquals(firstResult.resultId, database.syncTextDao().currentGeneratedResult(firstResult.slotId)?.resultId)
         assertTrue(textStorage.revision(firstResult.sourceRevisionId) != null)
         assertEquals(TextPresentationMode.TargetOnly, repository.loadPresentation(secondResult.slotId)?.result?.presentationMode)
         repository.setPresentationMode(secondResult.slotId, TextPresentationMode.SourceTarget)
@@ -329,6 +332,35 @@ class SyncTextRepositoryTest {
             "09de51ae2e3709c8e506a4d9a82c9ce3bc9b16a13d0f683a928aad3a2d91e07b",
             secondResult.stylePromptSha256,
         )
+        val thirdTask =
+            repository.submitTranslationFromSlot(
+                slotId = secondResult.slotId,
+                schemeId = scheme.schemeId,
+                targetLanguage = "zh",
+                activationTrackId = TrackId,
+            )
+        val thirdSnapshot = requireNotNull(database.syncTextDao().taskSnapshot(thirdTask.taskId))
+        assertNull(thirdSnapshot.inputSourceResultId)
+        assertEquals(sourceResult.sourceRevisionId, thirdSnapshot.inputSourceRevisionId)
+        assertEquals(sourceResult.sourceSha256, thirdSnapshot.inputSourceRevisionHash)
+        assertEquals(TrackId, thirdSnapshot.activationTrackId)
+        val thirdResult =
+            repository.publishResult(
+                taskId = thirdTask.taskId,
+                sourceLanguage = "en",
+                targetLanguage = "zh-CN",
+                presentationMode = TextPresentationMode.TargetOnly,
+                sourceCues = source,
+                targetCues = target.map { it.copy(text = "third target") },
+                completeTask = true,
+            )
+        assertNull(database.syncTextDao().generatedResult(firstResult.resultId))
+        assertEquals(secondResult.resultId, database.syncTextDao().generatedResult(secondResult.resultId)?.resultId)
+        assertEquals(thirdResult.resultId, database.syncTextDao().generatedResult(thirdResult.resultId)?.resultId)
+        val translatedTracks = database.contentDao().textTracks(ContentId).filter { it.language == "zh-CN" }
+        assertEquals(2, translatedTracks.size)
+        assertTrue(translatedTracks.any { it.label == "生成译文 · zh-CN" })
+        assertTrue(translatedTracks.any { it.label == "生成译文 · zh-CN · 上一版" })
         val deleteFailure = runCatching { repository.deleteCredential("asr-key") }.exceptionOrNull()
         assertTrue(deleteFailure is CredentialStillReferencedException)
         val schemeDeleteFailure = runCatching { repository.deleteScheme(scheme.schemeId) }.exceptionOrNull()
@@ -336,7 +368,79 @@ class SyncTextRepositoryTest {
 
         database.syncTextDao().pruneTerminalTasks(Long.MAX_VALUE)
         assertNull(database.syncTextDao().task(regeneration.taskId))
-        assertEquals(secondResult.resultId, database.syncTextDao().currentGeneratedResult(secondResult.slotId)?.resultId)
+        assertEquals(thirdResult.resultId, database.syncTextDao().currentGeneratedResult(thirdResult.slotId)?.resultId)
+    }
+
+    @Test
+    fun `audio translation submission freezes media and intended activation`() = runBlocking {
+        insertContentWithTextTrack()
+        database.contentDao().upsertTextSelection(
+            TextSelectionEntity(
+                contentId = ContentId,
+                slot = TextTrackSlot.Primary.name,
+                selectedTrackId = TrackId,
+                mode = TextSelectionMode.Manual.name,
+            ),
+        )
+        repository.saveCredential("asr-combined", "ASR", CredentialPurpose.Asr, "asr-secret")
+        repository.saveCredential(
+            "translation-combined",
+            "Translation",
+            CredentialPurpose.Translation,
+            "translation-secret",
+        )
+        val scheme =
+            repository.createScheme(
+                name = "Combined",
+                asrProfile = AsrProfile.OpenRouterWhisperV1,
+                asrCredentialId = "asr-combined",
+                translationProtocol = TranslationProtocol.Responses,
+                translationEndpoint = "https://example.test/v1/responses",
+                translationModel = "model",
+                translationCredentialId = "translation-combined",
+                defaultTargetLanguage = "zh-CN",
+            )
+
+        val task =
+            repository.submit(
+                GenerationRequest(
+                    contentId = ContentId,
+                    input = GenerationInput.AudioTrack("audio:0"),
+                    output = GenerationOutput.Translated("zh", TextPresentationMode.TargetOnly),
+                    schemeId = scheme.schemeId,
+                    mediaLocatorId = LocatorId,
+                    activationTrackId = TrackId,
+                ),
+            )
+
+        val entity = requireNotNull(database.syncTextDao().task(task.taskId))
+        val snapshot = requireNotNull(database.syncTextDao().taskSnapshot(task.taskId))
+        assertEquals(GenerationTaskKind.SourceGeneration.name, entity.kind)
+        assertEquals("zh-CN", entity.targetLanguage)
+        assertEquals(LocatorId, snapshot.mediaLocatorId)
+        assertEquals("zh-CN", snapshot.targetLanguage)
+        assertEquals(TrackId, snapshot.activationTrackId)
+        assertNull(snapshot.inputSourceRevisionId)
+
+        repository.publishResult(
+            taskId = task.taskId,
+            sourceLanguage = "en",
+            targetLanguage = null,
+            presentationMode = TextPresentationMode.TargetOnly,
+            sourceCues = CueIdNormalizer.normalize(listOf(SubtitleCue(0L, 1_000L, "recognized"))),
+            targetCues = null,
+            completeTask = false,
+            completeness = GeneratedResultCompleteness.Final,
+        )
+        repository.blockTask(
+            taskId = task.taskId,
+            category = GenerationErrorCategory.InvalidResponse,
+            message = "translation failed",
+            blockScheme = false,
+        )
+
+        val primary = database.contentDao().textSelections(ContentId).single { it.slot == TextTrackSlot.Primary.name }
+        assertEquals(TrackId, primary.selectedTrackId)
     }
 
     @Test
@@ -700,6 +804,52 @@ class SyncTextTaskRunnerRecoveryTest {
     }
 
     @Test
+    fun `runner continues from audio recognition into translation in one task`() = runBlocking {
+        insertAudioContent(durationMs = 100_000L)
+        repository.saveCredential("asr-combined", "ASR", CredentialPurpose.Asr, "asr-secret")
+        repository.saveCredential(
+            "translation-combined",
+            "Translation",
+            CredentialPurpose.Translation,
+            "translation-secret",
+        )
+        val scheme =
+            repository.createScheme(
+                name = "Combined",
+                asrProfile = AsrProfile.OpenRouterWhisperV1,
+                asrCredentialId = "asr-combined",
+                translationProtocol = TranslationProtocol.Responses,
+                translationEndpoint = "https://example.test/v1/responses",
+                translationModel = "model",
+                translationCredentialId = "translation-combined",
+                defaultTargetLanguage = "zh-CN",
+                isDefault = true,
+            )
+        val task =
+            repository.submit(
+                GenerationRequest(
+                    contentId = RunnerContentId,
+                    input = GenerationInput.AudioTrack("audio:0"),
+                    output = GenerationOutput.Translated("zh", TextPresentationMode.TargetOnly),
+                    schemeId = scheme.schemeId,
+                    mediaLocatorId = RunnerLocatorId,
+                ),
+            )
+        val adapter = SuccessfulTranslationAdapter()
+
+        assertTrue(runner(RecoveringAsrEngine(), translationAdapter = adapter).runUntilIdle())
+
+        assertEquals(GenerationTaskState.Completed.name, database.syncTextDao().task(task.taskId)?.state)
+        assertEquals(1, database.syncTextDao().generatedSlotsForTarget(RunnerContentId, null).size)
+        val translatedSlot = database.syncTextDao().generatedSlotsForTarget(RunnerContentId, "zh-CN").single()
+        val presentation = requireNotNull(repository.loadPresentation(translatedSlot.slotId))
+        assertEquals("zh-CN", presentation.result.targetLanguage)
+        assertEquals("translated", presentation.targetCues?.single()?.text)
+        assertEquals(1, adapter.calls.get())
+        assertTrue(adapter.lastRequest?.userPrompt?.contains("window-0") == true)
+    }
+
+    @Test
     fun `corrupt asr checkpoint is a task local storage failure`() = runBlocking {
         insertAudioContent(durationMs = 700_000L)
         repository.saveCredential("asr-corrupt", "ASR", CredentialPurpose.Asr, "secret")
@@ -826,6 +976,7 @@ class SyncTextTaskRunnerRecoveryTest {
     private fun runner(
         engine: AsrEngine,
         networkState: SyncTextNetworkState = AlwaysAvailableNetworkState,
+        translationAdapter: TranslationProtocolAdapter? = null,
     ) =
         SyncTextTaskRunner(
             database = database,
@@ -861,7 +1012,11 @@ class SyncTextTaskRunnerRecoveryTest {
                 },
             spool = TemporaryPcmSpool(),
             asr = engine,
-            translation = TranslationNetworkGateway(TranslationAdapterRegistry(emptyList())),
+            translation =
+                TranslationNetworkGateway(
+                    registry = TranslationAdapterRegistry(listOfNotNull(translationAdapter)),
+                    streamResponses = false,
+                ),
             networkState = networkState,
             nowMs = { runnerClock++ },
             newId = { "lease-${runnerNextId++}" },
@@ -1003,6 +1158,37 @@ private class RecoveringAsrEngine : AsrEngine {
     }
 
     fun calls(ordinal: Int): Int = callCounts[ordinal] ?: 0
+}
+
+private class SuccessfulTranslationAdapter : TranslationProtocolAdapter {
+    override val protocol = TranslationProtocol.Responses
+    val calls = AtomicInteger(0)
+    var lastRequest: TranslationProviderRequest? = null
+        private set
+
+    override suspend fun translate(request: TranslationProviderRequest): TranslationProviderResponse {
+        calls.incrementAndGet()
+        lastRequest = request
+        val translateOnly =
+            request.userPrompt
+                .substringAfter("TRANSLATE_ONLY\n")
+                .substringBefore("\nCONTEXT_AFTER")
+        val ids =
+            translateOnly.lineSequence().mapNotNull { line ->
+                Regex("""^\[([^]]+)]""").find(line)?.groupValues?.get(1)
+            }.toList()
+        val text = ids.joinToString("\n") { id -> "[$id] translated" }
+        return TranslationProviderResponse(
+            text = text,
+            usage = UsageRecord(totalTokens = 1L),
+            rawResponse = text.toByteArray(),
+            httpStatus = 200,
+            requestBytes = request.userPrompt.length.toLong(),
+            responseBytes = text.length.toLong(),
+            requestId = "translation-${calls.get()}",
+            endpoint = request.endpoint,
+        )
+    }
 }
 
 private class TemporaryPcmSpool : PcmSpool {

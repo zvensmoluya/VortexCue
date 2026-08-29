@@ -1433,7 +1433,10 @@ private fun GenerationInputDialog(
     onAction: (SyncTextAction) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val choices = remember(content, state.audioTracks) { inputChoices(content, state.audioTracks) }
+    val choices =
+        remember(content, state.audioTracks, state.generationAudioOnly) {
+            inputChoices(content, state.audioTracks, audioOnly = state.generationAudioOnly)
+        }
     var selectedInput by remember(content.contentId, choices) {
         mutableStateOf(choices.singleOrNull()?.input)
     }
@@ -1523,34 +1526,37 @@ private fun SelectionRow(
 private fun inputChoices(
     content: ContentDetails,
     audioTracks: List<AudioTrackInfo>,
+    audioOnly: Boolean,
 ): List<InputChoice> =
     buildList {
-        content.availableTextTracks
-            .filter {
-                it.readiness !in
-                    setOf(
-                        TimedTextReadiness.Unreadable,
-                        TimedTextReadiness.ParseFailed,
-                        TimedTextReadiness.MissingArtifact,
+        if (!audioOnly) {
+            content.availableTextTracks
+                .filter {
+                    it.readiness !in
+                        setOf(
+                            TimedTextReadiness.Unreadable,
+                            TimedTextReadiness.ParseFailed,
+                            TimedTextReadiness.MissingArtifact,
+                        )
+                }
+                .forEach { track ->
+                    val input =
+                        track.locator.candidateId?.let(GenerationInput::DiscoveredCandidate) ?: when {
+                            track.origin == TimedTextOrigin.Embedded ->
+                                track.locator.embeddedTrackId?.let {
+                                    GenerationInput.EmbeddedTrack(track.stableId, it)
+                                }
+                            else -> GenerationInput.ExistingTrack(track.stableId)
+                        } ?: return@forEach
+                    add(
+                        InputChoice(
+                            label = track.label ?: track.language ?: track.locator.displayName,
+                            detail = "采用现有同步文字",
+                            input = input,
+                        ),
                     )
-            }
-            .forEach { track ->
-                val input =
-                    track.locator.candidateId?.let(GenerationInput::DiscoveredCandidate) ?: when {
-                        track.origin == TimedTextOrigin.Embedded ->
-                            track.locator.embeddedTrackId?.let {
-                                GenerationInput.EmbeddedTrack(track.stableId, it)
-                            }
-                        else -> GenerationInput.ExistingTrack(track.stableId)
-                    } ?: return@forEach
-                add(
-                    InputChoice(
-                        label = track.label ?: track.language ?: track.locator.displayName,
-                        detail = "采用现有同步文字",
-                        input = input,
-                    ),
-                )
-            }
+                }
+        }
         audioTracks.forEachIndexed { index, track ->
             val identity = track.label ?: track.language ?: "音轨 ${index + 1}"
             val detail =

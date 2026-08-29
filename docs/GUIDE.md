@@ -99,19 +99,19 @@ Glow 为纯黑、安全 Insets、独立亮度；双击分区、长按临时控�
 
 Normal Player 的主体固定为“上一句弱化 / 当前句主视觉 / 下一句弱化”，不显示假封面。顶栏只保留返回、标题和低频操作菜单；菜单只处理当前内容的同步文字与“我的内容”归属，不提供添加其他内容，重新选择媒体只在播放失败时原位出现。底部只常驻进度、上一项 / 后退 10 秒 / 播放 / 前进 10 秒 / 下一项、速度、Sleep Timer、播放列表和进入 Glow。随机与循环进入播放列表面板，校准不在播放器常驻，字幕时间偏移藏在同步文字面板。
 
-播放器不常驻同步文字“管理”入口：没有文字时，字幕舞台只显示“生成同步文字”；已有可翻译原文时，只在舞台边缘显示翻译图标。动作启动后原位显示不确定态圆环；任务入队后不显示推算百分比，而是显示可验证的内核事实。没有文字可承载时使用较大的分段圆环表达真实 ASR work unit：多段任务的圆心显示准确的已完成数 / 总数，单段任务不显示没有解释力的 `0/1`；每段只在开始处理、提交完成或失败时改变状态，旁边或下方说明排队、规划音频、提取、等待识别、重试或发布。已有原文的翻译保持紧凑状态，不显示 work unit 圆环，不遮挡当前文字；流中的 reasoning delta 只驱动“模型正在处理”，output text delta 才驱动“正在接收译文”，并可按实际出现的预期 cue ID 显示 `N/M`。真实 delta 同时累计任务级、单调且持久化的近似 `≈ tokens` 活动量，并仅在新 delta 持久化时触发一次短微光；它用于判断连接仍有输出，不表示完成比例、计费 token 或上游 usage，切屏、重试和进程恢复不得归零。这些行在严格批次校验前不视为已完成；重试必须明确显示且不得伪装成连续增长。运行中的任务同时提供暂停和停止生成，暂停状态与失败状态仍可直接停止；停止生成终止任务但保留已完成 checkpoint。低频同步文字入口打开底部面板，概览只展示显示方式、主文字、第二文字、时间校准和重新自动匹配；点击主文字或第二文字后再进入单一用途的候选列表。所有选择立即生效，不设“完成”按钮，不展示生成产物区、格式名、可用状态或“设为主轨 / 次轨”等实现术语；手动文件入口放在对应文字的候选列表底部。启动成功不再弹出确认对话框。手动导入会读取、解析并规范化 SRT / VTT / ASS / LRC，然后发布为应用自有的 immutable revision；成功后的文字轨不再依赖原 URI 或 SAF 权限。Folder 外挂字幕在对应内容被收录且匹配关系已发现时发布为应用自有 immutable revision；资源接管与主/第二文字选择相互独立，播放器不承担正常的候选物化。内嵌文字仍由 Media3 实时播放，仅在生成任务把它作为固定输入时物化 source revision。生成结果完成后自动成为可选文字轨。
+播放器不常驻同步文字“管理”入口：没有文字时，字幕舞台只显示“生成同步文字”；已有可翻译原文时，只在舞台边缘显示翻译图标。动作启动后原位显示不确定态圆环；任务入队后不显示推算百分比，而是显示可验证的内核事实。没有文字可承载时使用较大的分段圆环表达真实 ASR work unit：多段任务的圆心显示准确的已完成数 / 总数，单段任务不显示没有解释力的 `0/1`；每段只在开始处理、提交完成或失败时改变状态，旁边或下方说明排队、规划音频、提取、等待识别、重试或发布。已有原文的翻译保持紧凑状态，不显示 work unit 圆环，不遮挡当前文字；流中的 reasoning delta 只驱动“模型正在处理”，output text delta 才驱动“正在接收译文”，并可按实际出现的预期 cue ID 显示 `N/M`。真实 delta 同时累计任务级、单调且持久化的近似 `≈ tokens` 活动量，并仅在新 delta 持久化时触发一次短微光；它用于判断连接仍有输出，不表示完成比例、计费 token 或上游 usage，切屏、重试和进程恢复不得归零。这些行在严格批次校验前不视为已完成；重试必须明确显示且不得伪装成连续增长。运行中的任务同时提供暂停和停止生成，暂停状态与失败状态仍可直接停止；停止生成终止任务但保留已完成 checkpoint。低频同步文字入口打开底部面板，概览只展示显示方式、主文字、第二文字、时间校准、重新自动匹配和“重新生成”；译文只提供“重新翻译”和“从声音重新生成”，原文只有一个合理路径时直接开始，不展示模型、任务或版本管理。重新生成自动使用当前配置并冻结本次声音、原文与当前选择；从声音重新生成译文时，同一任务在 ASR 完成后继续翻译。新结果成功前保留并继续显示旧结果，失败不切换；成功后只保留当前版与上一版，上一版沿用现有文字选择器，不另设历史页。点击主文字或第二文字后再进入单一用途的候选列表。所有选择立即生效，不设“完成”按钮，不展示生成产物区、格式名、可用状态或“设为主轨 / 次轨”等实现术语；手动文件入口放在对应文字的候选列表底部。启动成功不再弹出确认对话框。手动导入会读取、解析并规范化 SRT / VTT / ASS / LRC，然后发布为应用自有的 immutable revision；成功后的文字轨不再依赖原 URI 或 SAF 权限。Folder 外挂字幕在对应内容被收录且匹配关系已发现时发布为应用自有 immutable revision；资源接管与主/第二文字选择相互独立，播放器不承担正常的候选物化。内嵌文字仍由 Media3 实时播放，仅在生成任务把它作为固定输入时物化 source revision。生成结果完成后自动成为可选文字轨。
 
 ## 8. 数据与迁移
 
-Room 当前 schema 为 v13。`Work`、`WorkPart` 和作品进度独立持久化；`playlist_entry` 统一引用 Work 或 Content；Current Queue 保存可空的来源 Work/歌单入口上下文。v10→v11 保留旧歌单及顺序并迁移为 Content 入口，不自动创建 Work。`playlist.system_role` 继续唯一标识默认收藏。来源卡片由可用音频 locator 的 `sourceId + inferred work root` 动态聚合，RJ 根作为可信作品候选边界。
+Room 当前 schema 为 v14。`Work`、`WorkPart` 和作品进度独立持久化；`playlist_entry` 统一引用 Work 或 Content；Current Queue 保存可空的来源 Work/歌单入口上下文。v10→v11 保留旧歌单及顺序并迁移为 Content 入口，不自动创建 Work。`playlist.system_role` 继续唯一标识默认收藏。来源卡片由可用音频 locator 的 `sourceId + inferred work root` 动态聚合，RJ 根作为可信作品候选边界。
 
-v7→v8 通过自动迁移保留任务、结果和手测诊断数据，v8→v9 手动把旧虚拟文件夹和单归属成员关系迁移为同名多对多歌单。v9→v10 建立并保护默认收藏；v10→v11 把旧歌单成员无损迁移为 Content 类型 `playlist_entry`，为 Queue 增加来源上下文，作品表保持为空；v11→v12 保存翻译思考强度；v12→v13 新增独立的 `generation_runtime_status`，持久化正在发生的阶段事实，但不改变只按已提交 Artifact 推进的任务进度。现有多归属、播放时间、同步文字和忽略状态保持；旧 RJ 不自动吸收，用户可删除旧歌单后重新导入。v6 及其他不兼容版本仍允许破坏性重建。
+v7→v8 通过自动迁移保留任务、结果和手测诊断数据，v8→v9 手动把旧虚拟文件夹和单归属成员关系迁移为同名多对多歌单。v9→v10 建立并保护默认收藏；v10→v11 把旧歌单成员无损迁移为 Content 类型 `playlist_entry`，为 Queue 增加来源上下文，作品表保持为空；v11→v12 保存翻译思考强度；v12→v13 新增独立的 `generation_runtime_status`，持久化正在发生的阶段事实，但不改变只按已提交 Artifact 推进的任务进度；v13→v14 为任务快照冻结媒体 locator、输入 source revision/hash 和预期切换的文字轨，让显式重新生成可安全地产生新候选。现有多归属、播放时间、同步文字和忽略状态保持；旧 RJ 不自动吸收，用户可删除旧歌单后重新导入。v6 及其他不兼容版本仍允许破坏性重建。
 
 重建清理应用私有旧字幕缓存、旧 result/checkpoint VTT、孤立凭据文件和旧的 Home shortcut 数据；保留 Settings、用户原始媒体和 SAF 外部字幕文件。数据库不再把 `lastSurface` 当作启动入口；`PlayerSurface` 只管理运行期 Normal/Calibration/Glow 层级。
 
 导入与生成文字统一使用 `CanonicalTimeline`、`TimelineRevision` 和 content-addressed `TextArtifactStore`。Artifact 位于 `noBackupFilesDir/text_artifacts/<kind>/<prefix>/<id>.bin`，ID 是包含 kind、schema、codec 与 canonicalizer version 的完整二进制 envelope SHA-256。Room 只保存 Artifact metadata、不可变 revision、manifest 和 publication pointer，不保存逐 cue 正文。`TimelineRevisionReader` 一次解码当前 publication 为内存 `SubtitleTimeline`；播放进度解析不访问 Room、Artifact 文件或 SAF。
 
-ASR window 与 translation batch 由固定数量的 worker 按序领取，先发布 typed Artifact，再在同一 Room transaction 中登记引用和完成状态；任务进度只按真正提交的完成单元推进，并保持单调。Partial revision 引用连续完成前缀的 WorkUnit Artifact，Final source 使用单个 `FinalTimeline` Artifact；target 保存固定 source revision/hash 的 `TranslationDelta`。翻译输出继续严格校验 cue ID，只在缺失字面量 `cue-` 前缀且补全后唯一命中预期 ID 时本地正规化，不发起额外模型请求。启动恢复只重跑没有已提交 Artifact 的单元。启动审计将缺失、损坏或未知版本引用标记为 `MissingArtifact` 或 `Storage / NeedsAttention`，不回读旧 URI，也不静默重发付费请求。不可达 Artifact 与未注册文件使用 24 小时宽限的两阶段 GC；当前 publication、target source pin 和可恢复任务资产是 GC root。
+ASR window 与 translation batch 由固定数量的 worker 按序领取，先发布 typed Artifact，再在同一 Room transaction 中登记引用和完成状态；任务进度只按真正提交的完成单元推进，并保持单调。Partial revision 引用连续完成前缀的 WorkUnit Artifact，Final source 使用单个 `FinalTimeline` Artifact；target 保存固定 source revision/hash 的 `TranslationDelta`。显式重新生成使用 task-scoped publication slot；同一任务的重试和恢复继续写入原 slot，不制造新版本，完成发布后再收敛为同语言最新两个候选。翻译输出继续严格校验 cue ID，只在缺失字面量 `cue-` 前缀且补全后唯一命中预期 ID 时本地正规化，不发起额外模型请求。启动恢复只重跑没有已提交 Artifact 的单元。启动审计将缺失、损坏或未知版本引用标记为 `MissingArtifact` 或 `Storage / NeedsAttention`，不回读旧 URI，也不静默重发付费请求。不可达 Artifact 与未注册文件使用 24 小时宽限的两阶段 GC；当前 publication、target source pin、任务冻结输入和可恢复任务资产是 GC root。
 
 当前没有导出功能；内部 codec 与 revision reader 保留明确的 exporter 边界，但本轮不增加导出 UI。
 
@@ -119,7 +119,7 @@ ASR window 与 translation batch 由固定数量的 worker 按序领取，先发
 
 ## 9. 验收
 
-自动化覆盖：默认收藏保护、异构歌单引用、Work/Part 所有权、RJ 识别、格式副本合并、语义版本隔离、显式整理旧内容、作品队列展开与进度上下文；系统与文件夹只发现音频、位置稳定分组和自然排序；字幕 canonicalization、Artifact 审计与 GC；Room 首次创建、v7→v8、v8→v9、v9→v10、v10→v11、v11→v12、v12→v13 保留迁移与不兼容版本破坏性重建。
+自动化覆盖：默认收藏保护、异构歌单引用、Work/Part 所有权、RJ 识别、格式副本合并、语义版本隔离、显式整理旧内容、作品队列展开与进度上下文；系统与文件夹只发现音频、位置稳定分组和自然排序；字幕 canonicalization、Artifact 审计与 GC；Room 首次创建、v7→v8、v8→v9、v9→v10、v10→v11、v11→v12、v12→v13、v13→v14 保留迁移与不兼容版本破坏性重建。
 
 Compose UI 覆盖四 Tab、统一歌单列表中的作品与作品详情、混合歌单、全部内容、可信 RJ 作品导入、普通来源多目标导入、Mini Player、Queue、配置校验和 Back Stack。默认验证命令：
 

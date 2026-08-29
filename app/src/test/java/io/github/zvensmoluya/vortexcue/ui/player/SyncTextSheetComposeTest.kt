@@ -67,10 +67,38 @@ class SyncTextSheetComposeTest {
         compose.onNodeWithText("第二文字").assertIsDisplayed()
         compose.onNodeWithText("日文（原文）").assertIsDisplayed()
         compose.onNodeWithText("时间校准").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("重新生成").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("生成结果展示").assertDoesNotExist()
         compose.onNodeWithText("设为主轨").assertDoesNotExist()
         compose.onNodeWithText("设为次轨").assertDoesNotExist()
         compose.onNodeWithText("完成").assertDoesNotExist()
+    }
+
+    @Test
+    fun regenerateStaysAOnePurposeActionInTheExistingSheet() {
+        var requested = false
+        compose.setContent {
+            VortexCueTheme {
+                SyncTextSheet(
+                    contentUnit = contentUnit(),
+                    onDismiss = {},
+                    onSelectTrack = { _, _ -> },
+                    onRestoreAutomatic = {},
+                    onRestoreAllAutomatic = {},
+                    onAddTrack = {},
+                    generatedText = generatedText(),
+                    subtitleOffsetMs = 0L,
+                    onSubtitleOffsetChanged = {},
+                    onPresentationModeChanged = { _, _ -> },
+                    onRegenerate = { requested = true },
+                )
+            }
+        }
+
+        compose.onNodeWithText("重新生成").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(true, requested) }
+        compose.onNodeWithText("模型").assertDoesNotExist()
+        compose.onNodeWithText("版本管理").assertDoesNotExist()
     }
 
     @Test

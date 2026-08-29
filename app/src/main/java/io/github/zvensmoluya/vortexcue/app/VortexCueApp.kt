@@ -850,8 +850,39 @@ internal fun VortexCueApp(
                         }
                     },
                     onTranslateSyncText = {
-                        currentContentId?.let { id ->
-                            dispatchSyncTextAction(SyncTextAction.TranslateForContent(id))
+                        val id = currentContentId
+                        val slotId = generatedSlotId
+                        if (id != null && slotId != null) {
+                            dispatchSyncTextAction(
+                                SyncTextAction.TranslateForContent(
+                                    contentId = id,
+                                    sourceSlotId = slotId,
+                                    activationTrackId = selectedPrimaryTrack.stableId,
+                                ),
+                            )
+                        }
+                    },
+                    onRegenerateTranslation = {
+                        val id = currentContentId
+                        val slotId = generatedSlotId
+                        if (id != null && slotId != null) {
+                            dispatchSyncTextAction(
+                                SyncTextAction.TranslateForContent(
+                                    contentId = id,
+                                    sourceSlotId = slotId,
+                                    activationTrackId = selectedPrimaryTrack.stableId,
+                                ),
+                            )
+                        }
+                    },
+                    onRegenerateFromAudio = {
+                        currentDetails?.let { details ->
+                            dispatchSyncTextAction(
+                                SyncTextAction.RegenerateFromAudio(
+                                    content = details,
+                                    translateAfterRecognition = loadedGeneratedText?.targetTimeline != null,
+                                ),
+                            )
                         }
                     },
                     onCancelSyncText = {

@@ -305,3 +305,17 @@ internal val MIGRATION_12_13 =
             )
         }
     }
+
+internal val MIGRATION_13_14 =
+    object : Migration(13, 14) {
+        override suspend fun migrate(connection: SQLiteConnection) {
+            connection.execSQL("ALTER TABLE `generation_task_snapshot` ADD COLUMN `media_locator_id` TEXT")
+            connection.execSQL(
+                "ALTER TABLE `generation_task_snapshot` ADD COLUMN `input_source_revision_id` TEXT",
+            )
+            connection.execSQL(
+                "ALTER TABLE `generation_task_snapshot` ADD COLUMN `input_source_revision_hash` TEXT",
+            )
+            connection.execSQL("ALTER TABLE `generation_task_snapshot` ADD COLUMN `activation_track_id` TEXT")
+        }
+    }

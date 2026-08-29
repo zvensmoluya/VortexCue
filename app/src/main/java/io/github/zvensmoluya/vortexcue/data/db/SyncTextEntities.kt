@@ -190,6 +190,14 @@ data class GenerationTaskSnapshotEntity(
     val allowAsrFallback: Boolean,
     @ColumnInfo(name = "submitted_at_ms")
     val submittedAtMs: Long,
+    @ColumnInfo(name = "media_locator_id")
+    val mediaLocatorId: String? = null,
+    @ColumnInfo(name = "input_source_revision_id")
+    val inputSourceRevisionId: String? = null,
+    @ColumnInfo(name = "input_source_revision_hash")
+    val inputSourceRevisionHash: String? = null,
+    @ColumnInfo(name = "activation_track_id")
+    val activationTrackId: String? = null,
 )
 
 @Entity(

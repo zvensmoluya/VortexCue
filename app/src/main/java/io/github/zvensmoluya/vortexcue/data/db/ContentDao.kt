@@ -385,6 +385,9 @@ interface ContentDao {
     @Query("DELETE FROM timed_text_track WHERE track_id = :trackId")
     suspend fun deleteTextTrack(trackId: String)
 
+    @Query("UPDATE timed_text_track SET label = :label WHERE generated_slot_id = :slotId")
+    suspend fun updateGeneratedTrackLabel(slotId: String, label: String): Int
+
     @Query(
         "UPDATE timed_text_track SET readiness = 'MissingArtifact', failure_message = :message " +
             "WHERE track_id = :trackId",

@@ -698,6 +698,33 @@ class VortexDatabaseTest {
     }
 
     @Test
+    fun versionThirteenAddsFrozenGenerationInputs() = runBlocking {
+        val path = temporaryFolder.root.resolve("migration-v13-v14.db").toPath()
+        val helper =
+            MigrationTestHelper(
+                databasePath = path,
+                schemaDirectoryPath = File("schemas").toPath(),
+                driver = BundledSQLiteDriver(),
+                databaseClass = VortexDatabase::class,
+                databaseFactory = { VortexDatabase_Impl() },
+                autoMigrationSpecs = emptyList(),
+            )
+        helper.createDatabase(13).close()
+
+        helper.runMigrationsAndValidate(14, listOf(MIGRATION_13_14)).use { connection ->
+            connection.prepare("PRAGMA table_info(generation_task_snapshot)").use { statement ->
+                val columns = buildSet {
+                    while (statement.step()) add(statement.getText(1))
+                }
+                assertTrue("media_locator_id" in columns)
+                assertTrue("input_source_revision_id" in columns)
+                assertTrue("input_source_revision_hash" in columns)
+                assertTrue("activation_track_id" in columns)
+            }
+        }
+    }
+
+    @Test
     fun versionSixIsDestructivelyRebuiltAsVersionNine() = runBlocking {
         val path = temporaryFolder.root.resolve("migration-v6-v9.db").toPath()
         val helper =

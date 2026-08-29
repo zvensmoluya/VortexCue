@@ -98,6 +98,9 @@ data class SyncTextUiState(
     val configError: String? = null,
     val credentialSave: CredentialSaveUiState? = null,
     val taskLaunch: SyncTextLaunchUiState? = null,
+    val generationOutput: GenerationOutput = GenerationOutput.SourceOnly,
+    val generationAudioOnly: Boolean = false,
+    val generationActivationTrackId: String? = null,
     val busy: Boolean = false,
     val message: String? = null,
 )
@@ -163,7 +166,16 @@ sealed interface SyncTextAction {
 
     data class AllowMeteredNetworkForContent(val contentId: String) : SyncTextAction
 
-    data class TranslateForContent(val contentId: String) : SyncTextAction
+    data class TranslateForContent(
+        val contentId: String,
+        val sourceSlotId: String,
+        val activationTrackId: String?,
+    ) : SyncTextAction
+
+    data class RegenerateFromAudio(
+        val content: ContentDetails,
+        val translateAfterRecognition: Boolean,
+    ) : SyncTextAction
 }
 
 private data class OverlayState(
@@ -179,6 +191,9 @@ private data class OverlayState(
     val configError: String? = null,
     val credentialSave: CredentialSaveUiState? = null,
     val taskLaunch: SyncTextLaunchUiState? = null,
+    val generationOutput: GenerationOutput = GenerationOutput.SourceOnly,
+    val generationAudioOnly: Boolean = false,
+    val generationActivationTrackId: String? = null,
     val busy: Boolean = false,
     val message: String? = null,
 )
@@ -221,6 +236,9 @@ class SyncTextUiController(
                 configError = local.configError,
                 credentialSave = local.credentialSave,
                 taskLaunch = local.taskLaunch,
+                generationOutput = local.generationOutput,
+                generationAudioOnly = local.generationAudioOnly,
+                generationActivationTrackId = local.generationActivationTrackId,
                 busy = local.busy,
                 message = local.message,
             )
@@ -233,7 +251,14 @@ class SyncTextUiController(
             is SyncTextAction.SubmitSelectedInput -> {
                 val content = overlay.value.generationContent ?: return
                 val config = repository.config.value ?: return showConfigurationRequired()
-                submitGeneration(content, action.input, config, allowAsrFallback = false)
+                submitGeneration(
+                    content = content,
+                    input = action.input,
+                    config = config,
+                    allowAsrFallback = false,
+                    output = overlay.value.generationOutput,
+                    activationTrackId = overlay.value.generationActivationTrackId,
+                )
             }
             SyncTextAction.ClearMessage -> overlay.update { it.copy(message = null) }
             is SyncTextAction.DiscoverTranslationModels ->
@@ -290,14 +315,33 @@ class SyncTextUiController(
             is SyncTextAction.TranslateForContent -> runAction(
                 taskLaunch = SyncTextLaunchUiState(action.contentId, SyncTextLaunchKind.Translation),
             ) {
-                val source = requireNotNull(repository.currentSourceResult(action.contentId)) { "没有可翻译的源文字" }
                 val target = repository.config.value?.targetLanguage?.let(LanguageTags::normalizeOrNull)
-                if (target == null || LanguageTags.normalizeOrNull(source.sourceLanguage) == target) {
+                if (target == null) {
                     "源语言与目标语言相同，无需翻译"
                 } else {
-                    repository.submitTranslation(source.resultId, targetLanguage = target)
+                    repository.submitTranslationFromSlot(
+                        slotId = action.sourceSlotId,
+                        targetLanguage = target,
+                        activationTrackId = action.activationTrackId,
+                    )
                     null
                 }
+            }
+            is SyncTextAction.RegenerateFromAudio -> {
+                val config = repository.config.value ?: return showConfigurationRequired()
+                val output =
+                    if (action.translateAfterRecognition) {
+                        GenerationOutput.Translated(config.targetLanguage, config.presentationMode)
+                    } else {
+                        GenerationOutput.SourceOnly
+                    }
+                inspectAudio(
+                    content = action.content,
+                    config = config,
+                    output = output,
+                    activationTrackId = action.content.activeText.primaryTrackId,
+                    audioOnly = true,
+                )
             }
         }
     }
@@ -509,7 +553,14 @@ class SyncTextUiController(
         val config = repository.config.value ?: return showConfigurationRequired()
         when (val plan = planAutomaticGeneration(content)) {
             is GenerationLaunchPlan.Submit ->
-                submitGeneration(content, plan.input, config, allowAsrFallback = plan.allowAsrFallback)
+                submitGeneration(
+                    content,
+                    plan.input,
+                    config,
+                    allowAsrFallback = plan.allowAsrFallback,
+                    output = GenerationOutput.SourceOnly,
+                    activationTrackId = null,
+                )
             is GenerationLaunchPlan.Choose ->
                 overlay.update {
                     it.copy(
@@ -517,16 +568,32 @@ class SyncTextUiController(
                         audioTracks = emptyList(),
                         inspectingAudioTracks = false,
                         audioInspectionError = null,
+                        generationOutput = GenerationOutput.SourceOnly,
+                        generationAudioOnly = false,
+                        generationActivationTrackId = null,
                         message = null,
                     )
                 }
             is GenerationLaunchPlan.NeedsConfirmation ->
                 overlay.update { it.copy(message = plan.message) }
-            GenerationLaunchPlan.InspectAudio -> inspectAudio(content, config)
+            GenerationLaunchPlan.InspectAudio ->
+                inspectAudio(
+                    content = content,
+                    config = config,
+                    output = GenerationOutput.SourceOnly,
+                    activationTrackId = null,
+                    audioOnly = false,
+                )
         }
     }
 
-    private fun inspectAudio(content: ContentDetails, config: SyncTextConfig) {
+    private fun inspectAudio(
+        content: ContentDetails,
+        config: SyncTextConfig,
+        output: GenerationOutput,
+        activationTrackId: String?,
+        audioOnly: Boolean,
+    ) {
         diagnostics.recordAsync(
             SyncTextDiagnosticEventType.UiAction,
             workUnitKind = "Content",
@@ -540,6 +607,9 @@ class SyncTextUiController(
                 audioTracks = emptyList(),
                 inspectingAudioTracks = true,
                 audioInspectionError = null,
+                generationOutput = output,
+                generationAudioOnly = audioOnly,
+                generationActivationTrackId = activationTrackId,
                 message = null,
             )
         }
@@ -569,6 +639,8 @@ class SyncTextUiController(
                                 GenerationInput.AudioTrack(tracks.single().selectionId),
                                 config,
                                 allowAsrFallback = false,
+                                output = output,
+                                activationTrackId = activationTrackId,
                             )
                         else ->
                             overlay.update {
@@ -605,6 +677,8 @@ class SyncTextUiController(
         input: GenerationInput,
         config: SyncTextConfig,
         allowAsrFallback: Boolean,
+        output: GenerationOutput,
+        activationTrackId: String?,
     ) {
         diagnostics.recordAsync(
             SyncTextDiagnosticEventType.UiAction,
@@ -632,9 +706,11 @@ class SyncTextUiController(
                     GenerationRequest(
                         contentId = content.contentId,
                         input = ownedInput,
-                        output = GenerationOutput.SourceOnly,
+                        output = output,
                         schemeId = config.configId,
                         allowAsrFallback = allowAsrFallback,
+                        mediaLocatorId = content.activeMediaLocatorId,
+                        activationTrackId = activationTrackId,
                     ),
                 )
             }.onSuccess { task ->
@@ -650,6 +726,9 @@ class SyncTextUiController(
                         audioTracks = emptyList(),
                         inspectingAudioTracks = false,
                         audioInspectionError = null,
+                        generationOutput = GenerationOutput.SourceOnly,
+                        generationAudioOnly = false,
+                        generationActivationTrackId = null,
                         taskLaunch = null,
                         busy = false,
                         message = null,
@@ -676,6 +755,9 @@ class SyncTextUiController(
                 audioTracks = emptyList(),
                 inspectingAudioTracks = false,
                 audioInspectionError = null,
+                generationOutput = GenerationOutput.SourceOnly,
+                generationAudioOnly = false,
+                generationActivationTrackId = null,
                 taskLaunch = null,
                 busy = false,
                 message = null,
@@ -688,6 +770,9 @@ class SyncTextUiController(
             it.copy(
                 generationContent = null,
                 inspectingAudioTracks = false,
+                generationOutput = GenerationOutput.SourceOnly,
+                generationAudioOnly = false,
+                generationActivationTrackId = null,
                 message = "请先在同步文字设置中填写语音识别配置和密钥",
             )
         }
