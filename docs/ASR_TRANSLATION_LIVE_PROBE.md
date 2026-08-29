@@ -37,6 +37,23 @@ The test only asserts provider contract and orchestration invariants: usable tim
 output, strict translation cue validation, policy asset integrity, and successful completion
 through the production gateway. It does not score translation style.
 
+## Run the source-preparation contract
+
+`LiveSourcePreparationTest` sends a small Japanese timeline containing marked sound events and an
+isolated Whisper-style pollution phrase through the production translation gateway with reasoning
+disabled. It validates the dedicated prompt, strict JSON parser, deterministic policy patches,
+model patch application, and compact `SourceContext` output. It uses only the translation provider
+configuration above.
+
+```powershell
+$env:VORTEX_LIVE_TEST="1"
+.\gradlew.bat :app:testDebugUnitTest --tests "*LiveSourcePreparationTest"
+```
+
+This is a paid behavioral fixture, not a broad accuracy benchmark. The expected outcome is that
+marked `*Sigh*` / `*Humming*` cues and the contextually unrelated closing phrase do not enter the
+published source timeline.
+
 Android device testing remains necessary for media URI access, audio extraction, Room recovery,
 network consent, background execution, and process restart behavior.
 

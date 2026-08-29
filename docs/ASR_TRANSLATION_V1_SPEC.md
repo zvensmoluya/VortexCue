@@ -1,6 +1,6 @@
 # VortexCue 同步文字、翻译与 ASR V1 规格
 
-> 状态：M4 当前实施与验收契约
+> 状态：内核实施与验收契约；当前产品行为仍以 `GUIDE.md` 为准
 >
 > 产品边界以 [`GUIDE.md`](GUIDE.md) 为准；本文细化同步文字领域的接口、持久化、网络、媒体和恢复行为。
 
@@ -9,10 +9,10 @@
 V1 建立独立的“同步文字”领域模块。已有可用文字时直接翻译；没有可用文字时，通过 OpenRouter ASR 生成原文，再按用户选择的方案翻译。任务可以排队、重排、暂停、恢复并跨进程续跑，成功结果直接进入 Player / Glow，不要求导入或导出 SRT。
 
 ```text
-ExistingTrack / EmbeddedTrack ───────────────┐
-                                             ├─ source cues ─ translation ─ paired result
-AudioTrack ─ decode ─ OpenRouter ASR ────────┘                    │
-                                                                  └─ Player / Glow
+ExistingTrack / EmbeddedTrack ───────────────────────────────┐
+                                                             ├─ published source ─ translation ─ paired result
+AudioTrack ─ decode ─ ASR ─ Source Preparation ─ final source┘                         │
+                                                                                       └─ Player / Glow
 ```
 
 V1 不包含：
@@ -59,18 +59,18 @@ V1 不包含：
 
 - 同一内容和目标语言最多存在一个未终结任务；重复提交返回原任务；
 - 重新生成期间旧结果继续可用；新结果及文字轨引用只在发布事务中原子替换；
-- 完整 ASR 成功后立即发布原文，随后再翻译；翻译失败不撤销原文；
+- ASR 连续完成前缀只发布 Partial；完整 ASR 经过 Source Preparation 后才发布 Final source，随后再翻译；翻译失败不撤销正式原文；
 - 换方案创建新 attempt，复用已完成的原文 / ASR 成果，清空并重做翻译；
 - 一个结果不得混用不同模型、policy 或 attempt 的输出。
 
 ## 3. 持久化、Revision 与私有资产
 
-Room v8 使用关系表表达 credential metadata、scheme、task、不可变 task snapshot、attempt、ASR window、translation batch、request attempt、generated slot / result、runner lease、queue control、diagnostic event、Artifact metadata、Timeline revision 和 revision-artifact manifest。任务表额外保存可变的计费网络许可和当前网络等待原因，不通过改写 immutable snapshot 表达运行期授权。不得重新引入聚合 JSON 快照或把完整 cue 正文存入 Room。
+Room v15 使用关系表表达 credential metadata、scheme、task、不可变 task snapshot、attempt、ASR window、source preparation checkpoint、translation batch、request attempt、generated slot / result、runner lease、queue control、diagnostic event、Artifact metadata、Timeline revision 和 revision-artifact manifest。任务表额外保存可变的计费网络许可和当前网络等待原因，不通过改写 immutable snapshot 表达运行期授权。不得重新引入聚合 JSON 快照或把完整 cue 正文存入 Room。
 
 正文统一保存到 `noBackupFilesDir/text_artifacts/<kind>/<prefix>/<artifactId>.bin`。Artifact ID 是完整确定性 envelope 的 SHA-256；envelope 包含 magic、schema / codec / canonicalizer version、kind 和长度前缀 payload。decoder 必须拒绝未知版本、损坏、截断和 metadata/hash 不一致。SRT / VTT / ASS / LRC 仅是导入边界格式，不再作为内部 checkpoint 或 result 协议。
 
-- ASR window 发布 `AsrWorkUnitOutput`，translation batch 发布 `TranslationWorkUnitOutput`；Artifact 文件发布成功后，Room transaction 才能登记 WorkUnit 引用和完成状态；
-- Partial source revision 通过 immutable manifest 引用连续完成前缀，不重复写累计 VTT；Final source 由 `TimelineAssembler` 发布单个 `FinalTimeline`；
+- ASR window 发布 `AsrWorkUnitOutput`，Source Preparation 发布 `SourcePreparation`，translation batch 发布 `TranslationWorkUnitOutput`；Artifact 文件发布成功后，Room transaction 才能登记引用和完成状态；
+- Partial source revision 通过 immutable manifest 引用连续完成前缀，不重复写累计 VTT；完整 ASR 的稀疏 patch 与冻结 `SourceContext` 写入 preparation checkpoint，应用 patch 后的 Final source 由 `TimelineAssembler` 发布单个 `FinalTimeline`；
 - target 保存 `TranslationDelta`，并固定 source revision ID/hash；source 与 target 使用相同 cue ID 和时间范围，不得跨 source revision、attempt 或 policy 混合；
 - `GeneratedTextResult` 保存 source / target revision，slot current result、generated track、结果和任务状态在 publication transaction 中原子切换；
 - 播放只通过 `TimelineRevisionReader` 顺序解码 publication 并在内存中按位置解析。
@@ -91,12 +91,15 @@ API key 由 Android Keystore 中的 AES-GCM 主密钥加密，密文位于 `noBa
 
 | 资产 | 版本 | 来源 revision | SHA-256 |
 | --- | --- | --- | --- |
-| `system.v1` | 1 | `414fe08405ab4cfbb2759cbbfdb8744bde20acfc` | `bbf6c688ce3df8953fe876ade60a69c28e837234cb3061694bab1467f642891f` |
-| `style.zh-CN.v1` | 1 | `414fe08405ab4cfbb2759cbbfdb8744bde20acfc` | `09de51ae2e3709c8e506a4d9a82c9ce3bc9b16a13d0f683a928aad3a2d91e07b` |
+| `source-preparation.system.v1` | 1 | `vortexcue-source-preparation-v1` | `dcf4ee6bd866c35ea5c261fd33ba7b9f1ac353b8d64bea190ebb97ad0ce702e0` |
+| `system.v2` | 2 | `vortexcue-source-preparation-v1` | `0caef8f6f9f2a28e951196c67b8852c4307c9232596786549e7ea702e5352029` |
+| `style.zh-CN.v2` | 2 | `vortexcue-source-preparation-v1` | `a52812c8a42e6411e9acdd57bce85a38b0a158c09724f01beed57ee418bd81ae` |
 
-所有语言使用 `system.v1`；只有规范化后的 `zh-CN` 叠加 `style.zh-CN.v1`。无专用风格的语言自动使用通用 policy。任务 snapshot 保存 policy ID、版本、revision 和 hash；打包资产不匹配时整方案进入需处理状态。
+所有语言使用 `system.v2`；只有规范化后的 `zh-CN` 叠加 `style.zh-CN.v2`。无专用风格的语言自动使用通用 policy。ASR 来源 attempt 另行冻结 preparation policy version 与 prompt hash；打包资产不匹配时任务进入需处理状态。
 
-翻译批次遵循 TransVortex 的只读上下文语义：
+Source Preparation 对完整 ASR 只允许稀疏 `DROP` / `REPLACE`，不增加、拆分、合并或改变时间；专属扫描固定关闭思考。没有配置文本模型或扫描失败时以确定性事件标签清理降级发布。扫描附带的目标语言无关 `SourceContext` 只保存紧凑风格、实体表面形式、别名与称呼功能，不维护跨任务翻译记忆。
+
+翻译批次只消费 final Published Source 与同一份只读 `SourceContext`：
 
 - 初始批次最多 120 cue，估算输入上限约 12k token；
 - 每批带原文前 80 条、后 40 条只读上下文；
@@ -149,6 +152,8 @@ Whisper 是主线 profile，Grok 使用相同窗口策略并明确标记实验�
 
 内嵌文字使用 `media3-extractor` 物化为 cue。格式或样本不支持时任务给出可解释的媒体错误并保留 ASR 路径，不静默制造空结果。
 
+代码对带明确括号或星号的声音事件标签执行确定性 `DROP`；版本化 Whisper 污染短语只生成 `SUSPICIOUS_PATTERN` flag，由全量扫描结合位置和上下文裁决。翻译阶段不得再次删除或修改 source cue。
+
 ## 7. 后台执行与阻塞
 
 API 34+ 使用一个覆盖整条队列的 UIDT Job；API 26-33 使用唯一前台 `CoroutineWorker`。两条路径通过 Room lease 保证全进程只有一个 runner，不复用 `PlaybackService`。UIDT 提交必须检查 `JobScheduler` 返回值；后台条件不允许提交时保留进程内 deferred 状态，并在 Activity 真正进入前台后重试。
@@ -188,11 +193,11 @@ V1 UI 只增加方案编辑器、生成确认页、Home / Player 共用任务抽
 
 - 窗口完整所有权、overlap 去重、原始窗口单次二分、子窗口容量失败终止、并发字节预算；
 - 队列 lease、暂停 / 恢复、全局暂停、计费网络授权、同方案阻塞与原子结果替换；
-- prompt hash、80 / 40 只读上下文、严格 ID、格式恢复、repair、通用语言与简中 policy；
+- preparation prompt hash、稀疏 patch、事件标签与污染 flag、SourceContext、80 / 40 只读上下文、严格 ID、格式恢复、repair、通用语言与简中 policy；
 - 四种协议的 URL、认证头、请求结构、响应解析、usage、错误分类、重试、跨源重定向和脱敏；
 - Room 的不可变方案 snapshot、任务恢复、slot 替换、凭据引用约束、TTL prune；
 - canonical cue 稳定 ID、binary codec 确定性、版本拒绝、损坏与截断检测；
-- WorkUnit Artifact 恢复、partial/final assembler、translation delta 对齐、source pin、publication 原子替换与两阶段 GC；
+- WorkUnit Artifact 恢复、preparation checkpoint、partial/final assembler、translation delta 对齐、source pin、publication 原子替换与两阶段 GC；
 - 音频 / 视频、声道转换、多音轨选择、内嵌文字物化和失败回退。
 
 合并前执行：
