@@ -27,7 +27,9 @@ class TranslationPolicyEngineTest {
         val generic = registry.resolve("ja")
 
         assertEquals(TranslationPolicyRegistry.OriginRevision, simplified.originRevision)
-        assertEquals("style.zh-CN.v2", simplified.stylePromptId)
+        assertEquals("style.zh-CN.v3", simplified.stylePromptId)
+        assertTrue(simplified.stylePrompt.orEmpty().contains("non-lexical tone markers"))
+        assertFalse(simplified.stylePrompt.orEmpty().contains("www"))
         assertNull(traditional.stylePromptId)
         assertNull(generic.stylePromptId)
         registry.verifyAll()
@@ -208,7 +210,7 @@ class TranslationPolicyEngineTest {
         val name =
             when (id) {
                 "system.v2" -> "translation_system_v2.md"
-                "style.zh-CN.v2" -> "translation_style_zh_cn_v2.md"
+                "style.zh-CN.v3" -> "translation_style_zh_cn_v3.md"
                 else -> error("Unexpected prompt $id")
             }
         return File("src/main/res/raw/$name").readBytes()

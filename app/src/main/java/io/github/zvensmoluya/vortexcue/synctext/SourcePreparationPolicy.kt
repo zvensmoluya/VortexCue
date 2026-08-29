@@ -34,14 +34,14 @@ class SourcePreparationPolicyRegistry private constructor(
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
     companion object {
-        const val PolicyVersion = 1
-        const val PromptId = "source-preparation.system.v1"
-        const val PromptSha256 = "dcf4ee6bd866c35ea5c261fd33ba7b9f1ac353b8d64bea190ebb97ad0ce702e0"
+        const val PolicyVersion = 2
+        const val PromptId = "source-preparation.system.v2"
+        const val PromptSha256 = "ed3801e4a778918037d3e4db5e05570fcf8b27e7f2d2ec50a4830eb0e538d1e6"
 
         fun fromContext(context: Context): SourcePreparationPolicyRegistry {
             val resources = context.applicationContext.resources
             return SourcePreparationPolicyRegistry {
-                resources.openRawResource(R.raw.source_preparation_system_v1).use { it.readBytes() }
+                resources.openRawResource(R.raw.source_preparation_system_v2).use { it.readBytes() }
             }
         }
 

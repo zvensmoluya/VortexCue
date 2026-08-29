@@ -65,10 +65,10 @@ class TranslationPolicyRegistry private constructor(
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
     companion object {
-        const val OriginRevision = "vortexcue-source-preparation-v1"
-        const val PolicyVersion = 2
-        const val GenericPolicyId = "vortexcue.subtitle.generic.v2"
-        const val SimplifiedChinesePolicyId = "vortexcue.subtitle.zh-CN.v2"
+        const val OriginRevision = "vortexcue-translation-v3"
+        const val PolicyVersion = 3
+        const val GenericPolicyId = "vortexcue.subtitle.generic.v3"
+        const val SimplifiedChinesePolicyId = "vortexcue.subtitle.zh-CN.v3"
 
         private val SystemAsset =
             PromptAsset(
@@ -78,9 +78,9 @@ class TranslationPolicyRegistry private constructor(
             )
         private val SimplifiedChineseStyleAsset =
             PromptAsset(
-                id = "style.zh-CN.v2",
-                resourceId = R.raw.translation_style_zh_cn_v2,
-                sha256 = "a52812c8a42e6411e9acdd57bce85a38b0a158c09724f01beed57ee418bd81ae",
+                id = "style.zh-CN.v3",
+                resourceId = R.raw.translation_style_zh_cn_v3,
+                sha256 = "599dddf9486a6fb5a1822dc2135dd090337838c2e4674aab2df36c26c62e910a",
             )
 
         fun fromContext(context: Context): TranslationPolicyRegistry {

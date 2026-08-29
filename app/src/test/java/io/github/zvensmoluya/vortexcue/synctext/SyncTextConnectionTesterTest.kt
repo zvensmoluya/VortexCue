@@ -176,7 +176,7 @@ class SyncTextConnectionTesterTest {
         val name =
             when (id) {
                 "system.v2" -> "translation_system_v2.md"
-                "style.zh-CN.v2" -> "translation_style_zh_cn_v2.md"
+                "style.zh-CN.v3" -> "translation_style_zh_cn_v3.md"
                 else -> error("Unexpected prompt $id")
             }
         return File("src/main/res/raw/$name").readBytes()

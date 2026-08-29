@@ -19,6 +19,8 @@ internal data class LiveProviderProbeConfig(
     val mediaDurationSeconds: Double,
     val mediaSourceLanguage: String,
     val ffmpegCommand: String,
+    val sourcePreparationFile: File?,
+    val sourcePreparationReasoningLevel: TranslationReasoningLevel,
 ) {
     companion object {
         fun fromEnvironment(): LiveProviderProbeConfig {
@@ -50,6 +52,11 @@ internal data class LiveProviderProbeConfig(
                 mediaDurationSeconds = value("VORTEX_LIVE_MEDIA_DURATION_SECONDS")?.toDoubleOrNull() ?: 225.0,
                 mediaSourceLanguage = value("VORTEX_LIVE_MEDIA_SOURCE_LANGUAGE") ?: "ja",
                 ffmpegCommand = value("VORTEX_LIVE_FFMPEG") ?: "ffmpeg",
+                sourcePreparationFile = value("VORTEX_LIVE_SOURCE_SRT")?.let(::File),
+                sourcePreparationReasoningLevel =
+                    value("VORTEX_LIVE_SOURCE_REASONING")?.let {
+                        enumValueOrNull<TranslationReasoningLevel>(it)
+                    } ?: TranslationReasoningLevel.Off,
             )
         }
 
@@ -78,7 +85,7 @@ internal fun loadLivePromptAsset(id: String): ByteArray {
     val fileName =
         when (id) {
             "system.v2" -> "translation_system_v2.md"
-            "style.zh-CN.v2" -> "translation_style_zh_cn_v2.md"
+            "style.zh-CN.v3" -> "translation_style_zh_cn_v3.md"
             else -> error("Unexpected prompt asset: $id")
         }
     return requireNotNull(findRepositoryFile("app/src/main/res/raw/$fileName")) {
@@ -87,7 +94,7 @@ internal fun loadLivePromptAsset(id: String): ByteArray {
 }
 
 internal fun loadLiveSourcePreparationPrompt(): ByteArray =
-    requireNotNull(findRepositoryFile("app/src/main/res/raw/source_preparation_system_v1.md")) {
+    requireNotNull(findRepositoryFile("app/src/main/res/raw/source_preparation_system_v2.md")) {
         "Source preparation prompt asset is missing"
     }.readBytes()
 

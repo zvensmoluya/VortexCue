@@ -15,7 +15,8 @@ class SourcePreparationTest {
             listOf(
                 cue("cue-1", 0L, 1_000L, "*Sigh*"),
                 cue("cue-2", 1_000L, 2_000L, "ご視聴ありがとうございました。"),
-                cue("cue-3", 2_000L, 3_000L, "次の話をしましょう。"),
+                cue("cue-3", 2_000L, 3_000L, "ありがとうございました"),
+                cue("cue-4", 3_000L, 4_000L, "次の話をしましょう。"),
             )
 
         val signals = SourcePreparationSignalDetector.detect(cues)
@@ -28,6 +29,14 @@ class SourcePreparationTest {
             },
         )
         assertFalse(signals.policyPatches.any { it.cueId == "cue-2" })
+        assertTrue(
+            signals.flags.any {
+                it.cueId == "cue-3" &&
+                    it.kind == SourcePreparationFlagKind.SuspiciousPattern &&
+                    it.patternId == "whisper.jp.standalone_thanks.v1"
+            },
+        )
+        assertFalse(signals.policyPatches.any { it.cueId == "cue-3" })
     }
 
     @Test

@@ -90,6 +90,7 @@ object SourcePreparationSignalDetector {
     private val SuspiciousPatterns =
         listOf(
             "whisper.jp.thanks_for_watching.v1" to Regex("^(ご視聴|ご覧)(いただき)?ありがとうございました$"),
+            "whisper.jp.standalone_thanks.v1" to Regex("^(どうも)?ありがとうございました$"),
             "whisper.jp.subscribe.v1" to Regex("^チャンネル登録(を)?(よろしく)?お願いします$"),
             "whisper.subtitle.credit.v1" to Regex("^(字幕|翻訳).*(作成|制作|提供)$"),
         )

@@ -323,13 +323,13 @@ class SyncTextRepositoryTest {
         repository.setPresentationMode(secondResult.slotId, TextPresentationMode.SourceTarget)
         assertEquals(secondResult.resultId, database.syncTextDao().currentGeneratedResult(secondResult.slotId)?.resultId)
         assertEquals(TextPresentationMode.SourceTarget, repository.loadPresentation(secondResult.slotId)?.result?.presentationMode)
-        assertEquals(TranslationPolicyRegistry.OriginRevision, secondResult.policyRevision)
+        assertEquals("vortexcue-translation-v3", secondResult.policyRevision)
         assertEquals(
             "0caef8f6f9f2a28e951196c67b8852c4307c9232596786549e7ea702e5352029",
             secondResult.systemPromptSha256,
         )
         assertEquals(
-            "a52812c8a42e6411e9acdd57bce85a38b0a158c09724f01beed57ee418bd81ae",
+            "599dddf9486a6fb5a1822dc2135dd090337838c2e4674aab2df36c26c62e910a",
             secondResult.stylePromptSha256,
         )
         val thirdTask =
@@ -680,7 +680,7 @@ class SyncTextRepositoryTest {
     }
 
     private fun promptBytes(id: String): ByteArray {
-        val name = if (id == "system.v2") "translation_system_v2.md" else "translation_style_zh_cn_v2.md"
+        val name = if (id == "system.v2") "translation_system_v2.md" else "translation_style_zh_cn_v3.md"
         return File("src/main/res/raw/$name").readBytes()
     }
 
@@ -1035,7 +1035,7 @@ class SyncTextTaskRunnerRecoveryTest {
             policies = TranslationPolicyRegistry.forTesting(::promptBytes),
             sourcePreparationPolicies =
                 SourcePreparationPolicyRegistry.forTesting {
-                    File("src/main/res/raw/source_preparation_system_v1.md").readBytes()
+                    File("src/main/res/raw/source_preparation_system_v2.md").readBytes()
                 },
             rawResponses = rawResponses,
             textStorage = textStorage,
@@ -1110,7 +1110,7 @@ class SyncTextTaskRunnerRecoveryTest {
     }
 
     private fun promptBytes(id: String): ByteArray {
-        val name = if (id == "system.v2") "translation_system_v2.md" else "translation_style_zh_cn_v2.md"
+        val name = if (id == "system.v2") "translation_system_v2.md" else "translation_style_zh_cn_v3.md"
         return File("src/main/res/raw/$name").readBytes()
     }
 
