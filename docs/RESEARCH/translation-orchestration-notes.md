@@ -303,7 +303,7 @@ Source Patch、SourceContext、Preparation policy version 及其失效关系需�
 - 配置完整的翻译模型时执行一次全量扫描，固定使用 `Off` 思考档位；当前不分段汇总，也不向用户暴露单独重试。
 - 没有文本模型时只执行确定性事件标签清理并记录 `SkippedNoModel`；请求、协议或输出校验失败时记录 `DegradedError`，以确定性结果继续发布，不把 Raw ASR 作为新的用户入口。
 - 模型输出采用严格 JSON、稀疏 `DROP` / `REPLACE` 和受限 `SourceContext`；未知字段、未知 cue、重复 patch、过量 patch、越权修改 policy-drop cue 或空最终时间轴均被拒绝。
-- 翻译 policy 已升级为 v2，删除动态术语维护、ASR 修复、压缩和 reflow 职责；每个并发批次只读同一份冻结 `SourceContext`。
+- 翻译 policy 已升级为 v3，删除动态术语维护、ASR 修复、压缩和 reflow 职责，并以通用规则自然化简中译文中的源侧表达性标记；每个并发批次只读同一份冻结 `SourceContext`。
 - ASR Partial 始终保持 Partial；只有 Source Preparation 完成或降级落盘后才发布 Final source，并保留 ASR 窗口与 usage 元数据。
 
 以下小节保留为后续真实样本与产品体验实验项，不阻塞 v1 内核。
@@ -343,6 +343,18 @@ Source Patch、SourceContext、Preparation policy version 及其失效关系需�
 - SourceContext 对跨批人名、称呼和风格一致性的实际提升；
 - Preparation Scan 额外输入成本、时延与模型思考强度的关系；
 - 无 SourceContext、精简 SourceContext 和宽泛 Brief 三组翻译结果的差异。
+
+首轮日语真实样本中，Gemini 3.7 Flash（Low）在完整 59 cue 扫描里删除了 5 条片尾式感谢污染，并把共同出现的 `吐息`、`トイキ` 和 `トイキ達` 聚为同一实体。样本所有者随后确认 `吐息` 确为角色本名，因此这里不是 ASR 把普通名词误作名字：至少在 `吐息` 这一处 ASR 原文正确，跨汉字与片假名表面形式的 alias 发现也得到真实语义验证。该结论不等于确认模型对同一批次的每一处源修复都正确。
+
+同次翻译把源侧表达性标记处理成了不完整的括号式 `（笑`。翻译 policy v3 因此增加目标语言无关于具体标记和模型名称的通用约束：自然化非词汇语气标记、网络速记和表达性符号，避免重复表达情绪，不新增括号式说明，并保证标点完整。具体标记只进入回归样例，不写成生产 Prompt 的专项规则。
+
+### 10.6 可选 Work Reference
+
+后续应允许 Source Preparation 消费一份与 Work 关联、版本化且只读的 `Work Reference`。DLsite 等作品包附带的作品介绍是首个明确场景，但能力不绑定特定商店，也不在当前 v1 范围内实现。
+
+候选资料包括作品标题、作者或社团、角色名及读音、角色关系、章节或音轨标题和简短背景。它只为实体、别名、关系和源文本修复提供证据；对话文风仍从实际时间轴判断，营销介绍不得直接规定翻译语气。资料内容始终作为数据而不是 Prompt 指令，也不演化为跨任务可变记忆。
+
+进入实现前需要单独设计：本地作品包中的文件发现与格式范围、用户授权、资料来源与可信度、Work 关联方式、用户覆盖、reference snapshot、变更失效，以及与 Source Preparation checkpoint 的复用关系。当前不承诺自动联网抓取，也不因这项后续能力扩大媒体文件搜索范围。
 
 ## 11. 后续工作入口
 
