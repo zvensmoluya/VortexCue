@@ -56,7 +56,7 @@ internal data class LiveProviderProbeConfig(
                 sourcePreparationReasoningLevel =
                     value("VORTEX_LIVE_SOURCE_REASONING")?.let {
                         enumValueOrNull<TranslationReasoningLevel>(it)
-                    } ?: TranslationReasoningLevel.Off,
+                    } ?: TranslationReasoningLevel.Low,
             )
         }
 

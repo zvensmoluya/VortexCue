@@ -2,6 +2,7 @@ package io.github.zvensmoluya.vortexcue.synctext
 
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleCue
 import io.github.zvensmoluya.vortexcue.text.SourcePatchOperation
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -9,6 +10,90 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SourcePreparationTest {
+    @Test
+    fun `preparation policy prefers low reasoning`() {
+        assertEquals(TranslationReasoningLevel.Low, SourcePreparationPolicyRegistry.ReasoningLevel)
+    }
+
+    @Test
+    fun `explicit reasoning rejection retries once without provider controls`() = runBlocking {
+        val levels = mutableListOf<TranslationReasoningLevel?>()
+        var fallbackCount = 0
+        val request =
+            TranslationProviderRequest(
+                endpoint = "https://example.test",
+                model = "model",
+                apiKey = "secret",
+                systemPrompt = "prepare",
+                userPrompt = "timeline",
+                reasoningLevel = TranslationReasoningLevel.Low,
+            )
+
+        val response =
+            requestSourcePreparationWithReasoningFallback(
+                request = request,
+                onFallback = { fallbackCount += 1 },
+            ) { effectiveRequest ->
+                levels += effectiveRequest.reasoningLevel
+                if (effectiveRequest.reasoningLevel != null) {
+                    throw TranslationProtocolException(
+                        category = GenerationErrorCategory.ModelOrProtocol,
+                        retryable = false,
+                        capacityExceeded = false,
+                        httpStatus = 400,
+                        rawResponse = "unknown parameter reasoning_effort".toByteArray(),
+                        message = "reasoning is unsupported",
+                    )
+                }
+                TranslationProviderResponse(
+                    text = "{}",
+                    usage = UsageRecord(totalTokens = 1L),
+                    rawResponse = byteArrayOf(),
+                    httpStatus = 200,
+                    requestBytes = 1L,
+                    responseBytes = 2L,
+                    requestId = null,
+                    endpoint = effectiveRequest.endpoint,
+                )
+            }
+
+        assertEquals(listOf<TranslationReasoningLevel?>(TranslationReasoningLevel.Low, null), levels)
+        assertEquals(1, fallbackCount)
+        assertEquals("{}", response.text)
+    }
+
+    @Test
+    fun `ordinary model errors do not trigger a compatibility request`() = runBlocking {
+        var calls = 0
+        val request =
+            TranslationProviderRequest(
+                endpoint = "https://example.test",
+                model = "model",
+                apiKey = "secret",
+                systemPrompt = "prepare",
+                userPrompt = "timeline",
+                reasoningLevel = TranslationReasoningLevel.Low,
+            )
+
+        val failure =
+            runCatching {
+                requestSourcePreparationWithReasoningFallback(request) {
+                    calls += 1
+                    throw TranslationProtocolException(
+                        category = GenerationErrorCategory.ModelOrProtocol,
+                        retryable = false,
+                        capacityExceeded = false,
+                        httpStatus = 400,
+                        rawResponse = "invalid response format".toByteArray(),
+                        message = "invalid response format",
+                    )
+                }
+            }.exceptionOrNull()
+
+        assertTrue(failure is TranslationProtocolException)
+        assertEquals(1, calls)
+    }
+
     @Test
     fun `detector drops marked sound events but only flags whisper phrases`() {
         val cues =

@@ -91,13 +91,13 @@ API key 由 Android Keystore 中的 AES-GCM 主密钥加密，密文位于 `noBa
 
 | 资产 | Policy 版本 | 来源 revision | SHA-256 |
 | --- | --- | --- | --- |
-| `source-preparation.system.v2` | 2 | `vortexcue-source-preparation-v2` | `ed3801e4a778918037d3e4db5e05570fcf8b27e7f2d2ec50a4830eb0e538d1e6` |
+| `source-preparation.system.v2` | 3 | `vortexcue-source-preparation-v3` | `ed3801e4a778918037d3e4db5e05570fcf8b27e7f2d2ec50a4830eb0e538d1e6` |
 | `system.v2` | 3 | `vortexcue-translation-v3` | `0caef8f6f9f2a28e951196c67b8852c4307c9232596786549e7ea702e5352029` |
 | `style.zh-CN.v3` | 3 | `vortexcue-translation-v3` | `599dddf9486a6fb5a1822dc2135dd090337838c2e4674aab2df36c26c62e910a` |
 
 翻译 policy v3 的所有语言继续使用 `system.v2`；只有规范化后的 `zh-CN` 叠加 `style.zh-CN.v3`。简中风格将源侧非词汇语气标记、网络速记和其他表达性符号自然化为中文措辞或标点，避免与已有情绪措辞重复，不新增括号式舞台说明、情绪标签或译者注；括号仅在属于原文内容时保留。无专用风格的语言自动使用通用 policy。ASR 来源 attempt 另行冻结 preparation policy version 与 prompt hash；打包资产不匹配时任务进入需处理状态。
 
-Source Preparation 对完整 ASR 只允许稀疏 `DROP` / `REPLACE`，不增加、拆分、合并或改变时间；专属扫描固定关闭思考。没有配置文本模型或扫描失败时以确定性事件标签清理降级发布。扫描附带的目标语言无关 `SourceContext` 只保存紧凑风格、实体表面形式、别名与称呼功能，不维护跨任务翻译记忆。
+Source Preparation 对完整 ASR 只允许稀疏 `DROP` / `REPLACE`，不增加、拆分、合并或改变时间；专属扫描固定使用独立于翻译配置的 `Low` 思考档位，不提供用户开关。只有提供商以明确的 400/422 响应拒绝 reasoning/thinking 控制参数时，才允许一次省略该参数的兼容重发；超时、空输出和普通模型错误不得触发第二次请求。没有配置文本模型或扫描失败时以确定性事件标签清理降级发布。扫描附带的目标语言无关 `SourceContext` 只保存紧凑风格、实体表面形式、别名与称呼功能，不维护跨任务翻译记忆。
 
 翻译批次只消费 final Published Source 与同一份只读 `SourceContext`：
 

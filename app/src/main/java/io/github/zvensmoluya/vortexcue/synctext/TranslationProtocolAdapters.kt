@@ -47,7 +47,8 @@ data class TranslationProviderRequest(
     val apiKey: String,
     val systemPrompt: String,
     val userPrompt: String,
-    val reasoningLevel: TranslationReasoningLevel = TranslationReasoningLevel.Off,
+    /** Null is reserved for an internal compatibility retry that omits provider reasoning controls. */
+    val reasoningLevel: TranslationReasoningLevel? = TranslationReasoningLevel.Off,
     val userAgent: String? = null,
 )
 
@@ -582,6 +583,7 @@ internal class SseEventReader(
 
 data class StreamingTextEvent(
     val text: String = "",
+    val completedText: String? = null,
     val reasoningText: String = "",
     val usage: UsageRecord = UsageRecord(),
     val providerRequestId: String? = null,
@@ -703,7 +705,8 @@ abstract class JsonTranslationProtocolAdapter(
         val text: String
         val usage: UsageRecord
         if (reader.sawSseField) {
-            text = events.joinToString(separator = "") { it.text }.trim()
+            val streamedText = events.joinToString(separator = "") { it.text }
+            text = (events.mapNotNull(StreamingTextEvent::completedText).lastOrNull() ?: streamedText).trim()
             usage = events.map(StreamingTextEvent::usage).sumRealUsage()
         } else {
             val root = parseRoot(exchange)
@@ -832,7 +835,9 @@ class ResponsesTranslationAdapter(
         buildJsonObject {
             put("model", request.model)
             put("instructions", request.systemPrompt)
-            put("reasoning", buildJsonObject { put("effort", request.reasoningLevel.wireValue()) })
+            request.reasoningLevel?.let { level ->
+                put("reasoning", buildJsonObject { put("effort", level.wireValue()) })
+            }
             if (request.requiresDeepSeekTranslationBounds()) {
                 put("max_output_tokens", DeepSeekTranslationMaxOutputTokens)
             }
@@ -875,6 +880,12 @@ class ResponsesTranslationAdapter(
         val root = json.parseToJsonElement(data).jsonObject
         val type = root.string("type")
         val text = if (type == "response.output_text.delta") root.string("delta").orEmpty() else ""
+        val completedText =
+            when (type) {
+                "response.output_text.done" -> root.string("text")
+                "response.completed" -> extractText(root.objectValue("response")).takeIf(String::isNotEmpty)
+                else -> null
+            }
         val reasoning =
             if (type?.contains("reasoning") == true && type.endsWith(".delta")) {
                 root.string("delta").orEmpty()
@@ -885,6 +896,7 @@ class ResponsesTranslationAdapter(
             ?: root.objectValue("response").firstNonEmptyObject("usage")
         return StreamingTextEvent(
             text = text,
+            completedText = completedText,
             reasoningText = reasoning,
             usage = usageRoot?.toUsage("input_tokens", "output_tokens", "total_tokens") ?: UsageRecord(),
             providerRequestId = root.string("id") ?: root.objectValue("response").string("id"),
@@ -909,14 +921,16 @@ class AnthropicMessagesTranslationAdapter(
             put("model", request.model)
             put("max_tokens", 16_384)
             put("system", request.systemPrompt)
-            if (request.reasoningLevel == TranslationReasoningLevel.Off) {
-                put("thinking", buildJsonObject { put("type", "disabled") })
-            } else {
-                put("thinking", buildJsonObject { put("type", "adaptive") })
-                put(
-                    "output_config",
-                    buildJsonObject { put("effort", request.reasoningLevel.wireValue()) },
-                )
+            request.reasoningLevel?.let { level ->
+                if (level == TranslationReasoningLevel.Off) {
+                    put("thinking", buildJsonObject { put("type", "disabled") })
+                } else {
+                    put("thinking", buildJsonObject { put("type", "adaptive") })
+                    put(
+                        "output_config",
+                        buildJsonObject { put("effort", level.wireValue()) },
+                    )
+                }
             }
             put(
                 "messages",
@@ -979,21 +993,23 @@ class ChatCompletionsTranslationAdapter(
             put("model", request.model)
             put("stream", false)
             if (request.requiresDeepSeekTranslationBounds()) {
-                put(
-                    "thinking",
-                    buildJsonObject {
-                        put(
-                            "type",
-                            if (request.reasoningLevel == TranslationReasoningLevel.Off) "disabled" else "enabled",
-                        )
-                    },
-                )
-                if (request.reasoningLevel != TranslationReasoningLevel.Off) {
-                    put("reasoning_effort", request.reasoningLevel.deepSeekChatEffort())
+                request.reasoningLevel?.let { level ->
+                    put(
+                        "thinking",
+                        buildJsonObject {
+                            put(
+                                "type",
+                                if (level == TranslationReasoningLevel.Off) "disabled" else "enabled",
+                            )
+                        },
+                    )
+                    if (level != TranslationReasoningLevel.Off) {
+                        put("reasoning_effort", level.deepSeekChatEffort())
+                    }
                 }
                 put("max_tokens", DeepSeekTranslationMaxOutputTokens)
             } else {
-                put("reasoning_effort", request.reasoningLevel.wireValue())
+                request.reasoningLevel?.let { level -> put("reasoning_effort", level.wireValue()) }
             }
             put(
                 "messages",
@@ -1099,16 +1115,18 @@ class GoogleGenerateContentTranslationAdapter(
                 "generationConfig",
                 buildJsonObject {
                     put("maxOutputTokens", 16_384)
-                    put(
-                        "thinkingConfig",
-                        buildJsonObject {
-                            if (request.reasoningLevel == TranslationReasoningLevel.Off) {
-                                put("thinkingBudget", 0)
-                            } else {
-                                put("thinkingLevel", request.reasoningLevel.wireValue().uppercase())
-                            }
-                        },
-                    )
+                    request.reasoningLevel?.let { level ->
+                        put(
+                            "thinkingConfig",
+                            buildJsonObject {
+                                if (level == TranslationReasoningLevel.Off) {
+                                    put("thinkingBudget", 0)
+                                } else {
+                                    put("thinkingLevel", level.wireValue().uppercase())
+                                }
+                            },
+                        )
+                    }
                 },
             )
         }

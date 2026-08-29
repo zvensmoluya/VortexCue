@@ -48,6 +48,53 @@ data class ModelSourcePreparation(
 class SourcePreparationOutputException(message: String, cause: Throwable? = null) :
     IllegalArgumentException(message, cause)
 
+internal suspend fun requestSourcePreparationWithReasoningFallback(
+    request: TranslationProviderRequest,
+    onFallback: suspend () -> Unit = {},
+    execute: suspend (TranslationProviderRequest) -> TranslationProviderResponse,
+): TranslationProviderResponse {
+    if (request.reasoningLevel == null) return execute(request)
+    return try {
+        execute(request)
+    } catch (error: TranslationProtocolException) {
+        if (!error.rejectsReasoningConfiguration()) throw error
+        onFallback()
+        execute(request.copy(reasoningLevel = null))
+    }
+}
+
+private fun TranslationProtocolException.rejectsReasoningConfiguration(): Boolean {
+    if (category != GenerationErrorCategory.ModelOrProtocol || httpStatus !in ReasoningRejectionStatuses) return false
+    val details =
+        buildString {
+            append(message.orEmpty())
+            rawResponse?.let { bytes ->
+                append(' ')
+                append(bytes.toString(Charsets.UTF_8).take(MaxReasoningErrorInspectionLength))
+            }
+        }.lowercase()
+    return ReasoningFieldMarkers.any(details::contains) && ReasoningRejectionMarkers.any(details::contains)
+}
+
+private val ReasoningRejectionStatuses = setOf(400, 422)
+private val ReasoningFieldMarkers = listOf("reasoning", "thinking", "output_config", "effort")
+private val ReasoningRejectionMarkers =
+    listOf(
+        "unsupported",
+        "not supported",
+        "does not support",
+        "unknown",
+        "unrecognized",
+        "unexpected",
+        "not permitted",
+        "not allowed",
+        "extra input",
+        "invalid parameter",
+        "invalid argument",
+        "cannot",
+    )
+private const val MaxReasoningErrorInspectionLength = 4_096
+
 object SourcePreparationSignalDetector {
     fun detect(cues: List<SubtitleCue>): SourcePreparationSignals {
         val flags = mutableListOf<SourcePreparationFlag>()

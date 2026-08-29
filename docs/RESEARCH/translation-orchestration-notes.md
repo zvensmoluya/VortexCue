@@ -300,7 +300,7 @@ Source Patch、SourceContext、Preparation policy version 及其失效关系需�
 
 - Source Preparation 是所有 ASR 来源任务的固定内部阶段，不增加用户开关；导入字幕与已有 source revision 不重复扫描。
 - attempt 在提交时冻结 preparation policy version 与 prompt hash；checkpoint 同时绑定完整 Raw ASR 的 canonical hash。
-- 配置完整的翻译模型时执行一次全量扫描，固定使用 `Off` 思考档位；当前不分段汇总，也不向用户暴露单独重试。
+- 配置完整的翻译模型时执行一次全量扫描，固定使用独立于翻译配置的 `Low` 思考档位；只有提供商明确拒绝 reasoning/thinking 控制参数时才省略参数兼容重发一次，超时、空输出和普通模型错误不重发；当前不分段汇总，也不向用户暴露思考档位或单独重试。
 - 没有文本模型时只执行确定性事件标签清理并记录 `SkippedNoModel`；请求、协议或输出校验失败时记录 `DegradedError`，以确定性结果继续发布，不把 Raw ASR 作为新的用户入口。
 - 模型输出采用严格 JSON、稀疏 `DROP` / `REPLACE` 和受限 `SourceContext`；未知字段、未知 cue、重复 patch、过量 patch、越权修改 policy-drop cue 或空最终时间轴均被拒绝。
 - 翻译 policy 已升级为 v3，删除动态术语维护、ASR 修复、压缩和 reflow 职责，并以通用规则自然化简中译文中的源侧表达性标记；每个并发批次只读同一份冻结 `SourceContext`。

@@ -846,7 +846,7 @@ class SyncTextTaskRunnerRecoveryTest {
         assertEquals("zh-CN", presentation.result.targetLanguage)
         assertEquals("translated", presentation.targetCues?.single()?.text)
         assertEquals(2, adapter.calls.get())
-        assertEquals(TranslationReasoningLevel.Off, adapter.preparationRequest?.reasoningLevel)
+        assertEquals(TranslationReasoningLevel.Low, adapter.preparationRequest?.reasoningLevel)
         assertTrue(adapter.preparationRequest?.userPrompt?.contains("TIMELINE") == true)
         assertTrue(adapter.lastRequest?.userPrompt?.contains("window-0") == true)
         assertTrue(adapter.lastRequest?.userPrompt?.contains("content_mode: dialogue") == true)

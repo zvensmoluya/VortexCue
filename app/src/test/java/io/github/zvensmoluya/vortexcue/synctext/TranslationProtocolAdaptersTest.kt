@@ -246,6 +246,49 @@ class TranslationProtocolAdaptersTest {
     }
 
     @Test
+    fun `responses accepts output text done as the final snapshot without duplicating deltas`() = runBlocking {
+        val cases =
+            listOf(
+                """
+                data: {"type":"response.reasoning_summary_text.delta","delta":"working"}
+
+                data: {"type":"response.output_text.done","text":"[cue-1] one"}
+
+                data: {"type":"response.completed","response":{"usage":{"output_tokens":3}}}
+
+                """.trimIndent(),
+                """
+                data: {"type":"response.output_text.delta","delta":"[cue-1] "}
+
+                data: {"type":"response.output_text.delta","delta":"one"}
+
+                data: {"type":"response.output_text.done","text":"[cue-1] one"}
+
+                data: {"type":"response.completed","response":{"usage":{"output_tokens":3}}}
+
+                """.trimIndent(),
+            )
+
+        cases.forEach { stream ->
+            MockWebServer().use { server ->
+                server.start()
+                server.enqueue(
+                    MockResponse(
+                        headers = headersOf("Content-Type", "text/event-stream"),
+                        body = stream,
+                    ),
+                )
+                val adapter = ResponsesTranslationAdapter(BoundedHttpExecutor(testClient()))
+
+                val response = adapter.translateStreaming(request(server.url("/").toString()))
+
+                assertEquals("[cue-1] one", response.text)
+                assertEquals(3L, response.usage.outputTokens)
+            }
+        }
+    }
+
+    @Test
     fun `responses adapter falls back to provider ids carried in response bodies`() = runBlocking {
         MockWebServer().use { server ->
             server.start()
@@ -343,6 +386,15 @@ class TranslationProtocolAdaptersTest {
                 ?.jsonPrimitive
                 ?.content,
         )
+
+        val omitted = high.copy(reasoningLevel = null)
+        assertFalse("reasoning" in ResponsesTranslationAdapter(executor).requestBodyForTest(omitted))
+        val anthropicOmitted = AnthropicMessagesTranslationAdapter(executor).requestBodyForTest(omitted)
+        assertFalse("thinking" in anthropicOmitted)
+        assertFalse("output_config" in anthropicOmitted)
+        assertFalse("reasoning_effort" in ChatCompletionsTranslationAdapter(executor).requestBodyForTest(omitted))
+        val googleOmitted = GoogleGenerateContentTranslationAdapter(executor).requestBodyForTest(omitted)
+        assertFalse("thinkingConfig" in requireNotNull(googleOmitted["generationConfig"]).jsonObject)
     }
 
     @Test

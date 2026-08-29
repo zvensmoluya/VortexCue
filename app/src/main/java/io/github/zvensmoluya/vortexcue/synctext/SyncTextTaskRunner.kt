@@ -464,53 +464,70 @@ class SyncTextTaskRunner(
             if (configured) {
                 try {
                     val protocol = attempt.translationProtocol.enumValueOr(TranslationProtocol.Responses)
-                    val response =
-                        translation.translate(
-                            protocol = protocol,
-                            request =
-                                TranslationProviderRequest(
-                                    endpoint = requireNotNull(attempt.translationEndpoint),
-                                    model = requireNotNull(attempt.translationModel),
-                                    apiKey = repository.credentialSecret(requireNotNull(attempt.translationCredentialId)),
-                                    systemPrompt = policy.systemPrompt,
-                                    userPrompt =
-                                        SourcePreparationPromptRenderer.render(
-                                            normalizedSource,
-                                            source.language,
-                                            signals.flags,
-                                        ),
-                                    reasoningLevel = TranslationReasoningLevel.Off,
-                                    userAgent = attempt.translationUserAgent,
+                    val providerRequest =
+                        TranslationProviderRequest(
+                            endpoint = requireNotNull(attempt.translationEndpoint),
+                            model = requireNotNull(attempt.translationModel),
+                            apiKey = repository.credentialSecret(requireNotNull(attempt.translationCredentialId)),
+                            systemPrompt = policy.systemPrompt,
+                            userPrompt =
+                                SourcePreparationPromptRenderer.render(
+                                    normalizedSource,
+                                    source.language,
+                                    signals.flags,
                                 ),
-                            onAttempt = { networkAttempt ->
-                                recordSourcePreparationAttempt(attempt, protocol, networkAttempt)
-                            },
-                            onStreamEvent = { event ->
-                                when (event) {
-                                    is TranslationStreamEvent.AttemptStarted ->
-                                        runtimeStatus.updateTask(
-                                            task.taskId,
-                                            GenerationRuntimePhase.AwaitingSourcePreparation,
-                                        )
-                                    is TranslationStreamEvent.ReasoningDelta -> {
-                                        runtimeStatus.recordTaskStreamActivity(task.taskId, event.text)
-                                        runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.PreparingSource)
-                                    }
-                                    is TranslationStreamEvent.OutputDelta -> {
-                                        runtimeStatus.recordTaskStreamActivity(task.taskId, event.text)
-                                        runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.ReceivingSourcePreparation)
-                                    }
-                                    TranslationStreamEvent.AttemptCompleted -> {
-                                        runtimeStatus.flushTaskStreamActivity(task.taskId)
-                                        runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.ValidatingSourcePreparation)
-                                    }
-                                    TranslationStreamEvent.AttemptFailed -> {
-                                        runtimeStatus.flushTaskStreamActivity(task.taskId)
-                                        runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.AwaitingSourcePreparation)
-                                    }
-                                }
-                            },
+                            reasoningLevel = policy.reasoningLevel,
+                            userAgent = attempt.translationUserAgent,
                         )
+                    val response =
+                        requestSourcePreparationWithReasoningFallback(
+                            request = providerRequest,
+                            onFallback = {
+                                diagnostics.record(
+                                    SyncTextDiagnosticEventType.WorkUnitLifecycle,
+                                    taskId = task.taskId,
+                                    attemptId = attempt.attemptId,
+                                    workUnitKind = SourcePreparationWorkUnitKind,
+                                    workUnitId = attempt.attemptId,
+                                    stage = GenerationStage.PreparingSource.name,
+                                    outcome = "ReasoningCompatibilityFallback",
+                                    reason = "provider_rejected_explicit_low",
+                                )
+                            },
+                        ) { effectiveRequest ->
+                            translation.translate(
+                                protocol = protocol,
+                                request = effectiveRequest,
+                                onAttempt = { networkAttempt ->
+                                    recordSourcePreparationAttempt(attempt, protocol, networkAttempt)
+                                },
+                                onStreamEvent = { event ->
+                                    when (event) {
+                                        is TranslationStreamEvent.AttemptStarted ->
+                                            runtimeStatus.updateTask(
+                                                task.taskId,
+                                                GenerationRuntimePhase.AwaitingSourcePreparation,
+                                            )
+                                        is TranslationStreamEvent.ReasoningDelta -> {
+                                            runtimeStatus.recordTaskStreamActivity(task.taskId, event.text)
+                                            runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.PreparingSource)
+                                        }
+                                        is TranslationStreamEvent.OutputDelta -> {
+                                            runtimeStatus.recordTaskStreamActivity(task.taskId, event.text)
+                                            runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.ReceivingSourcePreparation)
+                                        }
+                                        TranslationStreamEvent.AttemptCompleted -> {
+                                            runtimeStatus.flushTaskStreamActivity(task.taskId)
+                                            runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.ValidatingSourcePreparation)
+                                        }
+                                        TranslationStreamEvent.AttemptFailed -> {
+                                            runtimeStatus.flushTaskStreamActivity(task.taskId)
+                                            runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.AwaitingSourcePreparation)
+                                        }
+                                    }
+                                },
+                            )
+                        }
                     usage = response.usage
                     SourcePreparationResponseParser.parse(
                         response = response.text,

@@ -9,6 +9,7 @@ data class SourcePreparationPolicy(
     val promptId: String,
     val systemPrompt: String,
     val promptSha256: String,
+    val reasoningLevel: TranslationReasoningLevel,
 )
 
 class SourcePreparationPolicyRegistry private constructor(
@@ -25,6 +26,7 @@ class SourcePreparationPolicyRegistry private constructor(
             promptId = PromptId,
             systemPrompt = bytes.toString(Charsets.UTF_8),
             promptSha256 = actual,
+            reasoningLevel = ReasoningLevel,
         )
     }
 
@@ -34,9 +36,10 @@ class SourcePreparationPolicyRegistry private constructor(
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
     companion object {
-        const val PolicyVersion = 2
+        const val PolicyVersion = 3
         const val PromptId = "source-preparation.system.v2"
         const val PromptSha256 = "ed3801e4a778918037d3e4db5e05570fcf8b27e7f2d2ec50a4830eb0e538d1e6"
+        val ReasoningLevel = TranslationReasoningLevel.Low
 
         fun fromContext(context: Context): SourcePreparationPolicyRegistry {
             val resources = context.applicationContext.resources

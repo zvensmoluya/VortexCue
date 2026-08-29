@@ -36,6 +36,14 @@ class LiveRealSourcePreparationTest {
             ).toSubtitleCues()
         val signals = SourcePreparationSignalDetector.detect(source)
         val policy = SourcePreparationPolicyRegistry.forTesting(::loadLiveSourcePreparationPrompt).resolve()
+        val report =
+            reportFile(
+                sourceFile,
+                policy.version,
+                policy.promptSha256,
+                config.sourcePreparationReasoningLevel,
+                model,
+            )
         val httpClientWrapper = SyncTextHttpClient("live-real-source-preparation")
         val httpClient = httpClientWrapper.client
         try {
@@ -65,6 +73,7 @@ class LiveRealSourcePreparationTest {
                             userAgent = config.userAgent,
                         ),
                 )
+            File("${report.absolutePath}.raw.json").writeBytes(response.rawResponse)
             val modelOutput =
                 SourcePreparationResponseParser.parse(
                     response = response.text,
@@ -73,14 +82,6 @@ class LiveRealSourcePreparationTest {
                 )
             val combinedPatches = signals.policyPatches + modelOutput.patches
             val published = SourcePatchApplier.apply(source, combinedPatches)
-            val report =
-                reportFile(
-                    sourceFile,
-                    policy.version,
-                    policy.promptSha256,
-                    config.sourcePreparationReasoningLevel,
-                    model,
-                )
             writeReport(
                 report = report,
                 sourceFile = sourceFile,
