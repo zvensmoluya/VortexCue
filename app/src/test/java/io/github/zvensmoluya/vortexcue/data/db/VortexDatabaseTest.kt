@@ -725,6 +725,41 @@ class VortexDatabaseTest {
     }
 
     @Test
+    fun versionFourteenAddsFrozenSourcePreparationCheckpoint() = runBlocking {
+        val path = temporaryFolder.root.resolve("migration-v14-v15.db").toPath()
+        val helper =
+            MigrationTestHelper(
+                databasePath = path,
+                schemaDirectoryPath = File("schemas").toPath(),
+                driver = BundledSQLiteDriver(),
+                databaseClass = VortexDatabase::class,
+                databaseFactory = { VortexDatabase_Impl() },
+                autoMigrationSpecs = emptyList(),
+            )
+        helper.createDatabase(14).close()
+
+        helper.runMigrationsAndValidate(15, listOf(MIGRATION_14_15)).use { connection ->
+            connection.prepare("PRAGMA table_info(generation_attempt)").use { statement ->
+                val columns = buildSet {
+                    while (statement.step()) add(statement.getText(1))
+                }
+                assertTrue("source_preparation_policy_version" in columns)
+                assertTrue("source_preparation_prompt_sha256" in columns)
+            }
+            connection.prepare("PRAGMA table_info(source_preparation_checkpoint)").use { statement ->
+                val columns = buildSet {
+                    while (statement.step()) add(statement.getText(1))
+                }
+                assertTrue("attempt_id" in columns)
+                assertTrue("input_source_sha256" in columns)
+                assertTrue("output_artifact_id" in columns)
+                assertTrue("policy_version" in columns)
+                assertTrue("prompt_sha256" in columns)
+            }
+        }
+    }
+
+    @Test
     fun versionSixIsDestructivelyRebuiltAsVersionNine() = runBlocking {
         val path = temporaryFolder.root.resolve("migration-v6-v9.db").toPath()
         val helper =

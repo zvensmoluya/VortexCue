@@ -11,16 +11,21 @@ import io.github.zvensmoluya.vortexcue.data.db.GenerationAttemptEntity
 import io.github.zvensmoluya.vortexcue.data.db.GenerationTaskEntity
 import io.github.zvensmoluya.vortexcue.data.db.GenerationTaskSnapshotEntity
 import io.github.zvensmoluya.vortexcue.data.db.RequestAttemptEntity
+import io.github.zvensmoluya.vortexcue.data.db.SourcePreparationEntity
 import io.github.zvensmoluya.vortexcue.data.db.SyncTextRunnerLeaseEntity
 import io.github.zvensmoluya.vortexcue.data.db.TranslationBatchEntity
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleCue
 import io.github.zvensmoluya.vortexcue.text.CanonicalTextNormalizer
+import io.github.zvensmoluya.vortexcue.text.SourceContext
+import io.github.zvensmoluya.vortexcue.text.SourcePreparationArtifact
+import io.github.zvensmoluya.vortexcue.text.SourceTextPatch
 import io.github.zvensmoluya.vortexcue.text.TextArtifactKind
 import io.github.zvensmoluya.vortexcue.text.TextArtifactPayload
 import io.github.zvensmoluya.vortexcue.text.TextStorageRepository
 import io.github.zvensmoluya.vortexcue.text.TimelineCompleteness
 import io.github.zvensmoluya.vortexcue.text.TimelineRevisionReader
+import io.github.zvensmoluya.vortexcue.text.canonicalContentHash
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
@@ -70,6 +75,7 @@ class SyncTextTaskRunner(
     private val database: VortexDatabase,
     private val repository: SyncTextRepository,
     private val policies: TranslationPolicyRegistry,
+    private val sourcePreparationPolicies: SourcePreparationPolicyRegistry,
     private val rawResponses: RawResponseStore,
     private val textStorage: TextStorageRepository,
     private val revisionReader: TimelineRevisionReader,
@@ -176,9 +182,12 @@ class SyncTextTaskRunner(
                         sourceCues = source.cues,
                         targetCues = null,
                         usage = source.usage,
-                        sourceModel = null,
+                        sourceModel = source.sourceModel,
                         completeTask = true,
                         sourceRevisionId = source.revisionId,
+                        coveredEndMs = source.coveredEndMs,
+                        completedWindowCount = source.completedWindowCount,
+                        totalWindowCount = source.totalWindowCount,
                     )
                     return
                 }
@@ -197,10 +206,13 @@ class SyncTextTaskRunner(
                                 sourceCues = source.cues,
                                 targetCues = null,
                                 usage = source.usage,
-                                sourceModel = null,
+                                sourceModel = source.sourceModel,
                                 completeTask = false,
                                 completeness = GeneratedResultCompleteness.Final,
                                 sourceRevisionId = source.revisionId,
+                                coveredEndMs = source.coveredEndMs,
+                                completedWindowCount = source.completedWindowCount,
+                                totalWindowCount = source.totalWindowCount,
                             )
                         source.copy(resultId = result.resultId, revisionId = result.sourceRevisionId)
                     }
@@ -316,6 +328,7 @@ class SyncTextTaskRunner(
                     usage = UsageRecord(),
                     resultId = snapshot.inputSourceResultId,
                     revisionId = revisionId,
+                    sourceContext = loadSourceContext(revisionId),
                 )
             }
             val frozenResultId = requireNotNull(snapshot.inputSourceResultId) { "Translation source result is missing" }
@@ -343,10 +356,14 @@ class SyncTextTaskRunner(
                 }
             } catch (error: SourceTextUnavailableException) {
                 if (!snapshot.allowAsrFallback || !error.safeToFallback) throw error
-                performAsr(task, snapshot.copy(sourceTrackId = null, embeddedTrackId = null), attempt)
+                prepareAsrSource(
+                    task,
+                    attempt,
+                    performAsr(task, snapshot.copy(sourceTrackId = null, embeddedTrackId = null), attempt),
+                )
             }
         } else {
-            performAsr(task, snapshot, attempt)
+            prepareAsrSource(task, attempt, performAsr(task, snapshot, attempt))
         }
     }
 
@@ -358,7 +375,246 @@ class SyncTextTaskRunner(
             usage = UsageRecord(result.inputTokens, result.outputTokens, result.totalTokens, result.costUsd),
             resultId = resultId,
             revisionId = result.sourceRevisionId,
+            sourceContext = loadSourceContext(result.sourceRevisionId),
         )
+    }
+
+    private suspend fun loadSourceContext(sourceRevisionId: String): SourceContext {
+        val checkpoint = dao.sourcePreparationForRevision(sourceRevisionId) ?: return SourceContext.Empty
+        val artifactId = checkpoint.outputArtifactId ?: return SourceContext.Empty
+        val decoded = textStorage.readArtifact(artifactId)
+        val output = (decoded.payload as? TextArtifactPayload.Preparation)?.value
+            ?: throw CheckpointIntegrityException("Source preparation checkpoint payload is invalid")
+        if (output.inputSourceHash != checkpoint.inputSourceSha256) {
+            throw CheckpointIntegrityException("Source preparation checkpoint source hash does not match")
+        }
+        return output.sourceContext
+    }
+
+    private suspend fun prepareAsrSource(
+        task: GenerationTaskEntity,
+        attempt: GenerationAttemptEntity,
+        source: SourceWork,
+    ): SourceWork {
+        ensureRunnable(task.taskId)
+        repository.markRunning(task.taskId, GenerationStage.PreparingSource, SourcePreparationProgress)
+        runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.PreparingSource)
+        val policy = sourcePreparationPolicies.resolve()
+        verifySourcePreparationPolicySnapshot(attempt, policy)
+        val normalizedSource = CanonicalTextNormalizer.normalizeGenerated(source.cues).toSubtitleCues()
+        val inputTimeline = CanonicalTextNormalizer.normalizeGenerated(normalizedSource)
+        val inputHash = canonicalContentHash(inputTimeline)
+        val existing = dao.sourcePreparation(attempt.attemptId)
+        if (
+            existing?.outputArtifactId != null &&
+            existing.inputSourceSha256 == inputHash &&
+            existing.policyVersion == policy.version &&
+            existing.promptSha256 == policy.promptSha256 &&
+            existing.state != SourcePreparationCheckpointState.Running.name
+        ) {
+            val output = readSourcePreparationCheckpoint(existing, inputHash, policy)
+            diagnostics.record(
+                SyncTextDiagnosticEventType.WorkUnitLifecycle,
+                taskId = task.taskId,
+                attemptId = attempt.attemptId,
+                workUnitKind = SourcePreparationWorkUnitKind,
+                workUnitId = attempt.attemptId,
+                stage = GenerationStage.PreparingSource.name,
+                outcome = "Reused",
+            )
+            return source.copy(
+                cues = SourcePatchApplier.apply(normalizedSource, output.patches),
+                usage = listOf(source.usage, existing.usage()).sumRealUsage(),
+                sourceContext = output.sourceContext,
+            )
+        }
+
+        val startedAtMs = nowMs()
+        val signals = SourcePreparationSignalDetector.detect(normalizedSource)
+        dao.upsertSourcePreparation(
+            SourcePreparationEntity(
+                attemptId = attempt.attemptId,
+                inputSourceSha256 = inputHash,
+                state = SourcePreparationCheckpointState.Running.name,
+                policyVersion = policy.version,
+                promptSha256 = policy.promptSha256,
+                model = attempt.translationModel,
+                createdAtMs = existing?.createdAtMs ?: startedAtMs,
+                updatedAtMs = startedAtMs,
+            ),
+        )
+        diagnostics.record(
+            SyncTextDiagnosticEventType.WorkUnitLifecycle,
+            taskId = task.taskId,
+            attemptId = attempt.attemptId,
+            workUnitKind = SourcePreparationWorkUnitKind,
+            workUnitId = attempt.attemptId,
+            stage = GenerationStage.PreparingSource.name,
+            outcome = "Started",
+            reason = "flags=${signals.flags.size}",
+        )
+
+        var usage = UsageRecord()
+        var failure: Throwable? = null
+        val configured =
+            !attempt.translationEndpoint.isNullOrBlank() &&
+                !attempt.translationModel.isNullOrBlank() &&
+                !attempt.translationCredentialId.isNullOrBlank()
+        val modelOutput =
+            if (configured) {
+                try {
+                    val protocol = attempt.translationProtocol.enumValueOr(TranslationProtocol.Responses)
+                    val response =
+                        translation.translate(
+                            protocol = protocol,
+                            request =
+                                TranslationProviderRequest(
+                                    endpoint = requireNotNull(attempt.translationEndpoint),
+                                    model = requireNotNull(attempt.translationModel),
+                                    apiKey = repository.credentialSecret(requireNotNull(attempt.translationCredentialId)),
+                                    systemPrompt = policy.systemPrompt,
+                                    userPrompt =
+                                        SourcePreparationPromptRenderer.render(
+                                            normalizedSource,
+                                            source.language,
+                                            signals.flags,
+                                        ),
+                                    reasoningLevel = TranslationReasoningLevel.Off,
+                                    userAgent = attempt.translationUserAgent,
+                                ),
+                            onAttempt = { networkAttempt ->
+                                recordSourcePreparationAttempt(attempt, protocol, networkAttempt)
+                            },
+                            onStreamEvent = { event ->
+                                when (event) {
+                                    is TranslationStreamEvent.AttemptStarted ->
+                                        runtimeStatus.updateTask(
+                                            task.taskId,
+                                            GenerationRuntimePhase.AwaitingSourcePreparation,
+                                        )
+                                    is TranslationStreamEvent.ReasoningDelta -> {
+                                        runtimeStatus.recordTaskStreamActivity(task.taskId, event.text)
+                                        runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.PreparingSource)
+                                    }
+                                    is TranslationStreamEvent.OutputDelta -> {
+                                        runtimeStatus.recordTaskStreamActivity(task.taskId, event.text)
+                                        runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.ReceivingSourcePreparation)
+                                    }
+                                    TranslationStreamEvent.AttemptCompleted -> {
+                                        runtimeStatus.flushTaskStreamActivity(task.taskId)
+                                        runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.ValidatingSourcePreparation)
+                                    }
+                                    TranslationStreamEvent.AttemptFailed -> {
+                                        runtimeStatus.flushTaskStreamActivity(task.taskId)
+                                        runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.AwaitingSourcePreparation)
+                                    }
+                                }
+                            },
+                        )
+                    usage = response.usage
+                    SourcePreparationResponseParser.parse(
+                        response = response.text,
+                        sourceCues = normalizedSource,
+                        policyDropIds = signals.policyPatches.mapTo(mutableSetOf(), SourceTextPatch::cueId),
+                    )
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    failure = error
+                    null
+                }
+            } else {
+                null
+            }
+
+        var checkpointState =
+            when {
+                !configured -> SourcePreparationCheckpointState.SkippedNoModel
+                failure != null -> SourcePreparationCheckpointState.DegradedError
+                else -> SourcePreparationCheckpointState.Completed
+            }
+        var output =
+            SourcePreparationArtifact(
+                inputSourceHash = inputHash,
+                policyVersion = policy.version,
+                patches = signals.policyPatches + modelOutput?.patches.orEmpty(),
+                sourceContext = modelOutput?.sourceContext ?: SourceContext.Empty,
+            )
+        val refined =
+            runCatching { SourcePatchApplier.apply(normalizedSource, output.patches) }.getOrElse { error ->
+                failure = failure ?: error
+                checkpointState = SourcePreparationCheckpointState.DegradedError
+                output =
+                    SourcePreparationArtifact(
+                        inputSourceHash = inputHash,
+                        policyVersion = policy.version,
+                        patches = emptyList(),
+                        sourceContext = SourceContext.Empty,
+                    )
+                normalizedSource
+            }
+        val artifact = textStorage.publishSourcePreparation(output)
+        val finishedAtMs = nowMs()
+        database.withWriteTransaction {
+            textStorage.registerArtifact(artifact)
+            dao.upsertSourcePreparation(
+                SourcePreparationEntity(
+                    attemptId = attempt.attemptId,
+                    inputSourceSha256 = inputHash,
+                    state = checkpointState.name,
+                    outputArtifactId = artifact.artifactId,
+                    outputSha256 = artifact.payloadSha256,
+                    policyVersion = policy.version,
+                    promptSha256 = policy.promptSha256,
+                    model = attempt.translationModel.takeIf { configured },
+                    inputTokens = usage.inputTokens,
+                    outputTokens = usage.outputTokens,
+                    totalTokens = usage.totalTokens,
+                    costUsd = usage.costUsd,
+                    errorMessage = failure?.message?.take(600),
+                    createdAtMs = existing?.createdAtMs ?: startedAtMs,
+                    updatedAtMs = finishedAtMs,
+                ),
+            )
+        }
+        diagnostics.record(
+            SyncTextDiagnosticEventType.WorkUnitLifecycle,
+            taskId = task.taskId,
+            attemptId = attempt.attemptId,
+            workUnitKind = SourcePreparationWorkUnitKind,
+            workUnitId = attempt.attemptId,
+            stage = GenerationStage.PreparingSource.name,
+            outcome = checkpointState.name,
+            reason = failure?.rootCauseType() ?: "patches=${output.patches.size}",
+            valueMs = (finishedAtMs - startedAtMs).coerceAtLeast(0L),
+        )
+        return source.copy(
+            cues = refined,
+            usage = listOf(source.usage, usage).sumRealUsage(),
+            sourceContext = output.sourceContext,
+        )
+    }
+
+    private suspend fun readSourcePreparationCheckpoint(
+        checkpoint: SourcePreparationEntity,
+        inputHash: String,
+        policy: SourcePreparationPolicy,
+    ): SourcePreparationArtifact {
+        val artifactId = requireNotNull(checkpoint.outputArtifactId)
+        val expectedHash = checkpoint.outputSha256
+            ?: throw CheckpointIntegrityException("Source preparation checkpoint hash is missing")
+        val metadata = textStorage.artifact(artifactId)
+            ?: throw CheckpointIntegrityException("Source preparation checkpoint metadata is missing")
+        if (metadata.payloadSha256 != expectedHash) {
+            throw CheckpointIntegrityException("Source preparation checkpoint hash does not match")
+        }
+        val decoded = textStorage.readArtifact(artifactId)
+        val output = (decoded.payload as? TextArtifactPayload.Preparation)?.value
+            ?: throw CheckpointIntegrityException("Source preparation checkpoint payload is invalid")
+        if (output.inputSourceHash != inputHash || output.policyVersion != policy.version) {
+            throw CheckpointIntegrityException("Source preparation checkpoint input does not match")
+        }
+        return output
     }
 
     private suspend fun performAsr(
@@ -417,23 +673,20 @@ class SyncTextTaskRunner(
                             val prefixWork = prefix.flatMap { requireNotNull(completedByRoot[it.windowId]) }
                             val prefixCues = mergeWindowTranscripts(prefixWork)
                             if (prefixCues.isNotEmpty()) {
+                                val normalizedPrefix =
+                                    CanonicalTextNormalizer.normalizeGenerated(prefixCues).toSubtitleCues()
                                 val language = resolveAsrLanguage(snapshot, prefixWork)
                                 repository.publishResult(
                                     taskId = task.taskId,
                                     sourceLanguage = language,
                                     targetLanguage = null,
                                     presentationMode = TextPresentationMode.TargetOnly,
-                                    sourceCues = prefixCues,
+                                    sourceCues = normalizedPrefix,
                                     targetCues = null,
                                     usage = prefixWork.map(WindowTranscript::usage).sumRealUsage(),
                                     sourceModel = AsrProfile.fromStoredValue(attempt.asrProfile).modelId,
-                                    completeTask = prefix.size == roots.size && snapshot.targetLanguage == null,
-                                    completeness =
-                                        if (prefix.size == roots.size) {
-                                            GeneratedResultCompleteness.Final
-                                        } else {
-                                            GeneratedResultCompleteness.Partial
-                                        },
+                                    completeTask = false,
+                                    completeness = GeneratedResultCompleteness.Partial,
                                     coveredEndMs = prefix.last().ownedEndMs,
                                     completedWindowCount = prefix.size,
                                     totalWindowCount = roots.size,
@@ -456,8 +709,16 @@ class SyncTextTaskRunner(
         }
         val language = resolveAsrLanguage(snapshot, transcripts)
         val usage = transcripts.map(WindowTranscript::usage).sumRealUsage()
-        val result = dao.task(task.taskId)?.sourceResultId?.let { dao.generatedResult(it) }
-        return SourceWork(merged, language, usage, result?.resultId, result?.sourceRevisionId)
+        val normalized = CanonicalTextNormalizer.normalizeGenerated(merged).toSubtitleCues()
+        return SourceWork(
+            cues = normalized,
+            language = language,
+            usage = usage,
+            sourceModel = AsrProfile.fromStoredValue(attempt.asrProfile).modelId,
+            coveredEndMs = roots.lastOrNull()?.ownedEndMs,
+            completedWindowCount = roots.size,
+            totalWindowCount = roots.size,
+        )
     }
 
     private fun mergeWindowTranscripts(transcripts: List<WindowTranscript>): List<SubtitleCue> {
@@ -730,7 +991,12 @@ class SyncTextTaskRunner(
         verifyPolicySnapshot(attempt, policy)
         val normalizedSource = CueIdNormalizer.normalize(source.cues)
         val planner = TranslationBatchPlanner()
-        val plans = planner.plan(normalizedSource, policy.systemPrompt + policy.stylePrompt.orEmpty())
+        val sourceContextPrompt = SourceContextPromptRenderer.render(source.sourceContext)
+        val plans =
+            planner.plan(
+                normalizedSource,
+                policy.systemPrompt + policy.stylePrompt.orEmpty() + sourceContextPrompt,
+            )
         var entities = dao.translationBatches(attempt.attemptId)
         if (entities.isEmpty()) {
             entities = plans.map { plan -> plan.toEntity(attempt.attemptId, "${attempt.attemptId}-batch-${plan.ordinal}") }
@@ -756,6 +1022,7 @@ class SyncTextTaskRunner(
                     attempt,
                     policy,
                     snapshot.sourceLanguage ?: source.language,
+                    source.sourceContext,
                     normalizedSource,
                     plan,
                     entity,
@@ -796,6 +1063,7 @@ class SyncTextTaskRunner(
         attempt: GenerationAttemptEntity,
         policy: TranslationPolicy,
         sourceLanguage: String?,
+        sourceContext: SourceContext,
         allSource: List<SubtitleCue>,
         plan: TranslationBatchPlan,
         entity: TranslationBatchEntity,
@@ -822,7 +1090,17 @@ class SyncTextTaskRunner(
             val children = dao.translationBatches(attempt.attemptId).filter { it.parentBatchId == entity.batchId }
             return children.sortedBy(TranslationBatchEntity::ordinal).flatMap { child ->
                 val childPlan = planForRange(allSource, child.firstCueIndex, child.lastCueIndex, child.ordinal)
-                processTranslationBatch(task, snapshot, attempt, policy, sourceLanguage, allSource, childPlan, child)
+                processTranslationBatch(
+                    task,
+                    snapshot,
+                    attempt,
+                    policy,
+                    sourceLanguage,
+                    sourceContext,
+                    allSource,
+                    childPlan,
+                    child,
+                )
             }
         }
 
@@ -962,6 +1240,7 @@ class SyncTextTaskRunner(
                     policy = policy,
                     sourceLanguage = sourceLanguage,
                     targetLanguage = requireNotNull(snapshot.targetLanguage),
+                    sourceContext = sourceContext,
                 )
             val timeline = CanonicalTextNormalizer.normalizeGenerated(output.targetCues)
             val checkpoint =
@@ -1060,7 +1339,17 @@ class SyncTextTaskRunner(
                 valueMs = (elapsedRealtimeMs() - workUnitStartedElapsedMs).coerceAtLeast(0L),
             )
             return children.flatMap { (childPlan, childEntity) ->
-                processTranslationBatch(task, snapshot, attempt, policy, sourceLanguage, allSource, childPlan, childEntity)
+                processTranslationBatch(
+                    task,
+                    snapshot,
+                    attempt,
+                    policy,
+                    sourceLanguage,
+                    sourceContext,
+                    allSource,
+                    childPlan,
+                    childEntity,
+                )
             }
         } catch (error: TranslationOutputException) {
             val issueSummary = error.diagnosticIssueSummary()
@@ -1153,6 +1442,50 @@ class SyncTextTaskRunner(
         }
     }
 
+    private suspend fun recordSourcePreparationAttempt(
+        attempt: GenerationAttemptEntity,
+        protocol: TranslationProtocol,
+        networkAttempt: TranslationNetworkAttempt,
+    ) {
+        val response = networkAttempt.response
+        val error = networkAttempt.error
+        val raw = response?.rawResponse ?: error?.rawResponse
+        val requestAttemptId = newId()
+        val rawFile = raw?.let { rawResponses.write("$requestAttemptId.json", it) }
+        val timestamp = nowMs()
+        database.withWriteTransaction {
+            val sequence = dao.nextRequestSequence(attempt.attemptId)
+            dao.upsertRequestAttempt(
+                RequestAttemptEntity(
+                    requestAttemptId = requestAttemptId,
+                    attemptId = attempt.attemptId,
+                    sequence = sequence,
+                    stage = GenerationStage.PreparingSource.name,
+                    provider = protocol.name,
+                    providerRequestId = response?.requestId ?: error?.requestId,
+                    workUnitKind = SourcePreparationWorkUnitKind,
+                    workUnitId = attempt.attemptId,
+                    operationOrdinal = 1,
+                    retryOrdinal = networkAttempt.attemptNumber,
+                    requestBytes = response?.requestBytes,
+                    responseBytes = response?.responseBytes ?: raw?.size?.toLong(),
+                    httpStatus = response?.httpStatus ?: error?.httpStatus,
+                    inputTokens = response?.usage?.inputTokens,
+                    outputTokens = response?.usage?.outputTokens,
+                    totalTokens = response?.usage?.totalTokens,
+                    costUsd = response?.usage?.costUsd,
+                    rawResponseFileName = rawFile,
+                    errorCategory = error?.category?.name,
+                    errorMessage = error?.diagnosticDetails()?.take(600),
+                    startedAtMs = networkAttempt.startedAtMs ?: timestamp,
+                    finishedAtMs = networkAttempt.finishedAtMs ?: timestamp,
+                    durationMs = networkAttempt.durationMs,
+                    retainUntilMs = timestamp + RawRetentionMs,
+                ),
+            )
+        }
+    }
+
     private suspend fun recordAsrAttempt(
         attempt: GenerationAttemptEntity,
         windowId: String,
@@ -1212,6 +1545,18 @@ class SyncTextTaskRunner(
         }
     }
 
+    private fun verifySourcePreparationPolicySnapshot(
+        attempt: GenerationAttemptEntity,
+        policy: SourcePreparationPolicy,
+    ) {
+        if (
+            attempt.sourcePreparationPolicyVersion != policy.version ||
+            attempt.sourcePreparationPromptSha256 != policy.promptSha256
+        ) {
+            throw PolicyIntegrityException("Task source preparation policy snapshot no longer matches packaged policy assets")
+        }
+    }
+
     private suspend fun ensureRunnable(taskId: String) {
         if (!repository.isRunnable(taskId)) throw TaskDeferredException()
     }
@@ -1240,6 +1585,7 @@ class SyncTextTaskRunner(
         private const val MaxAsrAttempts = 3
         private const val RawRetentionMs = 7L * 24L * 60L * 60L * 1_000L
         private const val LeaseHeartbeatMs = 30_000L
+        private const val SourcePreparationProgress = 0.52f
         private const val SourceProgress = 0.55f
         private const val TranslationProgressRange = 0.42f
         private const val CompletedState = "Completed"
@@ -1247,6 +1593,7 @@ class SyncTextTaskRunner(
         private const val FailedState = "Failed"
         private const val SplitState = "Split"
         private const val AsrWorkUnitKind = "AsrWindow"
+        private const val SourcePreparationWorkUnitKind = "SourcePreparation"
         private const val TranslationWorkUnitKind = "TranslationBatch"
     }
 }
@@ -1306,6 +1653,11 @@ private data class SourceWork(
     val usage: UsageRecord,
     val resultId: String? = null,
     val revisionId: String? = null,
+    val sourceContext: SourceContext = SourceContext.Empty,
+    val sourceModel: String? = null,
+    val coveredEndMs: Long? = null,
+    val completedWindowCount: Int? = null,
+    val totalWindowCount: Int? = null,
 )
 
 private data class WindowTranscript(
@@ -1383,6 +1735,9 @@ private fun TranslationBatchPlan.toEntity(
     )
 
 private fun TranslationBatchEntity.usage() =
+    UsageRecord(inputTokens, outputTokens, totalTokens, costUsd)
+
+private fun SourcePreparationEntity.usage() =
     UsageRecord(inputTokens, outputTokens, totalTokens, costUsd)
 
 private fun TranslationOutputException.diagnosticIssueSummary(): String {

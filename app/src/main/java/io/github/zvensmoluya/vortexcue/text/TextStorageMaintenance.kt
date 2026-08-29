@@ -81,7 +81,8 @@ class TextStorageMaintenance(
             val hasInvalidWorkArtifact =
                 syncDao.attemptsForTask(task.taskId).any { attempt ->
                     syncDao.asrWindows(attempt.attemptId).any { it.transcriptArtifactId in invalidArtifactIds } ||
-                        syncDao.translationBatches(attempt.attemptId).any { it.resultArtifactId in invalidArtifactIds }
+                        syncDao.translationBatches(attempt.attemptId).any { it.resultArtifactId in invalidArtifactIds } ||
+                        syncDao.sourcePreparation(attempt.attemptId)?.outputArtifactId in invalidArtifactIds
                 }
             if (hasInvalidSource || hasInvalidInputRevision || hasInvalidWorkArtifact) {
                 syncDao.markTaskStorageNeedsAttention(task.taskId, message, timestamp)
@@ -125,6 +126,7 @@ class TextStorageMaintenance(
                 database.withWriteTransaction {
                     syncDao.clearTerminalAsrArtifactReference(entity.artifactId)
                     syncDao.clearTerminalTranslationArtifactReference(entity.artifactId)
+                    syncDao.clearTerminalSourcePreparationArtifactReference(entity.artifactId)
                     textDao.deleteArtifact(entity.artifactId) == 1
                 }
             if (deletedMetadata && metadata != null) runCatching { store.delete(metadata) }

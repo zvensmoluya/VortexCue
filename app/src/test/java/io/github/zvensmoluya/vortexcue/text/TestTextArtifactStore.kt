@@ -43,6 +43,7 @@ internal class TestTextArtifactStore : TextArtifactStore {
             when (val payload = decoded.payload) {
                 is TextArtifactPayload.Timeline -> payload.value.cues.size
                 is TextArtifactPayload.Delta -> payload.value.entries.size
+                is TextArtifactPayload.Preparation -> payload.value.patches.size
             }
         return InspectedTextArtifact(
             StoredTextArtifact(

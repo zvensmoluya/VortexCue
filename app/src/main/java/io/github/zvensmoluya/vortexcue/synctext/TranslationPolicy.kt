@@ -16,8 +16,8 @@ data class TranslationPolicy(
     val stylePrompt: String?,
     val stylePromptSha256: String?,
     val requestSchemaVersion: Int = 1,
-    val batchPolicyId: String = "source_context_120_v1",
-    val contextPolicyId: String = "readonly_80_40_v1",
+    val batchPolicyId: String = "published_source_120_v2",
+    val contextPolicyId: String = "readonly_source_context_80_40_v2",
     val validationPolicyId: String = "strict_ids_v1",
     val recoveryPolicyId: String = "bounded_recovery_v1",
 )
@@ -65,22 +65,22 @@ class TranslationPolicyRegistry private constructor(
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
     companion object {
-        const val OriginRevision = "414fe08405ab4cfbb2759cbbfdb8744bde20acfc"
-        const val PolicyVersion = 1
-        const val GenericPolicyId = "vortexcue.subtitle.generic.v1"
-        const val SimplifiedChinesePolicyId = "vortexcue.subtitle.zh-CN.v1"
+        const val OriginRevision = "vortexcue-source-preparation-v1"
+        const val PolicyVersion = 2
+        const val GenericPolicyId = "vortexcue.subtitle.generic.v2"
+        const val SimplifiedChinesePolicyId = "vortexcue.subtitle.zh-CN.v2"
 
         private val SystemAsset =
             PromptAsset(
-                id = "system.v1",
-                resourceId = R.raw.translation_system_v1,
-                sha256 = "bbf6c688ce3df8953fe876ade60a69c28e837234cb3061694bab1467f642891f",
+                id = "system.v2",
+                resourceId = R.raw.translation_system_v2,
+                sha256 = "0caef8f6f9f2a28e951196c67b8852c4307c9232596786549e7ea702e5352029",
             )
         private val SimplifiedChineseStyleAsset =
             PromptAsset(
-                id = "style.zh-CN.v1",
-                resourceId = R.raw.translation_style_zh_cn_v1,
-                sha256 = "09de51ae2e3709c8e506a4d9a82c9ce3bc9b16a13d0f683a928aad3a2d91e07b",
+                id = "style.zh-CN.v2",
+                resourceId = R.raw.translation_style_zh_cn_v2,
+                sha256 = "a52812c8a42e6411e9acdd57bce85a38b0a158c09724f01beed57ee418bd81ae",
             )
 
         fun fromContext(context: Context): TranslationPolicyRegistry {

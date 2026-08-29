@@ -108,4 +108,50 @@ class CanonicalTextCodecTest {
             CanonicalTextNormalizer.normalizeGenerated(emptyList())
         }
     }
+
+    @Test
+    fun `source preparation artifact has a deterministic typed round trip`() {
+        val preparation =
+            SourcePreparationArtifact(
+                inputSourceHash = "1".repeat(64),
+                policyVersion = 1,
+                patches =
+                    listOf(
+                        SourceTextPatch("cue-1", SourcePatchOperation.Drop),
+                        SourceTextPatch("cue-2", SourcePatchOperation.Replace, "田中さん"),
+                    ),
+                sourceContext =
+                    SourceContext(
+                        styleProfile = SourceStyleProfile(contentMode = "dialogue", register = "casual"),
+                        entityMentions =
+                            listOf(
+                                SourceEntityMention(
+                                    entityId = "person-1",
+                                    kind = "PERSON",
+                                    observedForms = listOf("田中さん"),
+                                    spellingStatus = "observed",
+                                    evidenceCueIds = listOf("cue-2"),
+                                ),
+                            ),
+                    ),
+            )
+
+        val first =
+            TextArtifactCodec.encode(
+                TextArtifactKind.SourcePreparation,
+                TextArtifactPayload.Preparation(preparation),
+            )
+        val second =
+            TextArtifactCodec.encode(
+                TextArtifactKind.SourcePreparation,
+                TextArtifactPayload.Preparation(preparation),
+            )
+
+        assertEquals(first.artifactId, second.artifactId)
+        assertArrayEquals(first.bytes, second.bytes)
+        assertEquals(
+            preparation,
+            (TextArtifactCodec.decode(first.bytes).payload as TextArtifactPayload.Preparation).value,
+        )
+    }
 }

@@ -35,7 +35,7 @@ class SyncTextConnectionTesterTest {
         assertEquals("secret-key", request.apiKey)
         assertEquals(TranslationReasoningLevel.Medium, request.reasoningLevel)
         assertEquals("PrivateGatewayClient/1.0", request.userAgent)
-        assertTrue(request.systemPrompt.contains("professional subtitle translator"))
+        assertTrue(request.systemPrompt.contains("translate prepared source subtitles"))
         assertTrue(request.systemPrompt.contains("natural Simplified Chinese subtitles"))
         assertTrue(request.userPrompt.contains("MODE: TRANSLATE"))
         assertTrue(request.userPrompt.contains("[probe-1] Good night."))
@@ -175,8 +175,8 @@ class SyncTextConnectionTesterTest {
     private fun promptBytes(id: String): ByteArray {
         val name =
             when (id) {
-                "system.v1" -> "translation_system_v1.md"
-                "style.zh-CN.v1" -> "translation_style_zh_cn_v1.md"
+                "system.v2" -> "translation_system_v2.md"
+                "style.zh-CN.v2" -> "translation_style_zh_cn_v2.md"
                 else -> error("Unexpected prompt $id")
             }
         return File("src/main/res/raw/$name").readBytes()

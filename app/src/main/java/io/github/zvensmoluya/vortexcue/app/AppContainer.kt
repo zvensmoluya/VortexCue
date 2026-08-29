@@ -31,6 +31,7 @@ import io.github.zvensmoluya.vortexcue.synctext.SyncTextDiagnosticRecorder
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextNetworkMonitor
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextRepository
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextTaskRunner
+import io.github.zvensmoluya.vortexcue.synctext.SourcePreparationPolicyRegistry
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextConnectionTester
 import io.github.zvensmoluya.vortexcue.synctext.TranslationAdapterRegistry
 import io.github.zvensmoluya.vortexcue.synctext.TranslationEndpointResolver
@@ -97,6 +98,7 @@ class AppContainer(context: Context) {
         TextStorageMaintenance(appContext, database, textStorageRepository, textArtifactStore)
     val credentialStore = AndroidKeystoreCredentialStore(appContext)
     val translationPolicyRegistry = TranslationPolicyRegistry.fromContext(appContext)
+    private val sourcePreparationPolicyRegistry = SourcePreparationPolicyRegistry.fromContext(appContext)
     val syncTextScheduler = AndroidSyncTextScheduler(appContext, syncTextDiagnostics)
     val syncTextNetworkState = AndroidSyncTextNetworkState(appContext)
     private val syncTextHttpClient = SyncTextHttpClient(appContext.appVersionName())
@@ -157,6 +159,7 @@ class AppContainer(context: Context) {
             database = database,
             repository = syncTextRepository,
             policies = translationPolicyRegistry,
+            sourcePreparationPolicies = sourcePreparationPolicyRegistry,
             rawResponses = rawResponseStore,
             textStorage = textStorageRepository,
             revisionReader = timelineRevisionReader,

@@ -325,11 +325,11 @@ class SyncTextRepositoryTest {
         assertEquals(TextPresentationMode.SourceTarget, repository.loadPresentation(secondResult.slotId)?.result?.presentationMode)
         assertEquals(TranslationPolicyRegistry.OriginRevision, secondResult.policyRevision)
         assertEquals(
-            "bbf6c688ce3df8953fe876ade60a69c28e837234cb3061694bab1467f642891f",
+            "0caef8f6f9f2a28e951196c67b8852c4307c9232596786549e7ea702e5352029",
             secondResult.systemPromptSha256,
         )
         assertEquals(
-            "09de51ae2e3709c8e506a4d9a82c9ce3bc9b16a13d0f683a928aad3a2d91e07b",
+            "a52812c8a42e6411e9acdd57bce85a38b0a158c09724f01beed57ee418bd81ae",
             secondResult.stylePromptSha256,
         )
         val thirdTask =
@@ -680,7 +680,7 @@ class SyncTextRepositoryTest {
     }
 
     private fun promptBytes(id: String): ByteArray {
-        val name = if (id == "system.v1") "translation_system_v1.md" else "translation_style_zh_cn_v1.md"
+        val name = if (id == "system.v2") "translation_system_v2.md" else "translation_style_zh_cn_v2.md"
         return File("src/main/res/raw/$name").readBytes()
     }
 
@@ -845,8 +845,59 @@ class SyncTextTaskRunnerRecoveryTest {
         val presentation = requireNotNull(repository.loadPresentation(translatedSlot.slotId))
         assertEquals("zh-CN", presentation.result.targetLanguage)
         assertEquals("translated", presentation.targetCues?.single()?.text)
-        assertEquals(1, adapter.calls.get())
+        assertEquals(2, adapter.calls.get())
+        assertEquals(TranslationReasoningLevel.Off, adapter.preparationRequest?.reasoningLevel)
+        assertTrue(adapter.preparationRequest?.userPrompt?.contains("TIMELINE") == true)
         assertTrue(adapter.lastRequest?.userPrompt?.contains("window-0") == true)
+        assertTrue(adapter.lastRequest?.userPrompt?.contains("content_mode: dialogue") == true)
+        val attemptId = requireNotNull(database.syncTextDao().task(task.taskId)).currentAttemptId
+        assertEquals(
+            SourcePreparationCheckpointState.Completed.name,
+            database.syncTextDao().sourcePreparation(attemptId)?.state,
+        )
+    }
+
+    @Test
+    fun `asr only preparation applies deterministic cleanup without a translation model`() = runBlocking {
+        insertAudioContent(durationMs = 100_000L)
+        repository.saveCredential("asr-cleanup", "ASR", CredentialPurpose.Asr, "secret")
+        val scheme =
+            repository.createScheme(
+                name = "ASR cleanup",
+                asrProfile = AsrProfile.OpenRouterWhisperV1,
+                asrCredentialId = "asr-cleanup",
+                isDefault = true,
+            )
+        val task =
+            repository.submit(
+                GenerationRequest(
+                    contentId = RunnerContentId,
+                    input = GenerationInput.AudioTrack("audio:0"),
+                    output = GenerationOutput.SourceOnly,
+                    schemeId = scheme.schemeId,
+                ),
+            )
+
+        assertTrue(runner(EventAsrEngine()).runUntilIdle())
+
+        val taskEntity = requireNotNull(database.syncTextDao().task(task.taskId))
+        val final = requireNotNull(repository.currentSourceResult(RunnerContentId))
+        val published = revisionReader.read(final.sourceRevisionId)
+        assertEquals(GenerationTaskState.Completed.name, taskEntity.state)
+        assertEquals(GeneratedResultCompleteness.Final, final.completeness)
+        assertEquals(listOf("今日は話しましょう。", "ご視聴ありがとうございました。"), published.cues.map { it.text })
+        assertEquals(
+            SourcePreparationCheckpointState.SkippedNoModel.name,
+            database.syncTextDao().sourcePreparation(taskEntity.currentAttemptId)?.state,
+        )
+        assertEquals(
+            SourcePreparationPolicyRegistry.PolicyVersion,
+            database.syncTextDao().attempt(taskEntity.currentAttemptId)?.sourcePreparationPolicyVersion,
+        )
+        assertEquals(
+            SourcePreparationPolicyRegistry.PromptSha256,
+            database.syncTextDao().attempt(taskEntity.currentAttemptId)?.sourcePreparationPromptSha256,
+        )
     }
 
     @Test
@@ -982,6 +1033,10 @@ class SyncTextTaskRunnerRecoveryTest {
             database = database,
             repository = repository,
             policies = TranslationPolicyRegistry.forTesting(::promptBytes),
+            sourcePreparationPolicies =
+                SourcePreparationPolicyRegistry.forTesting {
+                    File("src/main/res/raw/source_preparation_system_v1.md").readBytes()
+                },
             rawResponses = rawResponses,
             textStorage = textStorage,
             revisionReader = revisionReader,
@@ -1055,7 +1110,7 @@ class SyncTextTaskRunnerRecoveryTest {
     }
 
     private fun promptBytes(id: String): ByteArray {
-        val name = if (id == "system.v1") "translation_system_v1.md" else "translation_style_zh_cn_v1.md"
+        val name = if (id == "system.v2") "translation_system_v2.md" else "translation_style_zh_cn_v2.md"
         return File("src/main/res/raw/$name").readBytes()
     }
 
@@ -1163,11 +1218,35 @@ private class RecoveringAsrEngine : AsrEngine {
 private class SuccessfulTranslationAdapter : TranslationProtocolAdapter {
     override val protocol = TranslationProtocol.Responses
     val calls = AtomicInteger(0)
+    var preparationRequest: TranslationProviderRequest? = null
+        private set
     var lastRequest: TranslationProviderRequest? = null
         private set
 
     override suspend fun translate(request: TranslationProviderRequest): TranslationProviderResponse {
         calls.incrementAndGet()
+        if (request.systemPrompt.contains("prepare ASR source subtitles")) {
+            preparationRequest = request
+            val text =
+                """
+                {
+                  "patches": [],
+                  "source_context": {
+                    "style_profile": {
+                      "content_mode": "dialogue",
+                      "register": "casual",
+                      "politeness": null,
+                      "utterance_shape": "short turns",
+                      "preserve_traits": []
+                    },
+                    "entity_mentions": [],
+                    "alias_clusters": [],
+                    "addressing_functions": []
+                  }
+                }
+                """.trimIndent()
+            return response(request, text, "source-preparation-${calls.get()}")
+        }
         lastRequest = request
         val translateOnly =
             request.userPrompt
@@ -1178,17 +1257,43 @@ private class SuccessfulTranslationAdapter : TranslationProtocolAdapter {
                 Regex("""^\[([^]]+)]""").find(line)?.groupValues?.get(1)
             }.toList()
         val text = ids.joinToString("\n") { id -> "[$id] translated" }
-        return TranslationProviderResponse(
+        return response(request, text, "translation-${calls.get()}")
+    }
+
+    private fun response(
+        request: TranslationProviderRequest,
+        text: String,
+        requestId: String,
+    ) =
+        TranslationProviderResponse(
             text = text,
             usage = UsageRecord(totalTokens = 1L),
             rawResponse = text.toByteArray(),
             httpStatus = 200,
             requestBytes = request.userPrompt.length.toLong(),
             responseBytes = text.length.toLong(),
-            requestId = "translation-${calls.get()}",
+            requestId = requestId,
             endpoint = request.endpoint,
         )
-    }
+}
+
+private class EventAsrEngine : AsrEngine {
+    override suspend fun transcribe(request: AsrRequest): AsrWindowResult =
+        AsrWindowResult(
+            segments =
+                listOf(
+                    AsrTimestampedToken(100L, 800L, "*Sigh*"),
+                    AsrTimestampedToken(1_000L, 2_000L, "今日は話しましょう。"),
+                    AsrTimestampedToken(2_500L, 3_500L, "ご視聴ありがとうございました。"),
+                ),
+            detectedLanguage = "ja",
+            usage = UsageRecord(totalTokens = 1L),
+            rawResponse = byteArrayOf(1),
+            httpStatus = 200,
+            requestBytes = 1L,
+            responseBytes = 1L,
+            requestId = "event-asr",
+        )
 }
 
 private class TemporaryPcmSpool : PcmSpool {
@@ -1275,6 +1380,7 @@ private class MemoryTextArtifactStore : TextArtifactStore {
             when (val payload = decoded.payload) {
                 is TextArtifactPayload.Timeline -> payload.value.cues.size
                 is TextArtifactPayload.Delta -> payload.value.entries.size
+                is TextArtifactPayload.Preparation -> payload.value.patches.size
             }
         return io.github.zvensmoluya.vortexcue.text.InspectedTextArtifact(
             StoredTextArtifact(

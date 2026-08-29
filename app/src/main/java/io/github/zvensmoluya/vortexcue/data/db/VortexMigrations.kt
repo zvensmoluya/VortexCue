@@ -319,3 +319,45 @@ internal val MIGRATION_13_14 =
             connection.execSQL("ALTER TABLE `generation_task_snapshot` ADD COLUMN `activation_track_id` TEXT")
         }
     }
+
+internal val MIGRATION_14_15 =
+    object : Migration(14, 15) {
+        override suspend fun migrate(connection: SQLiteConnection) {
+            connection.execSQL(
+                "ALTER TABLE `generation_attempt` ADD COLUMN `source_preparation_policy_version` " +
+                    "INTEGER NOT NULL DEFAULT 1",
+            )
+            connection.execSQL(
+                "ALTER TABLE `generation_attempt` ADD COLUMN `source_preparation_prompt_sha256` " +
+                    "TEXT NOT NULL DEFAULT 'dcf4ee6bd866c35ea5c261fd33ba7b9f1ac353b8d64bea190ebb97ad0ce702e0'",
+            )
+            connection.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `source_preparation_checkpoint` (
+                    `attempt_id` TEXT NOT NULL,
+                    `input_source_sha256` TEXT NOT NULL,
+                    `state` TEXT NOT NULL,
+                    `output_artifact_id` TEXT,
+                    `output_sha256` TEXT,
+                    `policy_version` INTEGER NOT NULL,
+                    `prompt_sha256` TEXT NOT NULL,
+                    `model` TEXT,
+                    `input_tokens` INTEGER,
+                    `output_tokens` INTEGER,
+                    `total_tokens` INTEGER,
+                    `cost_usd` TEXT,
+                    `error_message` TEXT,
+                    `created_at_ms` INTEGER NOT NULL,
+                    `updated_at_ms` INTEGER NOT NULL,
+                    PRIMARY KEY(`attempt_id`),
+                    FOREIGN KEY(`attempt_id`) REFERENCES `generation_attempt`(`attempt_id`) ON UPDATE CASCADE ON DELETE CASCADE,
+                    FOREIGN KEY(`output_artifact_id`) REFERENCES `text_artifact`(`artifact_id`) ON UPDATE CASCADE ON DELETE NO ACTION
+                )
+                """.trimIndent(),
+            )
+            connection.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_source_preparation_checkpoint_output_artifact_id` " +
+                    "ON `source_preparation_checkpoint` (`output_artifact_id`)",
+            )
+        }
+    }

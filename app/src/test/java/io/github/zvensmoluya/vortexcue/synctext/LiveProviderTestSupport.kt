@@ -77,14 +77,19 @@ internal data class LiveProviderProbeConfig(
 internal fun loadLivePromptAsset(id: String): ByteArray {
     val fileName =
         when (id) {
-            "system.v1" -> "translation_system_v1.md"
-            "style.zh-CN.v1" -> "translation_style_zh_cn_v1.md"
+            "system.v2" -> "translation_system_v2.md"
+            "style.zh-CN.v2" -> "translation_style_zh_cn_v2.md"
             else -> error("Unexpected prompt asset: $id")
         }
     return requireNotNull(findRepositoryFile("app/src/main/res/raw/$fileName")) {
         "Prompt asset is missing: $fileName"
     }.readBytes()
 }
+
+internal fun loadLiveSourcePreparationPrompt(): ByteArray =
+    requireNotNull(findRepositoryFile("app/src/main/res/raw/source_preparation_system_v1.md")) {
+        "Source preparation prompt asset is missing"
+    }.readBytes()
 
 internal fun findRepositoryFile(relativePath: String): File? =
     sequenceOf(

@@ -27,7 +27,7 @@ class TranslationPolicyEngineTest {
         val generic = registry.resolve("ja")
 
         assertEquals(TranslationPolicyRegistry.OriginRevision, simplified.originRevision)
-        assertEquals("style.zh-CN.v1", simplified.stylePromptId)
+        assertEquals("style.zh-CN.v2", simplified.stylePromptId)
         assertNull(traditional.stylePromptId)
         assertNull(generic.stylePromptId)
         registry.verifyAll()
@@ -207,8 +207,8 @@ class TranslationPolicyEngineTest {
     private fun promptBytes(id: String): ByteArray {
         val name =
             when (id) {
-                "system.v1" -> "translation_system_v1.md"
-                "style.zh-CN.v1" -> "translation_style_zh_cn_v1.md"
+                "system.v2" -> "translation_system_v2.md"
+                "style.zh-CN.v2" -> "translation_style_zh_cn_v2.md"
                 else -> error("Unexpected prompt $id")
             }
         return File("src/main/res/raw/$name").readBytes()

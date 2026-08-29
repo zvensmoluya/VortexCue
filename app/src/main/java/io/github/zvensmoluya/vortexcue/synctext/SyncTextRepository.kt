@@ -1478,6 +1478,8 @@ class SyncTextRepository(
             systemPromptSha256 = policy?.systemPromptSha256.orEmpty(),
             stylePromptSha256 = policy?.stylePromptSha256,
             requestSchemaVersion = policy?.requestSchemaVersion ?: 1,
+            sourcePreparationPolicyVersion = SourcePreparationPolicyRegistry.PolicyVersion,
+            sourcePreparationPromptSha256 = SourcePreparationPolicyRegistry.PromptSha256,
             asrWindowMs = AsrWindowMs,
             asrOverlapMs = AsrOverlapMs,
             asrMaxEncodedBytes = AsrMaxEncodedBytes,

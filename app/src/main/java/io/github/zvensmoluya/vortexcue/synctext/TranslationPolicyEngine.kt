@@ -1,6 +1,7 @@
 package io.github.zvensmoluya.vortexcue.synctext
 
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleCue
+import io.github.zvensmoluya.vortexcue.text.SourceContext
 import java.security.MessageDigest
 
 data class TranslationBatchPlan(
@@ -129,6 +130,7 @@ object TranslationPromptRenderer {
         targetLanguage: String,
         mode: TranslationPromptMode,
         repairIds: Set<String> = emptySet(),
+        sourceContext: SourceContext = SourceContext.Empty,
     ): String {
         val translate =
             if (mode == TranslationPromptMode.Repair) {
@@ -148,6 +150,8 @@ object TranslationPromptRenderer {
             if (mode == TranslationPromptMode.Repair) {
                 appendLine("REPAIR: Return only the listed failed ids. Do not rewrite successful ids.")
             }
+            appendLine("SOURCE_CONTEXT")
+            appendLine(SourceContextPromptRenderer.render(sourceContext))
             appendSection("CONTEXT_BEFORE", plan.contextBefore)
             appendSection("TRANSLATE_ONLY", translate)
             appendSection("CONTEXT_AFTER", plan.contextAfter)
@@ -302,6 +306,7 @@ class TranslationBatchExecutor(
         policy: TranslationPolicy,
         sourceLanguage: String?,
         targetLanguage: String,
+        sourceContext: SourceContext = SourceContext.Empty,
         maxFollowUpCalls: Int = DefaultMaxFollowUpCalls,
     ): TranslationBatchOutput {
         require(maxFollowUpCalls >= 0) { "Translation follow-up call limit must not be negative" }
@@ -309,7 +314,15 @@ class TranslationBatchExecutor(
         val usages = mutableListOf<UsageRecord>()
         suspend fun call(mode: TranslationPromptMode, repairIds: Set<String> = emptySet()): TranslationProviderResponse {
             val system = listOfNotNull(policy.systemPrompt, policy.stylePrompt).joinToString("\n\n")
-            val prompt = TranslationPromptRenderer.render(plan, sourceLanguage, targetLanguage, mode, repairIds)
+            val prompt =
+                TranslationPromptRenderer.render(
+                    plan,
+                    sourceLanguage,
+                    targetLanguage,
+                    mode,
+                    repairIds,
+                    sourceContext,
+                )
             return request(system, prompt).also {
                 rawResponses += it.rawResponse
                 usages += it.usage

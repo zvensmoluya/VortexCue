@@ -277,6 +277,14 @@ data class GenerationAttemptEntity(
     val stylePromptSha256: String?,
     @ColumnInfo(name = "request_schema_version")
     val requestSchemaVersion: Int,
+    @ColumnInfo(name = "source_preparation_policy_version", defaultValue = "1")
+    val sourcePreparationPolicyVersion: Int = 1,
+    @ColumnInfo(
+        name = "source_preparation_prompt_sha256",
+        defaultValue = "'dcf4ee6bd866c35ea5c261fd33ba7b9f1ac353b8d64bea190ebb97ad0ce702e0'",
+    )
+    val sourcePreparationPromptSha256: String =
+        "dcf4ee6bd866c35ea5c261fd33ba7b9f1ac353b8d64bea190ebb97ad0ce702e0",
     @ColumnInfo(name = "asr_window_ms")
     val asrWindowMs: Long,
     @ColumnInfo(name = "asr_overlap_ms")
@@ -365,6 +373,58 @@ data class AsrWindowEntity(
     val totalTokens: Long? = null,
     @ColumnInfo(name = "cost_usd")
     val costUsd: String? = null,
+)
+
+@Entity(
+    tableName = "source_preparation_checkpoint",
+    foreignKeys = [
+        ForeignKey(
+            entity = GenerationAttemptEntity::class,
+            parentColumns = ["attempt_id"],
+            childColumns = ["attempt_id"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = TextArtifactEntity::class,
+            parentColumns = ["artifact_id"],
+            childColumns = ["output_artifact_id"],
+            onDelete = ForeignKey.NO_ACTION,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("output_artifact_id")],
+)
+data class SourcePreparationEntity(
+    @PrimaryKey
+    @ColumnInfo(name = "attempt_id")
+    val attemptId: String,
+    @ColumnInfo(name = "input_source_sha256")
+    val inputSourceSha256: String,
+    val state: String,
+    @ColumnInfo(name = "output_artifact_id")
+    val outputArtifactId: String? = null,
+    @ColumnInfo(name = "output_sha256")
+    val outputSha256: String? = null,
+    @ColumnInfo(name = "policy_version")
+    val policyVersion: Int,
+    @ColumnInfo(name = "prompt_sha256")
+    val promptSha256: String,
+    val model: String? = null,
+    @ColumnInfo(name = "input_tokens")
+    val inputTokens: Long? = null,
+    @ColumnInfo(name = "output_tokens")
+    val outputTokens: Long? = null,
+    @ColumnInfo(name = "total_tokens")
+    val totalTokens: Long? = null,
+    @ColumnInfo(name = "cost_usd")
+    val costUsd: String? = null,
+    @ColumnInfo(name = "error_message")
+    val errorMessage: String? = null,
+    @ColumnInfo(name = "created_at_ms")
+    val createdAtMs: Long,
+    @ColumnInfo(name = "updated_at_ms")
+    val updatedAtMs: Long,
 )
 
 @Entity(

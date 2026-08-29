@@ -256,6 +256,20 @@ interface SyncTextDao {
     @Upsert
     suspend fun upsertAsrWindow(entity: AsrWindowEntity)
 
+    @Query("SELECT * FROM source_preparation_checkpoint WHERE attempt_id = :attemptId")
+    suspend fun sourcePreparation(attemptId: String): SourcePreparationEntity?
+
+    @Query(
+        "SELECT p.* FROM source_preparation_checkpoint p " +
+            "INNER JOIN generated_text_result r ON r.attempt_id = p.attempt_id " +
+            "WHERE r.source_revision_id = :sourceRevisionId AND r.target_language IS NULL " +
+            "AND p.output_artifact_id IS NOT NULL ORDER BY r.created_at_ms DESC LIMIT 1",
+    )
+    suspend fun sourcePreparationForRevision(sourceRevisionId: String): SourcePreparationEntity?
+
+    @Upsert
+    suspend fun upsertSourcePreparation(entity: SourcePreparationEntity)
+
     @Query("SELECT * FROM translation_batch WHERE attempt_id = :attemptId ORDER BY ordinal")
     suspend fun translationBatches(attemptId: String): List<TranslationBatchEntity>
 
@@ -370,8 +384,22 @@ interface SyncTextDao {
             "WHERE w.transcript_artifact_id IS NOT NULL AND t.state NOT IN ('Completed', 'Deleted', 'Aborted') " +
             "UNION SELECT b.result_artifact_id FROM translation_batch b " +
             "INNER JOIN generation_attempt a ON a.attempt_id = b.attempt_id " +
+        "INNER JOIN generation_task t ON t.task_id = a.task_id " +
+            "WHERE b.result_artifact_id IS NOT NULL AND t.state NOT IN ('Completed', 'Deleted', 'Aborted') " +
+            "UNION SELECT p.output_artifact_id FROM source_preparation_checkpoint p " +
+            "INNER JOIN generation_attempt a ON a.attempt_id = p.attempt_id " +
             "INNER JOIN generation_task t ON t.task_id = a.task_id " +
-            "WHERE b.result_artifact_id IS NOT NULL AND t.state NOT IN ('Completed', 'Deleted', 'Aborted')",
+            "WHERE p.output_artifact_id IS NOT NULL AND t.state NOT IN ('Completed', 'Deleted', 'Aborted') " +
+            "UNION SELECT p.output_artifact_id FROM source_preparation_checkpoint p " +
+            "INNER JOIN generated_text_result r ON r.attempt_id = p.attempt_id " +
+            "INNER JOIN generated_text_slot s ON s.current_result_id = r.result_id " +
+            "WHERE p.output_artifact_id IS NOT NULL AND r.target_language IS NULL " +
+            "UNION SELECT p.output_artifact_id FROM source_preparation_checkpoint p " +
+            "INNER JOIN generated_text_result r ON r.attempt_id = p.attempt_id " +
+            "INNER JOIN generation_task_snapshot s ON s.input_source_revision_id = r.source_revision_id " +
+            "INNER JOIN generation_task t ON t.task_id = s.task_id " +
+            "WHERE p.output_artifact_id IS NOT NULL AND r.target_language IS NULL " +
+            "AND t.state NOT IN ('Completed', 'Deleted', 'Aborted')",
     )
     suspend fun recoverableWorkArtifactIds(): List<String>
 
@@ -390,6 +418,14 @@ interface SyncTextDao {
             "WHERE t.state IN ('Completed', 'Deleted', 'Aborted'))",
     )
     suspend fun clearTerminalTranslationArtifactReference(artifactId: String): Int
+
+    @Query(
+        "UPDATE source_preparation_checkpoint SET output_artifact_id = NULL " +
+            "WHERE output_artifact_id = :artifactId AND attempt_id IN (" +
+            "SELECT a.attempt_id FROM generation_attempt a INNER JOIN generation_task t ON t.task_id = a.task_id " +
+            "WHERE t.state IN ('Completed', 'Deleted', 'Aborted'))",
+    )
+    suspend fun clearTerminalSourcePreparationArtifactReference(artifactId: String): Int
 
     @Query(
         "UPDATE generation_task SET state = 'NeedsAttention', needs_attention = 1, waiting_for_network = 0, " +

@@ -93,6 +93,10 @@ private fun sourceRuntimeFact(
         GenerationRuntimePhase.ExtractingAudio in phases -> "正在提取音频" to workUnitDetail(completed, total)
         GenerationRuntimePhase.Splitting in phases -> "正在缩小音频分段" to workUnitDetail(completed, total)
         taskPhase == GenerationRuntimePhase.MaterializingText -> "正在准备源文字" to null
+        taskPhase == GenerationRuntimePhase.AwaitingSourcePreparation -> "等待模型整理源字幕" to null
+        taskPhase == GenerationRuntimePhase.ReceivingSourcePreparation -> "正在接收源字幕修正" to null
+        taskPhase == GenerationRuntimePhase.ValidatingSourcePreparation -> "正在校验源字幕修正" to null
+        taskPhase == GenerationRuntimePhase.PreparingSource -> "正在整理识别结果" to null
         taskPhase == GenerationRuntimePhase.Publishing -> "正在发布识别结果" to workUnitDetail(completed, total)
         taskPhase == GenerationRuntimePhase.Planning || total == 0 -> "正在规划音频" to null
         else -> "正在整理识别结果" to workUnitDetail(completed, total)
@@ -139,6 +143,7 @@ private fun GenerationStage.progressLabel(kind: GenerationTaskKind): String =
         GenerationStage.MaterializingText -> "正在准备源文字"
         GenerationStage.DecodingAudio -> "正在准备音频"
         GenerationStage.RecognizingSpeech -> "正在语音识别"
+        GenerationStage.PreparingSource -> "正在整理识别结果"
         GenerationStage.SourcePublished -> "正在整理识别结果"
         GenerationStage.Translating -> "正在翻译"
         GenerationStage.Publishing -> "正在发布同步文字"

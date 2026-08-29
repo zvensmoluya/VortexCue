@@ -70,6 +70,9 @@ class TextStorageRepository(
     suspend fun publishTranslationDelta(delta: TranslationDelta): StoredTextArtifact =
         store.publish(TextArtifactKind.TranslationDelta, TextArtifactPayload.Delta(delta))
 
+    suspend fun publishSourcePreparation(value: SourcePreparationArtifact): StoredTextArtifact =
+        store.publish(TextArtifactKind.SourcePreparation, TextArtifactPayload.Preparation(value))
+
     suspend fun registerArtifact(metadata: StoredTextArtifact) {
         val existing = dao.artifact(metadata.artifactId)
         if (existing != null) {
