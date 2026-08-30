@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -207,16 +208,40 @@ class ImportHubComposeTest {
         setHub(coordinator = LibraryCoordinatorState(hasAudioAccess = true))
 
         compose.waitUntil(5_000) { compose.onAllNodesWithText("作品").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("待添加").assertDoesNotExist()
         compose.onNodeWithText("作品").performClick()
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("2 个段落").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("第一段").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("RJ01658524").assertExists()
-        compose.onNodeWithText("正篇 · 标准版").assertExists()
+        compose.onNodeWithText("2 个段落").assertDoesNotExist()
+        compose.onNodeWithText("标准版").assertDoesNotExist()
+        compose.onNodeWithText("默认播放").assertDoesNotExist()
+        compose.onNodeWithContentDescription("修改作品名").assertDoesNotExist()
+        compose.onNodeWithText("正篇").assertExists()
         compose.onNodeWithText("添加作品").assertExists()
         compose.onNodeWithText("导入到").assertDoesNotExist()
         compose.onNodeWithText("完整分发作品").assertDoesNotExist()
         compose.onNodeWithText("添加作品").performClick()
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("已添加作品 · 2 个段落").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("已添加作品").fetchSemanticsNodes().isNotEmpty() }
         assertEquals(2, repository.works.first().single().partCount)
+        Unit
+    }
+
+    @Test
+    fun trustedRjPackageOnlyOffersTitleEditingForCodeFallback(): Unit = runBlocking {
+        repository.applySuccessfulScan(
+            descriptor = systemDescriptor(),
+            media =
+                listOf(
+                    audio("01.wav", "第一段", folder = "Download/RJ07654321/WAV", mimeType = "audio/wav"),
+                ),
+            textCandidates = emptyList(),
+        )
+        setHub(coordinator = LibraryCoordinatorState(hasAudioAccess = true))
+
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("RJ07654321").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("RJ07654321").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("添加作品").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("修改作品名").assertExists()
         Unit
     }
 

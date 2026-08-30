@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -14,6 +15,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,7 +63,7 @@ class MainSurfaceComposeTest {
         }
 
         listOf("歌单", "播放列表", "配置", "设置").forEach {
-            compose.onNodeWithText(it).assertExists()
+            compose.onNodeWithText(it).assertExists().assertHeightIsEqualTo(80.dp)
         }
         compose.onNodeWithContentDescription("添加内容", useUnmergedTree = true).assertExists()
         compose.onNodeWithText("播放列表").performClick()

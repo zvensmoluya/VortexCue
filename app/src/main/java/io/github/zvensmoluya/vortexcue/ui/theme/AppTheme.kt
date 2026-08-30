@@ -17,6 +17,7 @@ internal val AppAccent = Color(0xFFA39EAF)
 internal val AppPrimaryText = Color(0xFFEEF0F4)
 internal val AppSecondaryText = Color(0xFFA39EAF)
 internal val AppMutedText = Color(0xFF6F6A79)
+internal val AppNavigationMuted = Color(0xFF817B8B)
 internal val AppBoneLogo = Color(0xFFE8E0D0)
 internal val AppError = Color(0xFFFF9B9B)
 

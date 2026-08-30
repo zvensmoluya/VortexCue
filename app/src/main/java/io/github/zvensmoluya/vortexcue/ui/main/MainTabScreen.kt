@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -18,17 +19,22 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,6 +44,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.QueueMusic
 import androidx.compose.material.icons.outlined.Add
@@ -69,8 +76,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -130,6 +135,7 @@ import io.github.zvensmoluya.vortexcue.ui.theme.AppBoneLogo
 import io.github.zvensmoluya.vortexcue.ui.theme.AppError
 import io.github.zvensmoluya.vortexcue.ui.theme.AppHairline
 import io.github.zvensmoluya.vortexcue.ui.theme.AppMutedText
+import io.github.zvensmoluya.vortexcue.ui.theme.AppNavigationMuted
 import io.github.zvensmoluya.vortexcue.ui.theme.AppPrimaryText
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSecondaryText
 import io.github.zvensmoluya.vortexcue.ui.theme.AppSurfaceRaised
@@ -994,7 +1000,7 @@ internal fun MiniPlayer(
             .heightIn(min = 68.dp)
             .background(
                 Brush.verticalGradient(
-                    listOf(Color(0xFF191620), Color(0xFF0E0D12)),
+                    listOf(Color(0xFF131119), Color(0xFF09080D)),
                 ),
             )
             .clickable(
@@ -1010,7 +1016,7 @@ internal fun MiniPlayer(
                 .height(5.dp)
                 .background(
                     Brush.verticalGradient(
-                        listOf(AppAccent.copy(alpha = if (isPlaying) 0.14f else 0.07f), Color.Transparent),
+                        listOf(AppAccent.copy(alpha = if (isPlaying) 0.12f else 0.05f), Color.Transparent),
                     ),
                 ),
         )
@@ -1021,7 +1027,7 @@ internal fun MiniPlayer(
                 .height(1.dp)
                 .background(
                     Brush.horizontalGradient(
-                        listOf(Color.Transparent, AppAccent.copy(alpha = if (isPlaying) 0.72f else 0.32f), Color.Transparent),
+                        listOf(Color.Transparent, AppAccent.copy(alpha = if (isPlaying) 0.62f else 0.28f), Color.Transparent),
                     ),
                 ),
         )
@@ -1096,7 +1102,7 @@ private fun MiniPlayerStateMark(
                 when {
                     isPlaying -> 7f + normalizedWave * 13f
                     isBuffering -> listOf(6f, 12f, 6f)[index]
-                    else -> 4f
+                    else -> listOf(6f, 12f, 8f)[index]
                 }
             Box(
                 modifier = Modifier
@@ -1308,63 +1314,135 @@ internal fun MainNavigationBar(
 ) {
     NavigationBar(modifier = modifier, containerColor = AppBackground) {
         MainTab.entries.take(2).forEach { tab ->
-            NavigationBarItem(
+            MainTabNavigationItem(
+                tab = tab,
                 selected = selectedTab == tab,
                 onClick = { onTabChanged(tab) },
-                icon = { Icon(tab.icon(), contentDescription = tab.label()) },
-                label = { Text(tab.label()) },
-                colors = navigationColors(),
             )
         }
-        NavigationBarItem(
-            selected = false,
-            onClick = onOpenImport,
-            icon = {
-                Icon(
-                    painter = painterResource(R.drawable.ic_launcher_monochrome),
-                    contentDescription = "添加内容",
-                    tint = AppBoneLogo,
-                    modifier = Modifier.size(30.dp),
-                )
-            },
-            label = { Text("添加") },
-            colors = navigationColors(),
-        )
+        CentralImportNavigationItem(onClick = onOpenImport)
         MainTab.entries.drop(2).forEach { tab ->
-            val selected = selectedTab == tab
-            NavigationBarItem(
-                selected = selected,
+            MainTabNavigationItem(
+                tab = tab,
+                selected = selectedTab == tab,
                 onClick = { onTabChanged(tab) },
-                icon = {
-                    if (tab == MainTab.Config) {
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .background(
-                                    if (selected) AppSurfaceSelected else Color.Transparent,
-                                    RoundedCornerShape(10.dp),
-                                ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(tab.icon(), contentDescription = tab.label())
-                        }
-                    } else {
-                        Icon(tab.icon(), contentDescription = tab.label())
-                    }
-                },
-                label = { Text(tab.label()) },
-                colors = if (tab == MainTab.Config) navigationColors(indicatorColor = Color.Transparent) else navigationColors(),
             )
         }
     }
 }
 
 @Composable
-private fun navigationColors(indicatorColor: Color = AppSurfaceSelected) =
-    NavigationBarItemDefaults.colors(
-        selectedIconColor = AppPrimaryText,
-        selectedTextColor = AppPrimaryText,
-        indicatorColor = indicatorColor,
-        unselectedIconColor = AppMutedText,
-        unselectedTextColor = AppMutedText,
+private fun RowScope.MainTabNavigationItem(
+    tab: MainTab,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val indicatorColor by animateColorAsState(
+        targetValue =
+            when {
+                pressed && selected -> NavigationSelectedPressedSurface
+                pressed -> NavigationPressedSurface
+                selected -> AppSurfaceSelected
+                else -> Color.Transparent
+            },
+        animationSpec = tween(120),
+        label = "navigationIndicatorColor",
     )
+    val contentColor by animateColorAsState(
+        targetValue = if (selected || pressed) AppPrimaryText else AppNavigationMuted,
+        animationSpec = tween(100),
+        label = "navigationContentColor",
+    )
+
+    Column(
+        modifier = Modifier
+            .weight(1f)
+            .height(80.dp)
+            .semantics(mergeDescendants = true) { }
+            .selectable(
+                selected = selected,
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Tab,
+                onClick = onClick,
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 44.dp, height = 32.dp)
+                .background(indicatorColor, RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = tab.icon(),
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(25.dp),
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            tab.label(),
+            color = contentColor,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun RowScope.CentralImportNavigationItem(onClick: () -> Unit) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val contentColor by animateColorAsState(
+        targetValue = if (pressed) AppPrimaryText else AppBoneLogo,
+        animationSpec = tween(100),
+        label = "importContentColor",
+    )
+
+    Column(
+        modifier = Modifier
+            .weight(1f)
+            .height(80.dp)
+            .semantics(mergeDescendants = true) { contentDescription = "添加内容" }
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClickLabel = "添加内容",
+                role = Role.Button,
+                onClick = onClick,
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            modifier = Modifier.size(width = 44.dp, height = 32.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_launcher_monochrome),
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier
+                    .requiredSize(63.dp)
+                    .offset(y = (-2).dp),
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "添加",
+            color = contentColor.copy(alpha = if (pressed) 1f else 0.88f),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+        )
+    }
+}
+
+private val NavigationPressedSurface = Color(0xFF211E29)
+private val NavigationSelectedPressedSurface = Color(0xFF35313F)
