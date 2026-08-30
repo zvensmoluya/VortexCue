@@ -113,7 +113,10 @@ sealed interface SyncTextAction {
 
     data object CloseGeneration : SyncTextAction
 
-    data class SubmitSelectedInput(val input: GenerationInput) : SyncTextAction
+    data class SubmitSelectedInput(
+        val input: GenerationInput,
+        val sourceLanguage: String?,
+    ) : SyncTextAction
 
     data object ClearMessage : SyncTextAction
 
@@ -271,6 +274,7 @@ class SyncTextUiController(
                     allowAsrFallback = false,
                     output = overlay.value.generationOutput,
                     activationTrackId = overlay.value.generationActivationTrackId,
+                    sourceLanguage = action.sourceLanguage,
                 )
             }
             SyncTextAction.ClearMessage -> overlay.update { it.copy(message = null) }
@@ -350,7 +354,6 @@ class SyncTextUiController(
                     }
                 inspectAudio(
                     content = action.content,
-                    config = config,
                     output = output,
                     activationTrackId = action.content.activeText.primaryTrackId,
                     audioOnly = true,
@@ -617,7 +620,6 @@ class SyncTextUiController(
             GenerationLaunchPlan.InspectAudio ->
                 inspectAudio(
                     content = content,
-                    config = config,
                     output = GenerationOutput.SourceOnly,
                     activationTrackId = null,
                     audioOnly = false,
@@ -627,7 +629,6 @@ class SyncTextUiController(
 
     private fun inspectAudio(
         content: ContentDetails,
-        config: SyncTextConfig,
         output: GenerationOutput,
         activationTrackId: String?,
         audioOnly: Boolean,
@@ -663,27 +664,17 @@ class SyncTextUiController(
                         reason = "trackCount=${tracks.size}",
                     )
                     if (overlay.value.generationContent?.contentId != content.contentId) return@onSuccess
-                    when (tracks.size) {
-                        0 ->
-                            overlay.update {
-                                it.copy(
-                                    inspectingAudioTracks = false,
-                                    audioInspectionError = "媒体中没有可用于识别的音轨",
-                                )
-                            }
-                        1 ->
-                            submitGeneration(
-                                content,
-                                GenerationInput.AudioTrack(tracks.single().selectionId),
-                                config,
-                                allowAsrFallback = false,
-                                output = output,
-                                activationTrackId = activationTrackId,
+                    if (tracks.isEmpty()) {
+                        overlay.update {
+                            it.copy(
+                                inspectingAudioTracks = false,
+                                audioInspectionError = "媒体中没有可用于识别的音轨",
                             )
-                        else ->
-                            overlay.update {
-                                it.copy(audioTracks = tracks, inspectingAudioTracks = false)
-                            }
+                        }
+                    } else {
+                        overlay.update {
+                            it.copy(audioTracks = tracks, inspectingAudioTracks = false)
+                        }
                     }
                 }.onFailure { error ->
                     if (error is CancellationException) throw error
@@ -717,6 +708,7 @@ class SyncTextUiController(
         allowAsrFallback: Boolean,
         output: GenerationOutput,
         activationTrackId: String?,
+        sourceLanguage: String? = null,
     ) {
         diagnostics.recordAsync(
             SyncTextDiagnosticEventType.UiAction,
@@ -749,6 +741,7 @@ class SyncTextUiController(
                         allowAsrFallback = allowAsrFallback,
                         mediaLocatorId = content.activeMediaLocatorId,
                         activationTrackId = activationTrackId,
+                        sourceLanguage = sourceLanguage.takeIf { ownedInput is GenerationInput.AudioTrack },
                     ),
                 )
             }.onSuccess { task ->

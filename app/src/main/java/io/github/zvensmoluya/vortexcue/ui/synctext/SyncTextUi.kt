@@ -42,6 +42,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.shadow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -1656,6 +1658,20 @@ private data class InputChoice(
     val input: GenerationInput,
 )
 
+private data class AsrSourceLanguageChoice(
+    val tag: String?,
+    val label: String,
+    val detail: String,
+)
+
+private val asrSourceLanguageChoices =
+    listOf(
+        AsrSourceLanguageChoice(null, "自动检测", "由识别模型判断音频语言"),
+        AsrSourceLanguageChoice("ja", "日语", "明确提示模型按日语识别"),
+        AsrSourceLanguageChoice("en", "英语", "明确提示模型按英语识别"),
+        AsrSourceLanguageChoice("zh-CN", "简体中文", "识别结果会在整理前确定性转换为简体中文"),
+    )
+
 @Composable
 private fun GenerationInputDialog(
     content: ContentDetails,
@@ -1670,6 +1686,7 @@ private fun GenerationInputDialog(
     var selectedInput by remember(content.contentId, choices) {
         mutableStateOf(choices.singleOrNull()?.input)
     }
+    var sourceLanguage by rememberSaveable(content.contentId) { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = { if (!state.busy) onDismiss() },
@@ -1704,7 +1721,10 @@ private fun GenerationInputDialog(
                 state.audioInspectionError?.let { Text(it, color = AppError, fontSize = 12.sp) }
                 if (!state.inspectingAudioTracks) {
                     LazyColumn(
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
+                        modifier =
+                            Modifier.fillMaxWidth().heightIn(
+                                max = if (selectedInput is GenerationInput.AudioTrack) 260.dp else 360.dp,
+                            ),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         items(choices, key = { it.label + it.input.toString() }) { choice ->
@@ -1716,13 +1736,29 @@ private fun GenerationInputDialog(
                             )
                         }
                     }
+                    if (selectedInput is GenerationInput.AudioTrack) {
+                        AsrSourceLanguagePicker(
+                            value = sourceLanguage,
+                            enabled = !state.busy,
+                            onValueChange = { sourceLanguage = it },
+                        )
+                    }
                 }
             }
         },
         confirmButton = {
             TextButton(
                 enabled = !state.busy && !state.inspectingAudioTracks && selectedInput != null,
-                onClick = { onAction(SyncTextAction.SubmitSelectedInput(requireNotNull(selectedInput))) },
+                onClick = {
+                    onAction(
+                        SyncTextAction.SubmitSelectedInput(
+                            input = requireNotNull(selectedInput),
+                            sourceLanguage = sourceLanguage.takeIf {
+                                selectedInput is GenerationInput.AudioTrack
+                            },
+                        ),
+                    )
+                },
             ) { Text("开始生成", color = AppAccent) }
         },
         dismissButton = {
@@ -1732,6 +1768,45 @@ private fun GenerationInputDialog(
         },
         containerColor = AppSurfaceRaised,
     )
+}
+
+@Composable
+private fun AsrSourceLanguagePicker(
+    value: String?,
+    enabled: Boolean,
+    onValueChange: (String?) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected =
+        asrSourceLanguageChoices.firstOrNull { it.tag == value }
+            ?: asrSourceLanguageChoices.first()
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text("识别语言", color = AppPrimaryText, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Box(modifier = Modifier.fillMaxWidth()) {
+            TextButton(
+                enabled = enabled,
+                onClick = { expanded = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(selected.label, color = if (enabled) AppAccent else AppMutedText)
+                    Text("▾", color = AppSecondaryText)
+                }
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                asrSourceLanguageChoices.forEach { choice ->
+                    DropdownMenuItem(
+                        text = { Text(choice.label) },
+                        onClick = {
+                            onValueChange(choice.tag)
+                            expanded = false
+                        },
+                    )
+                }
+            }
+        }
+        Text(selected.detail, color = AppMutedText, fontSize = 10.sp)
+    }
 }
 
 @Composable

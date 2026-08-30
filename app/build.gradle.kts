@@ -76,6 +76,7 @@ dependencies {
     implementation(libs.media3.extractor)
     implementation(libs.work.runtime)
     implementation(libs.okhttp)
+    implementation(libs.opencc4j)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.room3.runtime)
     implementation(libs.room3.paging)

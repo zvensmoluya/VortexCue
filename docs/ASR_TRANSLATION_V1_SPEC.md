@@ -85,7 +85,7 @@ API key 由 Android Keystore 中的 AES-GCM 主密钥加密，密文位于 `noBa
 
 ## 4. 语言与翻译 policy
 
-语言统一使用规范化 BCP-47。源语言默认自动检测并允许覆盖；目标语言允许搜索语义下的常用选择和自定义 tag。`zh` 显式归一为 `zh-CN`，`zh-Hant` 等 tag 不套用简中风格。
+语言统一使用规范化 BCP-47。ASR 源语言是冻结到任务 snapshot 的单次运行属性，默认自动检测，并允许明确选择日语、英语或简体中文；目标语言允许搜索语义下的常用选择和自定义 tag。`zh` 显式归一为 `zh-CN`，`zh-Hant` 等 tag 不套用简中风格。明确选择简体中文的 ASR 结果在 Source Preparation 前执行本地确定性繁转简，自动检测不隐式选择中文脚本。
 
 内置 policy 固定为：
 

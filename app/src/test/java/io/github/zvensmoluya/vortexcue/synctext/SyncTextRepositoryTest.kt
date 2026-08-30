@@ -941,6 +941,42 @@ class SyncTextTaskRunnerRecoveryTest {
     }
 
     @Test
+    fun `explicit simplified Chinese is frozen sent to asr and normalized before publication`() = runBlocking {
+        insertAudioContent(durationMs = 100_000L)
+        repository.saveCredential("asr-zh-cn", "ASR", CredentialPurpose.Asr, "secret")
+        val scheme =
+            repository.createScheme(
+                name = "ASR simplified Chinese",
+                asrProfile = AsrProfile.OpenRouterWhisperV1,
+                asrCredentialId = "asr-zh-cn",
+                isDefault = true,
+            )
+        val task =
+            repository.submit(
+                GenerationRequest(
+                    contentId = RunnerContentId,
+                    input = GenerationInput.AudioTrack("audio:0"),
+                    output = GenerationOutput.SourceOnly,
+                    schemeId = scheme.schemeId,
+                    sourceLanguage = "zh-CN",
+                ),
+            )
+        val engine = TraditionalChineseAsrEngine()
+
+        assertTrue(runner(engine).runUntilIdle())
+
+        val taskEntity = requireNotNull(database.syncTextDao().task(task.taskId))
+        val snapshot = requireNotNull(database.syncTextDao().taskSnapshot(task.taskId))
+        val final = requireNotNull(repository.currentSourceResult(RunnerContentId))
+        val published = revisionReader.read(final.sourceRevisionId)
+        assertEquals(GenerationTaskState.Completed.name, taskEntity.state)
+        assertEquals("zh-CN", snapshot.sourceLanguage)
+        assertEquals("zh-CN", engine.requestedSourceLanguage)
+        assertEquals("zh-CN", final.sourceLanguage)
+        assertEquals(listOf("生命不息，奋斗不止"), published.cues.map { it.text })
+    }
+
+    @Test
     fun `corrupt asr checkpoint is a task local storage failure`() = runBlocking {
         insertAudioContent(durationMs = 700_000L)
         repository.saveCredential("asr-corrupt", "ASR", CredentialPurpose.Asr, "secret")
@@ -1367,6 +1403,25 @@ private class EventAsrEngine : AsrEngine {
             responseBytes = 1L,
             requestId = "event-asr",
         )
+}
+
+private class TraditionalChineseAsrEngine : AsrEngine {
+    var requestedSourceLanguage: String? = null
+        private set
+
+    override suspend fun transcribe(request: AsrRequest): AsrWindowResult {
+        requestedSourceLanguage = request.sourceLanguage
+        return AsrWindowResult(
+            segments = listOf(AsrTimestampedToken(100L, 1_000L, "生命不息，奮鬥不止")),
+            detectedLanguage = "zh-Hant",
+            usage = UsageRecord(totalTokens = 1L),
+            rawResponse = byteArrayOf(1),
+            httpStatus = 200,
+            requestBytes = 1L,
+            responseBytes = 1L,
+            requestId = "traditional-chinese-asr",
+        )
+    }
 }
 
 private class TemporaryPcmSpool : PcmSpool {

@@ -358,12 +358,13 @@ class SyncTextTaskRunner(
                 if (!snapshot.allowAsrFallback || !error.safeToFallback) throw error
                 prepareAsrSource(
                     task,
+                    snapshot,
                     attempt,
                     performAsr(task, snapshot.copy(sourceTrackId = null, embeddedTrackId = null), attempt),
                 )
             }
         } else {
-            prepareAsrSource(task, attempt, performAsr(task, snapshot, attempt))
+            prepareAsrSource(task, snapshot, attempt, performAsr(task, snapshot, attempt))
         }
     }
 
@@ -393,6 +394,7 @@ class SyncTextTaskRunner(
 
     private suspend fun prepareAsrSource(
         task: GenerationTaskEntity,
+        snapshot: GenerationTaskSnapshotEntity,
         attempt: GenerationAttemptEntity,
         source: SourceWork,
     ): SourceWork {
@@ -401,7 +403,8 @@ class SyncTextTaskRunner(
         runtimeStatus.updateTask(task.taskId, GenerationRuntimePhase.PreparingSource)
         val policy = sourcePreparationPolicies.resolve()
         verifySourcePreparationPolicySnapshot(attempt, policy)
-        val normalizedSource = CanonicalTextNormalizer.normalizeGenerated(source.cues).toSubtitleCues()
+        val scriptNormalized = AsrSourceTextNormalizer.normalize(source.cues, snapshot.sourceLanguage)
+        val normalizedSource = CanonicalTextNormalizer.normalizeGenerated(scriptNormalized).toSubtitleCues()
         val inputTimeline = CanonicalTextNormalizer.normalizeGenerated(normalizedSource)
         val inputHash = canonicalContentHash(inputTimeline)
         val existing = dao.sourcePreparation(attempt.attemptId)
@@ -692,13 +695,15 @@ class SyncTextTaskRunner(
                             if (prefixCues.isNotEmpty()) {
                                 val normalizedPrefix =
                                     CanonicalTextNormalizer.normalizeGenerated(prefixCues).toSubtitleCues()
+                                val presentationPrefix =
+                                    AsrSourceTextNormalizer.normalize(normalizedPrefix, snapshot.sourceLanguage)
                                 val language = resolveAsrLanguage(snapshot, prefixWork)
                                 repository.publishResult(
                                     taskId = task.taskId,
                                     sourceLanguage = language,
                                     targetLanguage = null,
                                     presentationMode = TextPresentationMode.TargetOnly,
-                                    sourceCues = normalizedPrefix,
+                                    sourceCues = presentationPrefix,
                                     targetCues = null,
                                     usage = prefixWork.map(WindowTranscript::usage).sumRealUsage(),
                                     sourceModel = AsrProfile.fromStoredValue(attempt.asrProfile).modelId,
