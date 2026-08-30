@@ -177,8 +177,6 @@ internal fun PlayerScreen(
     onCalibrationCompleted: () -> Unit,
     onGestureHintSeen: () -> Unit,
     onSetSleepTimer: (Long) -> Unit,
-    onStopAfterCurrent: () -> Unit,
-    onStopAfterQueue: () -> Unit,
     onCancelSleepTimer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -354,15 +352,6 @@ internal fun PlayerScreen(
             state = sleepTimer,
             onSetDuration = {
                 onSetSleepTimer(it)
-                timerVisible = false
-            },
-            onEndOfItem = {
-                onStopAfterCurrent()
-                timerVisible = false
-            },
-            showEndOfQueue = playback.queue.size > 1,
-            onEndOfQueue = {
-                onStopAfterQueue()
                 timerVisible = false
             },
             onCancelTimer = {
@@ -2117,18 +2106,49 @@ private fun PlayerOptions(
         TextButton(onClick = { player.setPlaybackSpeed(nextPlaybackSpeed(playback.speed)) }) {
             Text(formatSpeed(playback.speed), color = AppSecondaryText)
         }
-        IconButton(onClick = onShowTimer) {
-            Icon(
-                Icons.Outlined.Timer,
-                contentDescription = "睡眠定时：${sleepTimerLabel(sleepTimer)}",
-                tint = if (sleepTimer.isActive) AppAccent else AppMutedText,
-            )
-        }
+        SleepTimerButton(state = sleepTimer, onClick = onShowTimer)
         IconButton(onClick = onShowQueue) {
             Icon(
                 Icons.AutoMirrored.Outlined.QueueMusic,
                 contentDescription = "播放列表，共 ${playback.queue.size} 项",
                 tint = AppMutedText,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SleepTimerButton(
+    state: SleepTimerState,
+    onClick: () -> Unit,
+) {
+    val remainingFraction = sleepTimerRemainingFraction(state)
+    Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+        if (state.isActive) {
+            Canvas(modifier = Modifier.size(42.dp)) {
+                val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+                drawArc(
+                    color = AppAccent.copy(alpha = 0.16f),
+                    startAngle = -90f,
+                    sweepAngle = 360f,
+                    useCenter = false,
+                    style = stroke,
+                )
+                drawArc(
+                    color = AppAccent,
+                    startAngle = -90f,
+                    sweepAngle = 360f * remainingFraction,
+                    useCenter = false,
+                    style = stroke,
+                )
+            }
+        }
+        IconButton(onClick = onClick, modifier = Modifier.fillMaxSize()) {
+            Icon(
+                Icons.Outlined.Timer,
+                contentDescription = "睡眠定时：${sleepTimerLabel(state)}",
+                tint = if (state.isActive) AppAccent else AppMutedText,
+                modifier = Modifier.size(22.dp),
             )
         }
     }
@@ -2199,12 +2219,6 @@ private fun QueueDialog(
     )
 }
 
-private enum class SleepTimerCondition {
-    Duration,
-    EndOfItem,
-    EndOfQueue,
-}
-
 private const val MaxSleepTimerHours = 23
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -2212,9 +2226,6 @@ private const val MaxSleepTimerHours = 23
 internal fun SleepTimerSheet(
     state: SleepTimerState,
     onSetDuration: (Long) -> Unit,
-    onEndOfItem: () -> Unit,
-    showEndOfQueue: Boolean,
-    onEndOfQueue: () -> Unit,
     onCancelTimer: () -> Unit,
     isGlow: Boolean,
     onDismiss: () -> Unit,
@@ -2229,20 +2240,11 @@ internal fun SleepTimerSheet(
     val minuteState = rememberLazyListState(initialFirstVisibleItemIndex = configuredMinutePart)
     val selectedHours by remember { derivedStateOf { hourState.firstVisibleItemIndex } }
     val selectedMinutes by remember { derivedStateOf { minuteState.firstVisibleItemIndex } }
-    var condition by rememberSaveable {
-        mutableStateOf(sleepTimerCondition(state.mode, showEndOfQueue))
-    }
     val durationMs = sleepTimerDurationMs(selectedHours, selectedMinutes)
 
     LaunchedEffect(state.configuredDurationMs) {
         if (!hourState.isScrollInProgress) hourState.scrollToItem(configuredHours)
         if (!minuteState.isScrollInProgress) minuteState.scrollToItem(configuredMinutePart)
-    }
-    LaunchedEffect(state.mode, showEndOfQueue) {
-        if (state.isActive) condition = sleepTimerCondition(state.mode, showEndOfQueue)
-        if (!showEndOfQueue && condition == SleepTimerCondition.EndOfQueue) {
-            condition = SleepTimerCondition.Duration
-        }
     }
     val containerColor = if (isGlow) Color.Black else AppSurfaceRaised
     ModalBottomSheet(
@@ -2268,31 +2270,42 @@ internal fun SleepTimerSheet(
                     .padding(start = 24.dp, end = 24.dp, bottom = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "睡眠定时",
-                    color = AppPrimaryText,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                if (state.isActive) {
-                    Text("已开启", color = AppAccent, fontSize = 13.sp)
-                }
-            }
-
-            Text("停止方式", color = AppSecondaryText, fontSize = 13.sp)
-
-            SleepTimerConditionRow(
-                label = "经过一段时间",
-                selected = condition == SleepTimerCondition.Duration,
-                onClick = { condition = SleepTimerCondition.Duration },
+            Text(
+                "睡眠定时",
+                color = AppPrimaryText,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold,
             )
 
-            AnimatedVisibility(visible = condition == SleepTimerCondition.Duration) {
+            if (state.isActive) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("还剩", color = AppSecondaryText, fontSize = 13.sp)
+                    Text(
+                        formatSleepTimerRemaining(state.remainingMs),
+                        color = AppPrimaryText,
+                        fontSize = 32.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onCancelTimer,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    border = BorderStroke(1.dp, AppHairline),
+                    colors =
+                        ButtonDefaults.outlinedButtonColors(
+                            containerColor = Color.Transparent,
+                            contentColor = AppSecondaryText,
+                        ),
+                ) {
+                    Text("关闭定时")
+                }
+            } else {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
@@ -2326,56 +2339,24 @@ internal fun SleepTimerSheet(
                         )
                     }
                 }
-            }
 
-            HorizontalDivider(color = AppHairline)
-
-            SleepTimerConditionRow(
-                label = "当前内容结束",
-                selected = condition == SleepTimerCondition.EndOfItem,
-                onClick = { condition = SleepTimerCondition.EndOfItem },
-            )
-            if (showEndOfQueue) {
-                SleepTimerConditionRow(
-                    label = "播放列表结束",
-                    selected = condition == SleepTimerCondition.EndOfQueue,
-                    onClick = { condition = SleepTimerCondition.EndOfQueue },
-                )
-            }
-
-            Button(
-                onClick = {
-                    when (condition) {
-                        SleepTimerCondition.Duration -> onSetDuration(durationMs)
-                        SleepTimerCondition.EndOfItem -> onEndOfItem()
-                        SleepTimerCondition.EndOfQueue -> onEndOfQueue()
-                    }
-                },
-                enabled = condition != SleepTimerCondition.Duration || durationMs > 0L,
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 48.dp)
-                        .semantics {
-                            contentDescription = if (state.isActive) "重新计时" else "开始定时"
-                        },
-                colors =
-                    ButtonDefaults.buttonColors(
-                        containerColor = AppAccent,
-                        contentColor = Color.Black,
-                        disabledContainerColor = AppHairline,
-                        disabledContentColor = AppMutedText,
-                    ),
-            ) {
-                Text(if (state.isActive) "重新计时" else "开始定时")
-            }
-
-            if (state.isActive) {
-                TextButton(
-                    onClick = onCancelTimer,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                Button(
+                    onClick = { onSetDuration(durationMs) },
+                    enabled = durationMs > 0L,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .semantics { contentDescription = "开始定时" },
+                    colors =
+                        ButtonDefaults.buttonColors(
+                            containerColor = AppAccent,
+                            contentColor = Color.Black,
+                            disabledContainerColor = AppHairline,
+                            disabledContentColor = AppMutedText,
+                        ),
                 ) {
-                    Text("关闭定时", color = AppSecondaryText)
+                    Text("开始定时")
                 }
             }
         }
@@ -2427,48 +2408,6 @@ private fun DurationWheel(
         }
     }
 }
-
-@Composable
-private fun SleepTimerConditionRow(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(onClick = onClick)
-                .heightIn(min = 52.dp)
-                .padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        RadioButton(
-            selected = selected,
-            onClick = null,
-            colors =
-                RadioButtonDefaults.colors(
-                    selectedColor = AppAccent,
-                    unselectedColor = AppMutedText,
-                ),
-        )
-        Text(label, color = AppPrimaryText, fontSize = 15.sp)
-    }
-}
-
-private fun sleepTimerCondition(
-    mode: SleepTimerMode,
-    showEndOfQueue: Boolean,
-): SleepTimerCondition =
-    when (mode) {
-        SleepTimerMode.EndOfItem -> SleepTimerCondition.EndOfItem
-        SleepTimerMode.EndOfTonight ->
-            if (showEndOfQueue) SleepTimerCondition.EndOfQueue else SleepTimerCondition.Duration
-        SleepTimerMode.None,
-        SleepTimerMode.Duration,
-        -> SleepTimerCondition.Duration
-    }
 
 internal fun sleepTimerDurationMs(hours: Int, minutes: Int): Long =
     (hours.coerceIn(0, MaxSleepTimerHours) * 60L + minutes.coerceIn(0, 59)) * 60_000L
@@ -2631,8 +2570,30 @@ private fun repeatModeLabel(mode: Int): String =
         else -> "不循环"
     }
 
+internal fun formatSleepTimerRemaining(remainingMs: Long): String {
+    if (remainingMs <= 0L) return "即将停止"
+    if (remainingMs < 60_000L) return "不到 1 分钟"
+    val totalMinutes = (remainingMs + 59_999L) / 60_000L
+    val hours = totalMinutes / 60L
+    val minutes = totalMinutes % 60L
+    return when {
+        hours == 0L -> "$minutes 分钟"
+        minutes == 0L -> "$hours 小时"
+        else -> "$hours 小时 $minutes 分钟"
+    }
+}
+
+internal fun sleepTimerRemainingFraction(state: SleepTimerState): Float =
+    if (!state.isActive || state.configuredDurationMs <= 0L) {
+        0f
+    } else {
+        (state.remainingMs.toDouble() / state.configuredDurationMs.toDouble())
+            .toFloat()
+            .coerceIn(0f, 1f)
+    }
+
 private fun sleepTimerLabel(state: SleepTimerState): String =
-    if (state.isActive) "已开启" else "未开启"
+    if (state.isActive) "还剩 ${formatSleepTimerRemaining(state.remainingMs)}" else "未开启"
 
 internal fun shouldDisplayTimedText(
     playbackState: Int,

@@ -69,8 +69,6 @@ import io.github.zvensmoluya.vortexcue.playback.cancelSleepTimer
 import io.github.zvensmoluya.vortexcue.playback.rememberEmbeddedTextRuntimeState
 import io.github.zvensmoluya.vortexcue.playback.rememberSleepTimerState
 import io.github.zvensmoluya.vortexcue.playback.setSleepTimer
-import io.github.zvensmoluya.vortexcue.playback.stopAfterCurrentItem
-import io.github.zvensmoluya.vortexcue.playback.stopAfterTonight
 import io.github.zvensmoluya.vortexcue.subtitle.SubtitleTimeline
 import io.github.zvensmoluya.vortexcue.text.TextImportCoordinator
 import io.github.zvensmoluya.vortexcue.text.TimelineRevisionReader
@@ -957,14 +955,6 @@ internal fun VortexCueApp(
                     },
                     onSetSleepTimer = {
                         player.setSleepTimer(it)
-                        sleepTimerRevision += 1
-                    },
-                    onStopAfterCurrent = {
-                        player.stopAfterCurrentItem()
-                        sleepTimerRevision += 1
-                    },
-                    onStopAfterQueue = {
-                        player.stopAfterTonight()
                         sleepTimerRevision += 1
                     },
                     onCancelSleepTimer = {

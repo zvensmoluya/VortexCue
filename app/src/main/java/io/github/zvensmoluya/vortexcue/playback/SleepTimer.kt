@@ -16,41 +16,27 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 
-enum class SleepTimerMode {
-    None,
-    Duration,
-    EndOfItem,
-    EndOfTonight,
-}
-
 data class SleepTimerState(
-    val mode: SleepTimerMode = SleepTimerMode.None,
+    val isActive: Boolean = false,
     val remainingMs: Long = 0L,
     val configuredDurationMs: Long = DefaultSleepTimerDurationMs,
     val didFinish: Boolean = false,
-) {
-    val isActive: Boolean
-        get() = mode != SleepTimerMode.None
-}
+)
 
 internal object SleepTimerCommands {
     const val ActionGet = "io.github.zvensmoluya.vortexcue.SLEEP_TIMER_GET"
     const val ActionSetDuration = "io.github.zvensmoluya.vortexcue.SLEEP_TIMER_SET_DURATION"
-    const val ActionEndOfItem = "io.github.zvensmoluya.vortexcue.SLEEP_TIMER_END_OF_ITEM"
-    const val ActionEndOfTonight = "io.github.zvensmoluya.vortexcue.SLEEP_TIMER_END_OF_TONIGHT"
     const val ActionCancel = "io.github.zvensmoluya.vortexcue.SLEEP_TIMER_CANCEL"
     const val DurationMs = "duration_ms"
-    const val Mode = "mode"
+    const val IsActive = "is_active"
     const val RemainingMs = "remaining_ms"
     const val ConfiguredDurationMs = "configured_duration_ms"
     const val DidFinish = "did_finish"
 
     val Get = SessionCommand(ActionGet, Bundle.EMPTY)
     val SetDuration = SessionCommand(ActionSetDuration, Bundle.EMPTY)
-    val EndOfItem = SessionCommand(ActionEndOfItem, Bundle.EMPTY)
-    val EndOfTonight = SessionCommand(ActionEndOfTonight, Bundle.EMPTY)
     val Cancel = SessionCommand(ActionCancel, Bundle.EMPTY)
-    val All = listOf(Get, SetDuration, EndOfItem, EndOfTonight, Cancel)
+    val All = listOf(Get, SetDuration, Cancel)
 }
 
 @Composable
@@ -76,14 +62,6 @@ internal fun MediaController.setSleepTimer(durationMs: Long) {
     )
 }
 
-internal fun MediaController.stopAfterCurrentItem() {
-    sendCustomCommand(SleepTimerCommands.EndOfItem, Bundle.EMPTY)
-}
-
-internal fun MediaController.stopAfterTonight() {
-    sendCustomCommand(SleepTimerCommands.EndOfTonight, Bundle.EMPTY)
-}
-
 internal fun MediaController.cancelSleepTimer() {
     sendCustomCommand(SleepTimerCommands.Cancel, Bundle.EMPTY)
 }
@@ -95,12 +73,8 @@ private suspend fun querySleepTimer(controller: MediaController): SleepTimerStat
                 .sendCustomCommand(SleepTimerCommands.Get, Bundle.EMPTY)
                 .await()
         }.getOrNull() ?: return SleepTimerState()
-    val mode =
-        runCatching {
-            SleepTimerMode.valueOf(result.extras.getString(SleepTimerCommands.Mode).orEmpty())
-        }.getOrDefault(SleepTimerMode.None)
     return SleepTimerState(
-        mode = mode,
+        isActive = result.extras.getBoolean(SleepTimerCommands.IsActive),
         remainingMs = result.extras.getLong(SleepTimerCommands.RemainingMs).coerceAtLeast(0L),
         configuredDurationMs =
             result.extras
