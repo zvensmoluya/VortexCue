@@ -2,9 +2,11 @@ package io.github.zvensmoluya.vortexcue.app
 
 import android.Manifest
 import android.content.ContentResolver
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -57,6 +59,7 @@ import io.github.zvensmoluya.vortexcue.library.LibraryCoordinator
 import io.github.zvensmoluya.vortexcue.library.LibraryCoordinatorState
 import io.github.zvensmoluya.vortexcue.library.LibrarySourceIds
 import io.github.zvensmoluya.vortexcue.library.TimedTextTrackCandidate
+import io.github.zvensmoluya.vortexcue.library.hasFullStorageAccess
 import io.github.zvensmoluya.vortexcue.library.mediaLibraryPermissionsToRequest
 import io.github.zvensmoluya.vortexcue.playback.PlaybackGateway
 import io.github.zvensmoluya.vortexcue.playback.PlayerMaterializationState
@@ -555,6 +558,31 @@ internal fun VortexCueApp(
         rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             coordinator.scanDevice()
         }
+    val fullStorageAccessLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            coordinator.scanAll()
+        }
+
+    fun requestFullStorageAccess() {
+        if (context.hasFullStorageAccess()) {
+            coordinator.scanAll()
+            return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            coordinator.noteAudioPermissionRequest()
+            val permissions = mediaLibraryPermissionsToRequest(context)
+            if (permissions.isEmpty()) coordinator.scanAll() else libraryPermissionLauncher.launch(permissions)
+            return
+        }
+        val appPermissionIntent =
+            Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                data = Uri.parse("package:${context.packageName}")
+            }
+        runCatching { fullStorageAccessLauncher.launch(appPermissionIntent) }
+            .onFailure {
+                fullStorageAccessLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            }
+    }
 
     LaunchedEffect(externalMediaRequest?.id) {
         val request = externalMediaRequest ?: return@LaunchedEffect
@@ -652,10 +680,7 @@ internal fun VortexCueApp(
                     mediaPicker.launch(arrayOf("audio/*", "video/*"))
                 },
                 onRequestLibraryAccess = {
-                    coordinator.noteAudioPermissionRequest()
-                    val permissions = mediaLibraryPermissionsToRequest(context)
-                    if (permissions.isEmpty()) coordinator.scanDevice()
-                    else libraryPermissionLauncher.launch(permissions)
+                    requestFullStorageAccess()
                 },
                 onRefreshLibrary = { coordinator.scanAll() },
                 onRefreshSource = coordinator::refreshSource,

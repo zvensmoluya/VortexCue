@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Environment
 import androidx.core.content.ContextCompat
 
 internal fun requiredAudioLibraryPermission(sdkInt: Int): String =
@@ -21,3 +22,10 @@ fun mediaLibraryPermissionsToRequest(context: Context): Array<String> =
 fun Context.hasAudioLibraryPermission(): Boolean =
     ContextCompat.checkSelfPermission(this, requiredAudioLibraryPermission()) ==
         PackageManager.PERMISSION_GRANTED
+
+fun Context.hasFullStorageAccess(): Boolean =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        Environment.isExternalStorageManager()
+    } else {
+        hasAudioLibraryPermission()
+    }

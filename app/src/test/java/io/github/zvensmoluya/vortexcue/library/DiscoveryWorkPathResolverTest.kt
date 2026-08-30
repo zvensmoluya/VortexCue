@@ -40,6 +40,20 @@ class DiscoveryWorkPathResolverTest {
     }
 
     @Test
+    fun codeOnlyReleaseFolderUsesMeaningfulChildAsTitle() {
+        assertPath(
+            expectedStablePath = "download/rj01520881",
+            expectedDisplayName = "妈妈小鬼",
+            folder = "Download/RJ01520881/妈妈小鬼/01本篇/wav",
+        )
+        assertPath(
+            expectedStablePath = "download/rj01520881",
+            expectedDisplayName = "RJ01520881",
+            folder = "Download/RJ01520881/01本篇/wav",
+        )
+    }
+
+    @Test
     fun contentDirectoriesAndFormatWordsInsideTitlesStayPhysical() {
         assertPath("downloads/work/本編", "本編", "Downloads/Work/本編")
         assertPath("downloads/my mp3 story", "My MP3 Story", "Downloads/My MP3 Story")

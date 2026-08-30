@@ -40,10 +40,15 @@ internal fun resolveSidecarTrackMetadata(
     mediaDisplayName: String,
     subtitleDisplayName: String,
 ): SidecarTrackMetadata? {
-    val mediaStem = mediaDisplayName.substringBeforeLast('.').lowercase()
+    val mediaName = mediaDisplayName.lowercase()
+    val mediaStem = mediaName.substringBeforeLast('.')
     val subtitleStem = subtitleDisplayName.substringBeforeLast('.').lowercase()
     val suffix =
         when {
+            // Tools commonly append the subtitle extension to the complete media filename,
+            // for example `episode.wav.vtt`. This is still an exact sidecar match: `wav`
+            // describes the media container and must not be treated as a language label.
+            subtitleStem == mediaName -> null
             subtitleStem == mediaStem -> null
             subtitleStem.startsWith("$mediaStem.") -> subtitleStem.removePrefix("$mediaStem.")
             else -> return null

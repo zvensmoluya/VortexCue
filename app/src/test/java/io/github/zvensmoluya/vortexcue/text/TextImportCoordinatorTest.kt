@@ -195,6 +195,56 @@ class TextImportCoordinatorTest {
     }
 
     @Test
+    fun `full storage candidate reads its persisted file uri without a SAF root`() = runBlocking {
+        val fileUri = "file:///storage/emulated/0/Download/Work/item.wav.vtt"
+        database.contentDao().upsertSource(
+            SourceEntity(
+                sourceId = "system-library",
+                kind = "SystemLibrary",
+                rootUri = null,
+                displayName = "设备媒体库",
+                createdAtMs = 1L,
+            ),
+        )
+        database.textStorageDao().upsertCandidates(
+            listOf(
+                DiscoveredTextCandidateEntity(
+                    candidateId = "full-storage-candidate",
+                    contentId = ContentId,
+                    sourceId = "system-library",
+                    documentId = fileUri,
+                    displayName = "item.wav.vtt",
+                    mimeType = "text/vtt",
+                    format = "vtt",
+                    language = null,
+                    label = null,
+                    rolesMask = 0,
+                    matchBasis = "ExactStem",
+                    sourceGeneration = 1L,
+                ),
+            ),
+        )
+        var readUri: Uri? = null
+        val coordinator =
+            TextImportCoordinator(
+                context = RuntimeEnvironment.getApplication(),
+                database = database,
+                storage = storage,
+                nowMs = { clock++ },
+                newId = { "import-${nextId++}" },
+                inputReader = { uri ->
+                    readUri = uri
+                    "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n".encodeToByteArray()
+                },
+            )
+
+        coordinator.importCandidate("full-storage-candidate", TextTrackSlot.Primary, TextSelectionMode.Automatic)
+
+        assertEquals(fileUri, readUri.toString())
+        assertNull(database.textStorageDao().candidate("full-storage-candidate"))
+    }
+
+    @Test
     fun `only collected content materializes candidates without choosing a slot`() = runBlocking {
         seedCandidate(matchBasis = "ExactStem")
         val coordinator = coordinator()

@@ -137,6 +137,27 @@ class ContentCatalogTest {
     }
 
     @Test
+    fun `subtitle extension appended to full media name is an exact match`() {
+        val wav =
+            resolveSidecarTrackMetadata(
+                mediaDisplayName = "01_episode.wav",
+                subtitleDisplayName = "01_episode.wav.vtt",
+            )
+        val mp3 =
+            resolveSidecarTrackMetadata(
+                mediaDisplayName = "01_episode.mp3",
+                subtitleDisplayName = "01_episode.mp3.srt",
+            )
+
+        assertEquals(TimedTextMatchBasis.ExactStem, wav?.matchBasis)
+        assertNull(wav?.language)
+        assertNull(wav?.label)
+        assertEquals(TimedTextMatchBasis.ExactStem, mp3?.matchBasis)
+        assertNull(mp3?.language)
+        assertNull(mp3?.label)
+    }
+
+    @Test
     fun `multiple language candidates are all retained without implicit selection`() {
         val chinese = track("zh", TimedTextMatchBasis.LanguageSuffix, language = "zh")
         val english = track("en", TimedTextMatchBasis.LanguageSuffix, language = "en")

@@ -7,6 +7,7 @@ import io.github.zvensmoluya.vortexcue.synctext.GeneratedResultCompleteness
 
 enum class MediaOrigin {
     MediaStore,
+    FileSystem,
     OpenDocument,
     DocumentTree,
 }

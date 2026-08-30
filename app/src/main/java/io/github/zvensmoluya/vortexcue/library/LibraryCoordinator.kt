@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 data class LibraryCoordinatorState(
     val scanningSourceIds: Set<String> = emptySet(),
     val hasAudioAccess: Boolean = false,
+    val hasFullStorageAccess: Boolean = false,
     val hasRequestedAudioAccess: Boolean = false,
     val errorMessage: String? = null,
 ) {
@@ -62,6 +63,7 @@ class LibraryCoordinator(
     fun scanAll() {
         state = permissionState().copy(errorMessage = null)
         startSystemScan()
+        if (state.hasFullStorageAccess) return
         scope.launch {
             repository.sourceDescriptors()
                 .filter { it.kind == LibrarySourceKind.Folder && it.rootUri != null }
@@ -155,12 +157,19 @@ class LibraryCoordinator(
     private fun startSystemScan() {
         val permissions = permissionState()
         state = permissions.copy(errorMessage = state.errorMessage)
-        if (!permissions.hasAudioAccess) {
+        if (!permissions.hasAudioAccess && !permissions.hasFullStorageAccess) {
             cancelScan(LibrarySourceIds.SystemLibrary)
             return
         }
         launchScan(LibrarySourceIds.SystemLibrary) {
-            val audio = runCatchingSuspend { scanner.scanSystemAudio() }
+            val scan =
+                runCatchingSuspend {
+                    if (permissions.hasFullStorageAccess) {
+                        scanner.scanFullStorage()
+                    } else {
+                        LibraryScanBatch(media = scanner.scanSystemAudio())
+                    }
+                }
             val descriptor =
                 SourceScanDescriptor(
                     sourceId = LibrarySourceIds.SystemLibrary,
@@ -168,15 +177,29 @@ class LibraryCoordinator(
                     rootUri = null,
                     displayName = "设备媒体库",
                 )
-            val authoritative = isAuthoritativeSystemAudioScan(permissions.hasAudioAccess, audio.isSuccess)
+            val authoritative =
+                if (permissions.hasFullStorageAccess) {
+                    scan.isSuccess
+                } else {
+                    isAuthoritativeSystemAudioScan(permissions.hasAudioAccess, scan.isSuccess)
+                }
             when {
                 authoritative -> {
-                    repository.applySuccessfulScan(descriptor, audio.getOrDefault(emptyList()), emptyList())
+                    val batch = scan.getOrDefault(LibraryScanBatch())
+                    val candidateIds =
+                        repository.applySuccessfulScan(
+                            descriptor,
+                            batch.media,
+                            batch.subtitleSuggestions,
+                        )
+                    val materializedContentIds = textImportCoordinator.materializeCandidates(candidateIds)
+                    repository.reconcileAutomaticTextSelection(materializedContentIds)
                 }
-                audio.getOrDefault(emptyList()).isNotEmpty() ->
+                scan.getOrDefault(LibraryScanBatch()).media.isNotEmpty() ->
                     repository.applyIncrementalScan(
                         descriptor = descriptor,
-                        media = audio.getOrDefault(emptyList()),
+                        media = scan.getOrDefault(LibraryScanBatch()).media,
+                        textCandidates = scan.getOrDefault(LibraryScanBatch()).subtitleSuggestions,
                         warning = "系统音频索引不完整，已保留上次结果",
                     )
                 else ->
@@ -250,6 +273,7 @@ class LibraryCoordinator(
     private fun permissionState(): LibraryCoordinatorState =
         LibraryCoordinatorState(
             hasAudioAccess = appContext.hasAudioLibraryPermission(),
+            hasFullStorageAccess = appContext.hasFullStorageAccess(),
             hasRequestedAudioAccess = permissionPreferences.getBoolean(AudioPermissionRequestedKey, false),
         )
 

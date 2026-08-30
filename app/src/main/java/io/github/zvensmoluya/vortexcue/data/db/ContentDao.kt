@@ -40,6 +40,12 @@ interface ContentDao {
     @Query("SELECT * FROM media_locator WHERE locator_id = :locatorId")
     suspend fun locator(locatorId: String): MediaLocatorEntity?
 
+    @Query(
+        "SELECT * FROM media_locator WHERE display_name = :displayName COLLATE NOCASE " +
+            "AND kind = 'Audio' AND availability = 'Available' ORDER BY locator_id",
+    )
+    suspend fun availableAudioLocatorsByDisplayName(displayName: String): List<MediaLocatorEntity>
+
     @Query("SELECT * FROM active_media_locator WHERE content_id = :contentId")
     suspend fun activeLocator(contentId: String): ActiveMediaLocatorEntity?
 

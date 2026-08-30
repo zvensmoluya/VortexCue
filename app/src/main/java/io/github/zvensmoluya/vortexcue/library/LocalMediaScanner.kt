@@ -6,6 +6,7 @@ import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import io.github.zvensmoluya.vortexcue.core.model.*
@@ -103,6 +104,56 @@ class LocalMediaScanner(private val context: Context) {
             } ?: emptyList()
         }
 
+    suspend fun scanFullStorage(
+        root: File = Environment.getExternalStorageDirectory(),
+    ): LibraryScanBatch =
+        withContext(Dispatchers.IO) {
+            val indexedAudio = runCatching { scanSystemAudio() }.getOrDefault(emptyList())
+            val fileIndex = indexSharedStorage(root)
+            val indexedPaths =
+                indexedAudio.mapNotNullTo(hashSetOf()) { media ->
+                    media.storageRelativePath()
+                }
+            val media = indexedAudio.toMutableList()
+
+            fileIndex.audio.forEach { entry ->
+                currentCoroutineContext().ensureActive()
+                if (entry.relativePathKey in indexedPaths) return@forEach
+                val source =
+                    MediaSourceRef(
+                        uri = Uri.fromFile(entry.file),
+                        displayName = entry.file.name,
+                        mimeType = audioMimeType(entry.file.extension),
+                        folder = entry.relativeFolder,
+                        dateAddedSeconds = entry.file.lastModified().coerceAtLeast(0L) / 1_000L,
+                        origin = MediaOrigin.FileSystem,
+                        sourceId = LibrarySourceIds.SystemLibrary,
+                        kind = MediaKind.Audio,
+                        sizeBytes = entry.file.length().coerceAtLeast(0L),
+                    )
+                media += inspect(source)
+                indexedPaths += entry.relativePathKey
+            }
+
+            val subtitles =
+                fileIndex.subtitles.map { entry ->
+                    DiscoveredSubtitle(
+                        folder = entry.relativeFolder,
+                        source =
+                            SubtitleSourceRef(
+                                uri = Uri.fromFile(entry.file),
+                                displayName = entry.file.name,
+                                mimeType = subtitleMimeType(entry.file.extension),
+                            ),
+                    )
+                }
+            val suggestions = matchSubtitles(media, subtitles)
+            LibraryScanBatch(
+                media = media.distinctBy { it.uri.toString() },
+                subtitleSuggestions = suggestions,
+            )
+        }
+
     suspend fun scanFolder(folder: LibraryFolderRef): LibraryScanBatch =
         withContext(Dispatchers.IO) {
             val rootId = DocumentsContract.getTreeDocumentId(folder.uri)
@@ -179,7 +230,11 @@ class LocalMediaScanner(private val context: Context) {
         withContext(Dispatchers.IO) {
             val retriever = MediaMetadataRetriever()
             try {
-                retriever.setDataSource(context, source.uri)
+                if (source.origin == MediaOrigin.FileSystem) {
+                    retriever.setDataSource(requireNotNull(source.uri.path))
+                } else {
+                    retriever.setDataSource(context, source.uri)
+                }
                 source.copy(
                     title =
                         retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
@@ -278,18 +333,105 @@ class LocalMediaScanner(private val context: Context) {
         private fun matchSubtitles(
             media: List<MediaSourceRef>,
             subtitles: List<DiscoveredSubtitle>,
-        ): List<TimedTextTrackCandidate> =
-            media.flatMap { item ->
-                subtitles
+        ): List<TimedTextTrackCandidate> {
+            val subtitlesByFolder = subtitles.groupBy { it.folder.folderKey() }
+            return media.flatMap { item ->
+                subtitlesByFolder[item.folder.folderKey()]
+                    .orEmpty()
                     .asSequence()
-                    .filter { it.folder == item.folder }
                     .mapNotNull { subtitle ->
                         buildSidecarTextTrackCandidate(item, subtitle.source)
                     }
                     .toList()
             }
+        }
+
+        private fun audioMimeType(extension: String): String? =
+            when (extension.lowercase()) {
+                "aac" -> "audio/aac"
+                "flac" -> "audio/flac"
+                "m4a" -> "audio/mp4"
+                "mka" -> "audio/x-matroska"
+                "mp3" -> "audio/mpeg"
+                "oga", "ogg" -> "audio/ogg"
+                "opus" -> "audio/opus"
+                "wav" -> "audio/wav"
+                else -> null
+            }
+
+        private fun subtitleMimeType(extension: String): String? =
+            when (extension.lowercase()) {
+                "srt" -> "application/x-subrip"
+                "vtt" -> "text/vtt"
+                "ass", "ssa" -> "text/x-ssa"
+                "lrc" -> "text/plain"
+                else -> null
+            }
+
+        internal suspend fun indexSharedStorage(root: File): SharedStorageFileIndex {
+            val pending = ArrayDeque<File>()
+            val audio = mutableListOf<SharedStorageFile>()
+            val subtitles = mutableListOf<SharedStorageFile>()
+            if (root.isDirectory) pending += root
+
+            while (pending.isNotEmpty()) {
+                currentCoroutineContext().ensureActive()
+                val directory = pending.removeFirst()
+                val children = runCatching { directory.listFiles()?.toList() }.getOrNull().orEmpty()
+                children.forEach { file ->
+                    currentCoroutineContext().ensureActive()
+                    if (file.isDirectory) {
+                        if (!file.isRestrictedAndroidDirectory(root)) pending += file
+                    } else {
+                        val extension = file.extension.lowercase()
+                        val entry = file.toSharedStorageFile(root) ?: return@forEach
+                        when (extension) {
+                            in AudioExtensions -> audio += entry
+                            in SubtitleExtensions -> subtitles += entry
+                        }
+                    }
+                }
+            }
+            return SharedStorageFileIndex(audio = audio, subtitles = subtitles)
+        }
     }
 }
+
+internal data class SharedStorageFileIndex(
+    val audio: List<SharedStorageFile>,
+    val subtitles: List<SharedStorageFile>,
+)
+
+internal data class SharedStorageFile(
+    val file: File,
+    val relativeFolder: String,
+) {
+    val relativePathKey: String =
+        "$relativeFolder/${file.name}"
+            .replace('\\', '/')
+            .trim('/')
+            .lowercase()
+}
+
+private fun File.toSharedStorageFile(root: File): SharedStorageFile? {
+    val relative = relativeToOrNull(root)?.invariantSeparatorsPath ?: return null
+    val folder = relative.substringBeforeLast('/', missingDelimiterValue = "")
+    return SharedStorageFile(file = this, relativeFolder = folder)
+}
+
+private fun File.isRestrictedAndroidDirectory(root: File): Boolean {
+    val relative = relativeToOrNull(root)?.invariantSeparatorsPath?.trim('/') ?: return true
+    return relative.equals("Android/data", ignoreCase = true) ||
+        relative.equals("Android/obb", ignoreCase = true)
+}
+
+private fun MediaSourceRef.storageRelativePath(): String? {
+    val parent = folder?.replace('\\', '/')?.trim('/') ?: return null
+    return "$parent/$displayName".lowercase()
+}
+
+private fun String?.folderKey(): String =
+    this.orEmpty().replace('\\', '/').trim('/').lowercase()
 
 private fun android.database.Cursor.stringOrNull(index: Int): String? =
     if (index < 0 || isNull(index)) null else getString(index)

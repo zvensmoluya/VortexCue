@@ -10,11 +10,13 @@ import io.github.zvensmoluya.vortexcue.core.model.MediaKind
 import io.github.zvensmoluya.vortexcue.core.model.MediaOrigin
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
 import io.github.zvensmoluya.vortexcue.core.model.SubtitleSourceRef
+import io.github.zvensmoluya.vortexcue.core.model.TimedTextMatchBasis
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase
 import io.github.zvensmoluya.vortexcue.data.db.VortexDatabase_Impl
 import io.github.zvensmoluya.vortexcue.library.LibrarySourceIds
 import io.github.zvensmoluya.vortexcue.library.LibrarySourceKind
 import io.github.zvensmoluya.vortexcue.library.buildSidecarTextTrackCandidate
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -190,6 +192,72 @@ class DiscoveryRepositoryTest {
     }
 
     @Test
+    fun trustedRjPackageUsesChildFolderAsTitleAndRejectsFormatAlbum() = runBlocking {
+        val descriptor = systemDescriptor()
+        repository.applySuccessfulScan(
+            descriptor,
+            listOf(
+                audio(
+                    "01.wav",
+                    "01_清扫一下下w",
+                    "Download/RJ01520881/妈妈小鬼/01本篇/wav",
+                    558_025L,
+                    10L,
+                    album = "wav",
+                ),
+                audio(
+                    "01.mp3",
+                    "01_清扫一下下w",
+                    "Download/RJ01520881/妈妈小鬼/01本篇/mp3",
+                    558_054L,
+                    10L,
+                    album = "mp3",
+                ),
+                audio(
+                    "02.wav",
+                    "02_宠宠你吧♡w",
+                    "Download/RJ01520881/妈妈小鬼/01本篇/wav",
+                    1_945_194L,
+                    10L,
+                    album = "wav",
+                ),
+                audio(
+                    "02.mp3",
+                    "02_宠宠你吧♡w",
+                    "Download/RJ01520881/妈妈小鬼/01本篇/mp3",
+                    1_945_234L,
+                    10L,
+                    album = "mp3",
+                ),
+            ),
+            emptyList(),
+        )
+
+        val group = repository.discoveryGroups.first().single()
+        assertEquals("妈妈小鬼", group.displayName)
+        assertEquals("RJ01520881", group.releaseCode)
+        val preview = requireNotNull(repository.observeWorkImportPreview(group.sourceKey).first())
+        assertEquals("妈妈小鬼", preview.title)
+        assertEquals(2, preview.logicalPartCount)
+
+        repository.applySuccessfulScan(
+            descriptor,
+            listOf(
+                audio(
+                    "fallback.wav",
+                    "Fallback",
+                    "Download/RJ09999999/wav",
+                    120_000L,
+                    20L,
+                    album = "wav",
+                ),
+            ),
+            emptyList(),
+        )
+        assertEquals("RJ09999999", repository.discoveryGroups.first().single().displayName)
+    }
+
+    @Test
     fun persistentScansRejectNewVideoAndDoNotInvalidateExplicitVideo() = runBlocking {
         val descriptor = systemDescriptor()
         val discoveredVideo = video("auto.mp4", MediaOrigin.MediaStore)
@@ -249,6 +317,117 @@ class DiscoveryRepositoryTest {
         assertEquals(materializationIds.single(), repository.details(contentId)?.discoveredTextCandidates?.single()?.candidateId)
     }
 
+    @Test
+    fun folderSidecarsAlsoTargetEquivalentCollectedSystemAudio() = runBlocking {
+        val systemWav =
+            audio(
+                "01_episode.wav",
+                "01_episode",
+                "Download/RJ01520881/Work/01Main/wav",
+                120_000L,
+                10L,
+            ).copy(sizeBytes = 12_345L, mimeType = "audio/wav")
+        val systemMp3 =
+            audio(
+                "01_episode.mp3",
+                "01_episode",
+                "Download/RJ01520881/Work/01Main/mp3",
+                120_000L,
+                10L,
+            ).copy(sizeBytes = 5_678L)
+        repository.applySuccessfulScan(systemDescriptor(), listOf(systemWav, systemMp3), emptyList())
+        val systemGroup = repository.discoveryGroups.first().single()
+        val work = repository.importWork(systemGroup.sourceKey)
+        val systemContentId = work.contentIds.single()
+
+        val root = Uri.parse("content://com.android.externalstorage.documents/tree/primary%3ADownload%2FRJ01520881")
+        val folderDescriptor =
+            SourceScanDescriptor(
+                sourceId = "folder:rj",
+                kind = LibrarySourceKind.Folder,
+                rootUri = root.toString(),
+                displayName = "RJ01520881",
+            )
+        val folderWav =
+            systemWav.copy(
+                uri =
+                    DocumentsContract.buildDocumentUriUsingTree(
+                        root,
+                        "primary:Download/RJ01520881/Work/01Main/wav/01_episode.wav",
+                    ),
+                folder = "RJ01520881/Work/01Main/wav",
+                origin = MediaOrigin.DocumentTree,
+                sourceId = folderDescriptor.sourceId,
+            )
+        val folderMp3 =
+            systemMp3.copy(
+                uri =
+                    DocumentsContract.buildDocumentUriUsingTree(
+                        root,
+                        "primary:Download/RJ01520881/Work/01Main/mp3/01_episode.mp3",
+                    ),
+                folder = "RJ01520881/Work/01Main/mp3",
+                origin = MediaOrigin.DocumentTree,
+                sourceId = folderDescriptor.sourceId,
+            )
+        fun candidate(media: MediaSourceRef): io.github.zvensmoluya.vortexcue.library.TimedTextTrackCandidate {
+            val subtitle =
+                SubtitleSourceRef(
+                    uri =
+                        DocumentsContract.buildDocumentUriUsingTree(
+                            root,
+                            DocumentsContract.getDocumentId(media.uri) + ".vtt",
+                        ),
+                    displayName = media.displayName + ".vtt",
+                    mimeType = "text/vtt",
+                )
+            return requireNotNull(buildSidecarTextTrackCandidate(media, subtitle))
+        }
+
+        val candidateIds =
+            repository.applySuccessfulScan(
+                folderDescriptor,
+                listOf(folderWav, folderMp3),
+                listOf(candidate(folderWav), candidate(folderMp3)),
+            )
+
+        assertEquals(1, candidateIds.size)
+        val systemCandidates = repository.details(systemContentId)?.discoveredTextCandidates.orEmpty()
+        assertEquals(listOf("01_episode.wav.vtt"), systemCandidates.map { it.displayName })
+        assertEquals(TimedTextMatchBasis.ExactStem, systemCandidates.single().matchBasis)
+    }
+
+    @Test
+    fun fullStorageSidecarsPersistOnTheSystemSource() = runBlocking {
+        val media =
+            audio(
+                "episode.wav",
+                "Episode",
+                "Download/RJ12345678/Work/wav",
+                120_000L,
+                10L,
+            ).copy(sizeBytes = 12_345L, mimeType = "audio/wav")
+        val subtitle =
+            SubtitleSourceRef(
+                uri = Uri.fromFile(File("/storage/emulated/0/Download/RJ12345678/Work/wav/episode.wav.vtt")),
+                displayName = "episode.wav.vtt",
+                mimeType = "text/vtt",
+            )
+
+        repository.applySuccessfulScan(
+            systemDescriptor(),
+            listOf(media),
+            listOf(requireNotNull(buildSidecarTextTrackCandidate(media, subtitle))),
+        )
+
+        val contentId = repository.discoveryGroups.first().single().let { group ->
+            repository.observeDiscoveryItems(group.sourceKey).first().single().contentId
+        }
+        val candidate = repository.details(contentId)?.discoveredTextCandidates?.single()
+        assertEquals("episode.wav.vtt", candidate?.displayName)
+        assertEquals(TimedTextMatchBasis.ExactStem, candidate?.matchBasis)
+    }
+
     private fun systemDescriptor() =
         SourceScanDescriptor(
             sourceId = LibrarySourceIds.SystemLibrary,
@@ -264,12 +443,14 @@ class DiscoveryRepositoryTest {
         durationMs: Long,
         added: Long,
         sourceId: String = LibrarySourceIds.SystemLibrary,
+        album: String? = null,
     ) =
         MediaSourceRef(
             uri = Uri.parse("content://media/audio/$name"),
             displayName = name,
             mimeType = "audio/mpeg",
             title = title,
+            album = album,
             durationMs = durationMs,
             folder = folder,
             dateAddedSeconds = added,

@@ -1,5 +1,6 @@
 package io.github.zvensmoluya.vortexcue.data
 
+import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
@@ -35,6 +36,7 @@ import io.github.zvensmoluya.vortexcue.data.db.CurrentDraftEntity
 import io.github.zvensmoluya.vortexcue.data.db.DiscoveredTextCandidateEntity
 import io.github.zvensmoluya.vortexcue.data.db.ImportSourcePreferenceEntity
 import io.github.zvensmoluya.vortexcue.data.db.ImportSourceTargetEntity
+import io.github.zvensmoluya.vortexcue.data.db.MediaLocatorEntity
 import io.github.zvensmoluya.vortexcue.data.db.RecentEntryEntity
 import io.github.zvensmoluya.vortexcue.data.db.PlaylistEntity
 import io.github.zvensmoluya.vortexcue.data.db.PlaylistItemEntity
@@ -51,9 +53,11 @@ import io.github.zvensmoluya.vortexcue.library.LibrarySourceKind
 import io.github.zvensmoluya.vortexcue.library.TextTrackCatalogState
 import io.github.zvensmoluya.vortexcue.library.TimedTextTrackCandidate
 import io.github.zvensmoluya.vortexcue.library.defaultDiscoverySelection
+import io.github.zvensmoluya.vortexcue.library.isTechnicalAudioContainerName
 import io.github.zvensmoluya.vortexcue.library.mergeTracks
 import io.github.zvensmoluya.vortexcue.library.resolveDiscoveryWorkPath
 import io.github.zvensmoluya.vortexcue.library.analyzeDlsiteWork
+import java.io.File
 import java.security.MessageDigest
 import io.github.zvensmoluya.vortexcue.library.restoreAutomaticTrack
 import io.github.zvensmoluya.vortexcue.library.selectManualTrack
@@ -1089,11 +1093,13 @@ class ContentRepository(
                 ),
             )
             val contentByUri = mutableMapOf<String, String>()
+            val mediaByUri = mutableMapOf<String, MediaSourceRef>()
             media.asSequence()
                 .filter { it.kind == MediaKind.Audio }
                 .distinctBy { it.uri.toString() }
                 .forEach { item ->
                 val normalized = item.copy(sourceId = descriptor.sourceId)
+                mediaByUri[item.uri.toString()] = normalized
                 contentByUri[item.uri.toString()] =
                     upsertMediaInside(
                         normalized,
@@ -1104,7 +1110,21 @@ class ContentRepository(
             }
             textCandidates.groupBy { it.mediaUriValue }.forEach { (uriValue, candidates) ->
                 val contentId = contentByUri[uriValue] ?: return@forEach
-                persistDiscoveredCandidatesInside(descriptor.sourceId, generation, contentId, candidates)
+                val targetContentIds =
+                    buildList {
+                        add(contentId)
+                        mediaByUri[uriValue]?.let { scanned ->
+                            addAll(equivalentActiveContentIdsInside(scanned, contentId))
+                        }
+                    }.distinct()
+                targetContentIds.forEach { targetContentId ->
+                    persistDiscoveredCandidatesInside(
+                        descriptor.sourceId,
+                        generation,
+                        targetContentId,
+                        candidates,
+                    )
+                }
             }
         }
     }
@@ -1134,11 +1154,13 @@ class ContentRepository(
                 ),
             )
             val contentByUri = mutableMapOf<String, String>()
+            val mediaByUri = mutableMapOf<String, MediaSourceRef>()
             media.asSequence()
                 .filter { it.kind == MediaKind.Audio }
                 .distinctBy { it.uri.toString() }
                 .forEach { item ->
                 val normalized = if (item.sourceId == descriptor.sourceId) item else item.copy(sourceId = descriptor.sourceId)
+                mediaByUri[item.uri.toString()] = normalized
                 contentByUri[item.uri.toString()] =
                     upsertMediaInside(
                         normalized,
@@ -1150,10 +1172,24 @@ class ContentRepository(
             val collectedCandidateIds = mutableListOf<String>()
             textCandidates.groupBy { it.mediaUriValue }.forEach { (uriValue, candidates) ->
                 val contentId = contentByUri[uriValue] ?: return@forEach
-                val candidateIds =
-                    persistDiscoveredCandidatesInside(descriptor.sourceId, generation, contentId, candidates)
-                if (dao.disposition(contentId)?.isCollected == true) {
-                    collectedCandidateIds += candidateIds
+                val targetContentIds =
+                    buildList {
+                        add(contentId)
+                        mediaByUri[uriValue]?.let { scanned ->
+                            addAll(equivalentActiveContentIdsInside(scanned, contentId))
+                        }
+                    }.distinct()
+                targetContentIds.forEach { targetContentId ->
+                    val candidateIds =
+                        persistDiscoveredCandidatesInside(
+                            descriptor.sourceId,
+                            generation,
+                            targetContentId,
+                            candidates,
+                        )
+                    if (dao.disposition(targetContentId)?.isCollected == true) {
+                        collectedCandidateIds += candidateIds
+                    }
                 }
             }
             textStorageDao.deleteOlderCandidates(descriptor.sourceId, generation)
@@ -1174,8 +1210,10 @@ class ContentRepository(
         val entities =
             candidates.mapNotNull { candidate ->
                 val source = candidate.externalSource ?: return@mapNotNull null
-                val documentId = runCatching { DocumentsContract.getDocumentId(source.uri) }.getOrNull()
-                    ?: return@mapNotNull null
+                val documentId =
+                    runCatching { DocumentsContract.getDocumentId(source.uri) }.getOrNull()
+                        ?: source.uri.takeIf { it.scheme == "file" }?.toString()
+                        ?: return@mapNotNull null
                 val track = candidate.track
                 DiscoveredTextCandidateEntity(
                     candidateId = stableTimedTextTrackId(contentId, track.origin, "candidate:$sourceId:$documentId"),
@@ -1194,6 +1232,33 @@ class ContentRepository(
             }
         if (entities.isNotEmpty()) textStorageDao.upsertCandidates(entities)
         return entities.map(DiscoveredTextCandidateEntity::candidateId)
+    }
+
+    private suspend fun equivalentActiveContentIdsInside(
+        media: MediaSourceRef,
+        scannedContentId: String,
+    ): List<String> {
+        if (media.origin !in setOf(MediaOrigin.MediaStore, MediaOrigin.DocumentTree)) return emptyList()
+        if (media.sizeBytes <= 0L || media.durationMs <= 0L) return emptyList()
+        val parentPath = media.physicalParentPath() ?: return emptyList()
+        val counterpartOrigin =
+            when (media.origin) {
+                MediaOrigin.MediaStore -> MediaOrigin.DocumentTree
+                MediaOrigin.DocumentTree -> MediaOrigin.MediaStore
+                else -> return emptyList()
+            }
+        val result = linkedSetOf<String>()
+        dao.availableAudioLocatorsByDisplayName(media.displayName).forEach { locator ->
+            if (locator.origin != counterpartOrigin.name) return@forEach
+            if (locator.sizeBytes != media.sizeBytes) return@forEach
+            if (kotlin.math.abs(locator.durationMs - media.durationMs) > EquivalentDurationToleranceMs) return@forEach
+            if (locator.physicalParentPath() != parentPath) return@forEach
+            val contentId = resolveRedirect(locator.contentId)
+            if (contentId == scannedContentId) return@forEach
+            if (dao.activeLocator(contentId)?.locatorId != locator.locatorId) return@forEach
+            result += contentId
+        }
+        return result.toList()
     }
 
     suspend fun recordSourceScanFailure(
@@ -1644,9 +1709,40 @@ class ContentRepository(
         const val DefaultFavoritePlaylistId = "playlist:default-favorite"
         const val DefaultFavoriteName = "默认收藏"
         const val ShortAudioThresholdMs = 60_000L
+        const val EquivalentDurationToleranceMs = 1_000L
         val LowSignalAudioFolders = setOf("alarms", "notifications", "ringtones")
     }
 }
+
+private fun MediaSourceRef.physicalParentPath(): String? =
+    when (origin) {
+        MediaOrigin.DocumentTree -> documentParentPath(uri)
+        MediaOrigin.FileSystem -> uri.path?.let(::File)?.parent.normalizedStoragePath()
+        MediaOrigin.MediaStore -> folder.normalizedStoragePath()
+        else -> null
+    }
+
+private fun MediaLocatorEntity.physicalParentPath(): String? =
+    when (origin) {
+        MediaOrigin.DocumentTree.name -> documentParentPath(Uri.parse(uriValue))
+        MediaOrigin.FileSystem.name -> Uri.parse(uriValue).path?.let(::File)?.parent.normalizedStoragePath()
+        MediaOrigin.MediaStore.name -> folder.normalizedStoragePath()
+        else -> null
+    }
+
+private fun documentParentPath(uri: Uri): String? =
+    runCatching { DocumentsContract.getDocumentId(uri) }
+        .getOrNull()
+        ?.substringBeforeLast('/', missingDelimiterValue = "")
+        .normalizedStoragePath()
+
+private fun String?.normalizedStoragePath(): String? =
+    this
+        ?.substringAfter(':')
+        ?.replace('\\', '/')
+        ?.trim('/')
+        ?.lowercase(Locale.ROOT)
+        ?.takeIf(String::isNotBlank)
 
 private fun List<TextSelectionEntity>.toActiveText(
     tracks: List<io.github.zvensmoluya.vortexcue.data.db.TimedTextTrackEntity>,
@@ -1779,7 +1875,10 @@ private fun List<LocatedAudio>.workDisplayTitle(): String {
     val first = first()
     val releaseCode = first.releaseCode ?: return first.baseDisplayName
     if (!first.baseDisplayName.equals(releaseCode, ignoreCase = true)) return first.baseDisplayName
-    val commonAlbum = mapNotNull { it.summary.media.album?.trim()?.takeIf(String::isNotBlank) }.distinct()
+    val commonAlbum =
+        mapNotNull { it.summary.media.album?.trim()?.takeIf(String::isNotBlank) }
+            .filterNot(::isTechnicalAudioContainerName)
+            .distinct()
     return commonAlbum.singleOrNull() ?: releaseCode
 }
 

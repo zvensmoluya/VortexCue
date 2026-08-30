@@ -482,6 +482,7 @@ internal fun MainTabScreen(
                         onProfileChanged = onDisplayProfileChanged,
                         onCalibrate = onCalibrateGlow,
                         coordinator = coordinator,
+                        onRequestFullStorageAccess = onRequestLibraryAccess,
                         listState = settingsListState,
                     )
             }
@@ -904,6 +905,7 @@ private fun SettingsTab(
     onProfileChanged: (DisplayProfile) -> Unit,
     onCalibrate: () -> Unit,
     coordinator: LibraryCoordinatorState,
+    onRequestFullStorageAccess: () -> Unit,
     listState: LazyListState,
 ) {
     var local by remember(profile) { mutableStateOf(profile) }
@@ -958,7 +960,27 @@ private fun SettingsTab(
         }
         item {
             Text("权限", color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
-            Text(if (coordinator.hasAudioAccess) "设备音频：已授权" else "设备音频：未授权", color = AppSecondaryText)
+            Text(
+                if (coordinator.hasFullStorageAccess) {
+                    "完整本机扫描：已开启"
+                } else {
+                    "完整本机扫描：未开启"
+                },
+                color = AppSecondaryText,
+            )
+            Text(
+                "只读查找共享存储中的音频和同目录字幕，不移动、修改或删除原文件。",
+                color = AppMutedText,
+                fontSize = 12.sp,
+            )
+            if (!coordinator.hasFullStorageAccess) {
+                Button(
+                    onClick = onRequestFullStorageAccess,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) {
+                    Text("开启完整本机扫描")
+                }
+            }
         }
         item {
             Text("关于", color = AppPrimaryText, fontWeight = FontWeight.SemiBold)

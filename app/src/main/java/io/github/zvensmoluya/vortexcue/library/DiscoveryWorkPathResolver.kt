@@ -41,7 +41,7 @@ internal fun resolveDiscoveryWorkPath(folder: String?): DiscoveryWorkPath {
         }
     val locationLeaf = workParts.last()
     val releaseCode = RjCode.find(locationLeaf.normalizedToken())?.value?.trim { !it.isLetterOrDigit() }?.uppercase(Locale.ROOT)
-    val title = releaseCode?.let { inferReleaseTitle(workParts, locationLeaf, it) } ?: locationLeaf
+    val title = releaseCode?.let { inferReleaseTitle(pathParts, rjRootIndex, locationLeaf, it) } ?: locationLeaf
     return DiscoveryWorkPath(
         stablePath = workParts.joinToString("/") { it.normalizedKeyPart() },
         displayName = title,
@@ -51,18 +51,38 @@ internal fun resolveDiscoveryWorkPath(folder: String?): DiscoveryWorkPath {
     )
 }
 
-private fun inferReleaseTitle(workParts: List<String>, locationLeaf: String, releaseCode: String): String {
+private fun inferReleaseTitle(
+    pathParts: List<String>,
+    rjRootIndex: Int,
+    locationLeaf: String,
+    releaseCode: String,
+): String {
     val titleInLeaf =
         locationLeaf.replace(Regex(Regex.escape(releaseCode), RegexOption.IGNORE_CASE), "")
             .trim(ReleaseTitleSeparator)
             .takeIf(String::isNotBlank)
     if (titleInLeaf != null) return titleInLeaf
-    return workParts.dropLast(1).lastOrNull()
+
+    val titleBelowRelease =
+        pathParts.getOrNull(rjRootIndex + 1)
+            ?.takeIf { !isTechnicalAudioContainerName(it) && !RjCode.containsMatchIn(it.normalizedToken()) }
+    if (titleBelowRelease != null) return titleBelowRelease
+
+    return pathParts.getOrNull(rjRootIndex - 1)
         ?.takeIf {
-            it.normalizedToken() !in GenericContainerDirectories &&
-                !it.isTechnicalVariantDirectory()
+            !isTechnicalAudioContainerName(it)
         }
         ?: releaseCode
+}
+
+internal fun isTechnicalAudioContainerName(name: String): Boolean {
+    val normalized = name.normalizedToken()
+    val compact = normalized.replace(TechnicalSeparator, "")
+    return normalized.isBlank() ||
+        normalized in UnknownMetadataValues ||
+        normalized in GenericContainerDirectories ||
+        name.isTechnicalVariantDirectory() ||
+        ReleaseContentDirectory.matches(compact)
 }
 
 private fun inferWorkRoot(pathParts: List<String>): List<String> {
@@ -160,6 +180,10 @@ private val FormatQualityDirectory =
     Regex("(?:wav|wave|mp3|flac|m4a|aac|ogg|opus)(?:(?:16|24|32)bit)?(?:(?:44(?:1)?|48|88(?:2)?|96|192)k?hz?)?(?:版|ver|version|format|音源)?")
 private val SeVariantDirectory =
     Regex("(?:se(?:あり|有り?|付き|なし|無し?|抜き)|効果音(?:あり|有り?|付き|なし|無し?|抜き)|withse|withoutse)")
+private val ReleaseContentDirectory =
+    Regex(
+        "(?:\\d{1,3})?(?:本編|本篇|正篇|正文|本体|main|mainstory|track|tracks|chapter|chapters|chap|disc|cd|part|parts|section|特典|bonus|extra|omake|おまけ|附赠|附贈|台本|script|scripts)(?:\\d{1,3})?",
+    )
 
 private val GenericContainerDirectories =
     setOf(
@@ -173,3 +197,5 @@ private val GenericContainerDirectories =
         "同人",
         "音声",
     )
+
+private val UnknownMetadataValues = setOf("<unknown>", "unknown", "未知")

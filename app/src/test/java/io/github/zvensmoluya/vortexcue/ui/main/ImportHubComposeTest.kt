@@ -70,7 +70,7 @@ class ImportHubComposeTest {
             onRequestLibraryAccess = { permissionRequests += 1 },
         )
 
-        compose.onNodeWithText("再次允许").performClick()
+        compose.onNodeWithText("前往系统设置").performClick()
         compose.onNodeWithText("选择音频或视频文件").assertExists()
         compose.onNodeWithText("从其他位置查找音频").assertExists()
         compose.runOnIdle { assertEquals(1, permissionRequests) }

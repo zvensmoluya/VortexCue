@@ -373,28 +373,24 @@ private fun ImportSourceOverview(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            if (!coordinator.hasAudioAccess) {
+            if (!coordinator.hasFullStorageAccess) {
                 item(key = "permission") {
                     Column(
                         modifier = Modifier.fillMaxWidth().background(AppSurfaceRaised).padding(18.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Text("查找设备中的音频", color = AppPrimaryText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                        Text("开启完整本机扫描", color = AppPrimaryText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            if (coordinator.hasRequestedAudioAccess) {
-                                "没有音频访问权限。你仍可以选择文件或从其他位置查找音频。"
-                            } else {
-                                "荧荧会把可能的内容整理出来，不会移动或删除原文件。"
-                            },
+                            "一次开启后自动查找共享存储中的音频和同目录字幕，只读访问，不移动、修改或删除原文件。",
                             color = AppSecondaryText,
                         )
                         Button(onClick = onRequestLibraryAccess, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                            Text(if (coordinator.hasRequestedAudioAccess) "再次允许" else "开始查找")
+                            Text("前往系统设置")
                         }
                     }
                 }
             }
-            if (coordinator.hasAudioAccess || groups.isNotEmpty()) {
+            if (coordinator.hasFullStorageAccess || coordinator.hasAudioAccess || groups.isNotEmpty()) {
                 item(key = "discovery-title") {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {

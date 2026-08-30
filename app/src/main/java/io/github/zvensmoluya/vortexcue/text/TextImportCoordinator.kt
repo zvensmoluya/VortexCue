@@ -141,8 +141,10 @@ class TextImportCoordinator(
             }
         val candidate = requireNotNull(textDao.candidate(candidateId)) { "Discovered text candidate is unavailable" }
         val source = requireNotNull(contentDao.source(candidate.sourceId)) { "Candidate source is unavailable" }
-        val root = Uri.parse(requireNotNull(source.rootUri) { "Candidate source root is unavailable" })
-        val uri = DocumentsContract.buildDocumentUriUsingTree(root, candidate.documentId)
+        val uri =
+            source.rootUri?.let { root ->
+                DocumentsContract.buildDocumentUriUsingTree(Uri.parse(root), candidate.documentId)
+            } ?: Uri.parse(candidate.documentId)
         val timestamp = nowMs()
         val operation =
             TextImportOperationEntity(
