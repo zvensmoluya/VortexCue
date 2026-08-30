@@ -1844,14 +1844,14 @@ private fun TranslationProtocol.defaultEndpoint(): String =
 private fun AsrProfile.displayLabel(): String =
     when (this) {
         AsrProfile.OpenRouterWhisperV1 -> "Whisper large-v3"
-        AsrProfile.OpenRouterGrokV1 -> "Grok STT"
+        AsrProfile.OpenRouterQwen3Asr17BV1 -> "Qwen3 ASR 1.7B"
         AsrProfile.OpenAiWhisperV1 -> "Whisper-1"
     }
 
 private fun AsrProfile.displayModelLabel(): String =
     when (this) {
         AsrProfile.OpenRouterWhisperV1 -> "Whisper large-v3"
-        AsrProfile.OpenRouterGrokV1 -> "xAI Grok STT 1.0"
+        AsrProfile.OpenRouterQwen3Asr17BV1 -> "Qwen3 ASR 1.7B"
         AsrProfile.OpenAiWhisperV1 -> "Whisper-1"
     }
 

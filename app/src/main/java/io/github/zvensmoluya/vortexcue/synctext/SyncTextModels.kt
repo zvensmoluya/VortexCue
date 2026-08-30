@@ -36,11 +36,11 @@ enum class AsrProfile(
         experimental = false,
         timelineStrategy = AsrTimelineStrategy.Segment,
     ),
-    OpenRouterGrokV1(
+    OpenRouterQwen3Asr17BV1(
         provider = AsrProvider.OpenRouter,
-        modelId = "x-ai/grok-stt-1.0",
+        modelId = "qwen/qwen3-asr-1.7b",
         experimental = true,
-        timelineStrategy = AsrTimelineStrategy.Word,
+        timelineStrategy = AsrTimelineStrategy.Segment,
     ),
     OpenAiWhisperV1(
         provider = AsrProvider.OpenAi,
@@ -56,6 +56,8 @@ enum class AsrProfile(
                 // This short-lived profile used OpenRouter's incompatible response normalization.
                 // Fall back to the established OpenRouter model instead of reusing an unusable setup.
                 "OpenRouterGptTranscribeV1" -> OpenRouterWhisperV1
+                // Grok STT was retired after failing product audio quality checks.
+                "OpenRouterGrokV1" -> OpenRouterWhisperV1
                 // GPT Transcribe does not return the timestamped timeline required by VortexCue.
                 "OpenAiGptTranscribeV1" -> OpenAiWhisperV1
                 else -> entries.firstOrNull { it.name == value } ?: OpenRouterWhisperV1

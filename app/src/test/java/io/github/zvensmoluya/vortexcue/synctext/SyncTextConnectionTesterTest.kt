@@ -94,14 +94,14 @@ class SyncTextConnectionTesterTest {
         val tester = connectionTester(asr = asr, createProbeFile = { probeFile })
 
         tester.testAsr(
-            profile = AsrProfile.OpenRouterGrokV1,
+            profile = AsrProfile.OpenRouterQwen3Asr17BV1,
             endpoint = "https://openrouter.ai/api/v1",
             apiKey = "asr-key",
         )
 
         assertNotNull(received)
         val request = requireNotNull(received)
-        assertEquals(AsrProfile.OpenRouterGrokV1, request.profile)
+        assertEquals(AsrProfile.OpenRouterQwen3Asr17BV1, request.profile)
         assertEquals("https://openrouter.ai/api/v1", request.endpoint)
         assertEquals("asr-key", request.apiKey)
         assertEquals("en", request.sourceLanguage)

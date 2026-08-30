@@ -21,6 +21,9 @@ At least one provider key is required when the probe is enabled:
 `VORTEX_LIVE_TEST` must equal `1`. The probe is skipped otherwise, so normal unit tests never spend
 money or require network access.
 
+`VORTEX_LIVE_ASR_PROFILE` selects the production model adapter. OpenRouter currently accepts
+`OpenRouterWhisperV1` (the default) or `OpenRouterQwen3Asr17BV1`.
+
 ## Run on Windows
 
 ```powershell
