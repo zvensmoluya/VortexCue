@@ -108,19 +108,37 @@ class TextStorageMaintenance(
                     entity.gcCandidateSinceMs?.let { it <= timestamp - GcGraceMs } == true
             }
         val expiredIds = expired.mapTo(mutableSetOf(), TextArtifactEntity::artifactId)
-        database.withWriteTransaction {
+        val artifactIdsByRevisionId =
+            graph.relations.groupBy({ it.revisionId }, { it.artifactId })
+        val deletableRevisionIds =
             graph.revisions
                 .filterNot { it.revisionId in graph.reachableRevisionIds }
-                .sortedBy { if (it.sourceRevisionId != null) 0 else 1 }
-                .forEach { revision ->
-                    val revisionArtifactIds =
-                        graph.relations.filter { it.revisionId == revision.revisionId }.map { it.artifactId }
-                    if (revisionArtifactIds.isNotEmpty() && revisionArtifactIds.all(expiredIds::contains)) {
-                        textDao.deleteRevision(revision.revisionId)
-                    }
+                .filter { revision ->
+                    artifactIdsByRevisionId[revision.revisionId]
+                        ?.takeIf(List<String>::isNotEmpty)
+                        ?.all(expiredIds::contains) == true
+                }.mapTo(mutableSetOf()) { it.revisionId }
+        var retainedDependencyFound: Boolean
+        do {
+            retainedDependencyFound = false
+            graph.revisions.forEach { revision ->
+                val sourceRevisionId = revision.sourceRevisionId ?: return@forEach
+                if (revision.revisionId !in deletableRevisionIds && deletableRevisionIds.remove(sourceRevisionId)) {
+                    retainedDependencyFound = true
                 }
+            }
+        } while (retainedDependencyFound)
+        val retainedRevisionArtifactIds =
+            graph.relations
+                .filterNot { it.revisionId in deletableRevisionIds }
+                .mapTo(mutableSetOf()) { it.artifactId }
+        database.withWriteTransaction {
+            graph.revisions
+                .filter { it.revisionId in deletableRevisionIds }
+                .sortedBy { if (it.sourceRevisionId != null) 0 else 1 }
+                .forEach { revision -> textDao.deleteRevision(revision.revisionId) }
         }
-        expired.forEach { entity ->
+        expired.filterNot { it.artifactId in retainedRevisionArtifactIds }.forEach { entity ->
             val metadata = entity.toStoredOrNull()
             val deletedMetadata =
                 database.withWriteTransaction {

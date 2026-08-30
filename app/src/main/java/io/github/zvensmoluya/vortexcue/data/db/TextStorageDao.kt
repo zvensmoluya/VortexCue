@@ -21,7 +21,14 @@ interface TextStorageDao {
     @Query("UPDATE text_artifact SET gc_candidate_since_ms = :timestamp WHERE artifact_id = :artifactId")
     suspend fun markArtifactForGc(artifactId: String, timestamp: Long?): Int
 
-    @Query("DELETE FROM text_artifact WHERE artifact_id = :artifactId")
+    @Query(
+        "DELETE FROM text_artifact WHERE artifact_id = :artifactId " +
+            "AND NOT EXISTS (SELECT 1 FROM timeline_revision_artifact WHERE artifact_id = :artifactId) " +
+            "AND NOT EXISTS (SELECT 1 FROM asr_window WHERE transcript_artifact_id = :artifactId) " +
+            "AND NOT EXISTS (SELECT 1 FROM translation_batch WHERE result_artifact_id = :artifactId) " +
+            "AND NOT EXISTS (" +
+            "SELECT 1 FROM source_preparation_checkpoint WHERE output_artifact_id = :artifactId)",
+    )
     suspend fun deleteArtifact(artifactId: String): Int
 
     @Query("SELECT * FROM timeline_revision WHERE revision_id = :revisionId")

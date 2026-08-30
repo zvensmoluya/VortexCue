@@ -79,6 +79,82 @@ class TextStorageMaintenanceTest {
     }
 
     @Test
+    fun `retained revision protects an expired artifact until every artifact has aged out`() = runBlocking {
+        val contentId = "content"
+        database.contentDao().upsertContent(ContentEntity(contentId, 1L))
+        val firstTimeline = CanonicalTextNormalizer.normalizeGenerated(listOf(SubtitleCue(0L, 1_000L, "first")))
+        val firstArtifact = storage.publishTimelineArtifact(TextArtifactKind.AsrWorkUnitOutput, firstTimeline)
+        val firstRevision =
+            storage.createRevision(
+                contentId = contentId,
+                role = TimelineRole.Source,
+                completeness = TimelineCompleteness.Partial,
+                artifacts = listOf(RevisionArtifactRole.AsrWorkUnit to firstArtifact),
+                contentHash = canonicalContentHash(firstTimeline),
+                cueCount = 1,
+                coveredEndMs = 1_000L,
+            )
+        val secondTimeline = CanonicalTextNormalizer.normalizeGenerated(listOf(SubtitleCue(1_000L, 2_000L, "second")))
+        val secondArtifact = storage.publishTimelineArtifact(TextArtifactKind.AsrWorkUnitOutput, secondTimeline)
+        val combinedTimeline = TimelineAssembler.assemblePartial(listOf(firstTimeline, secondTimeline))
+        val combinedRevision =
+            storage.createRevision(
+                contentId = contentId,
+                role = TimelineRole.Source,
+                completeness = TimelineCompleteness.Partial,
+                artifacts =
+                    listOf(
+                        RevisionArtifactRole.AsrWorkUnit to firstArtifact,
+                        RevisionArtifactRole.AsrWorkUnit to secondArtifact,
+                    ),
+                contentHash = canonicalContentHash(combinedTimeline),
+                cueCount = combinedTimeline.cues.size,
+                coveredEndMs = 2_000L,
+            )
+        database.contentDao().upsertTextTrack(textTrack(firstRevision, "first"))
+
+        maintenance.recoverAuditAndCollect()
+        assertNull(database.textStorageDao().artifact(firstArtifact.artifactId)?.gcCandidateSinceMs)
+        assertEquals(clock, database.textStorageDao().artifact(secondArtifact.artifactId)?.gcCandidateSinceMs)
+
+        clock += TextStorageMaintenance.GcGraceMs / 2L
+        val currentTimeline = CanonicalTextNormalizer.normalizeGenerated(listOf(SubtitleCue(0L, 1_000L, "current")))
+        val currentArtifact = storage.publishTimelineArtifact(TextArtifactKind.FinalTimeline, currentTimeline)
+        val currentRevision =
+            storage.createRevision(
+                contentId = contentId,
+                role = TimelineRole.Source,
+                completeness = TimelineCompleteness.Final,
+                artifacts = listOf(RevisionArtifactRole.Timeline to currentArtifact),
+                contentHash = canonicalContentHash(currentTimeline),
+                cueCount = 1,
+                coveredEndMs = 1_000L,
+            )
+        database.contentDao().upsertTextTrack(textTrack(currentRevision, "current"))
+        maintenance.recoverAuditAndCollect()
+        assertEquals(clock, database.textStorageDao().artifact(firstArtifact.artifactId)?.gcCandidateSinceMs)
+
+        clock += TextStorageMaintenance.GcGraceMs / 2L
+        maintenance.recoverAuditAndCollect()
+
+        assertNotNull(database.textStorageDao().revision(combinedRevision.revisionId))
+        assertNotNull(database.textStorageDao().artifact(firstArtifact.artifactId))
+        assertNotNull(database.textStorageDao().artifact(secondArtifact.artifactId))
+        assertTrue(artifactStore.contains(secondArtifact.artifactId))
+
+        clock += TextStorageMaintenance.GcGraceMs / 2L
+        maintenance.recoverAuditAndCollect()
+
+        assertNull(database.textStorageDao().revision(firstRevision.revisionId))
+        assertNull(database.textStorageDao().revision(combinedRevision.revisionId))
+        assertNull(database.textStorageDao().artifact(firstArtifact.artifactId))
+        assertNull(database.textStorageDao().artifact(secondArtifact.artifactId))
+        assertFalse(artifactStore.contains(firstArtifact.artifactId))
+        assertFalse(artifactStore.contains(secondArtifact.artifactId))
+        assertNotNull(database.textStorageDao().revision(currentRevision.revisionId))
+    }
+
+    @Test
     fun `corrupt reachable revision marks its track missing and never collects it`() = runBlocking {
         val contentId = "content"
         database.contentDao().upsertContent(ContentEntity(contentId, 1L))
@@ -212,4 +288,26 @@ class TextStorageMaintenanceTest {
         assertNull(database.textStorageDao().revision(oldRevision.revisionId))
         assertNotNull(database.textStorageDao().revision(currentRevision.revisionId))
     }
+
+    private fun textTrack(
+        revision: StoredTimelineRevision,
+        suffix: String,
+    ) =
+        TimedTextTrackEntity(
+            trackId = "track",
+            contentId = revision.contentId,
+            origin = "Generated",
+            locatorIdentity = "revision:${revision.revisionId}",
+            revisionId = revision.revisionId,
+            embeddedTrackId = null,
+            generatedSlotId = null,
+            displayName = "$suffix.srt",
+            mimeType = "application/x-subrip",
+            format = "srt",
+            language = null,
+            label = null,
+            matchBasis = "Generated",
+            readiness = "Ready",
+            failureMessage = null,
+        )
 }
