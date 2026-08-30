@@ -1,5 +1,7 @@
 package io.github.zvensmoluya.vortexcue.ui.synctext
 
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -55,6 +57,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -122,10 +126,20 @@ import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private val ConfigControlHeight = 58.dp
 private val ConfigControlShape = RoundedCornerShape(8.dp)
+private val ConnectionActionShape = RoundedCornerShape(12.dp)
+private const val ConnectionSuccessFeedbackMillis = 900L
+
+private enum class ConnectionActionPhase {
+    Idle,
+    Testing,
+    Success,
+    Failure,
+}
 
 @Composable
 fun SyncTextUiHost(
@@ -1567,13 +1581,72 @@ private fun SheetChoiceRow(
 }
 
 @Composable
-private fun ConnectionStatusRow(
+internal fun ConnectionStatusRow(
     state: ConnectionTestUiState,
     stale: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
     val failure = state.success == false && !stale && !state.running
+    var wasRunning by remember { mutableStateOf(state.running) }
+    var showSuccessFeedback by remember { mutableStateOf(false) }
+    LaunchedEffect(state.running, state.success, stale) {
+        val justCompleted = wasRunning && !state.running
+        wasRunning = state.running
+        if (justCompleted && state.success == true && !stale) {
+            showSuccessFeedback = true
+            delay(ConnectionSuccessFeedbackMillis)
+            showSuccessFeedback = false
+        } else if (state.running || stale || state.success != true) {
+            showSuccessFeedback = false
+        }
+    }
+
+    val phase =
+        when {
+            state.running -> ConnectionActionPhase.Testing
+            showSuccessFeedback -> ConnectionActionPhase.Success
+            failure -> ConnectionActionPhase.Failure
+            else -> ConnectionActionPhase.Idle
+        }
+    val actionEnabled = enabled && phase != ConnectionActionPhase.Testing && phase != ConnectionActionPhase.Success
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed && actionEnabled) 0.96f else 1f,
+        animationSpec = tween(if (pressed) 70 else 150),
+        label = "connection-action-press",
+    )
+    val containerColor by animateColorAsState(
+        targetValue =
+            when (phase) {
+                ConnectionActionPhase.Success -> AppAccent.copy(alpha = 0.22f)
+                ConnectionActionPhase.Failure -> AppError.copy(alpha = 0.12f)
+                ConnectionActionPhase.Testing -> AppSurfaceSelected
+                ConnectionActionPhase.Idle -> AppSurfaceRaised
+            },
+        animationSpec = tween(160),
+        label = "connection-action-container",
+    )
+    val borderColor by animateColorAsState(
+        targetValue =
+            when (phase) {
+                ConnectionActionPhase.Success -> AppAccent.copy(alpha = 0.5f)
+                ConnectionActionPhase.Failure -> AppError.copy(alpha = 0.42f)
+                ConnectionActionPhase.Testing -> AppAccent.copy(alpha = 0.28f)
+                ConnectionActionPhase.Idle -> AppHairline
+            },
+        animationSpec = tween(160),
+        label = "connection-action-border",
+    )
+    val actionColor =
+        when {
+            !actionEnabled && phase == ConnectionActionPhase.Idle -> AppMutedText
+            phase == ConnectionActionPhase.Failure -> AppError
+            else -> AppPrimaryText
+        }
+    val haptics = LocalHapticFeedback.current
+
     Row(
         modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1589,21 +1662,80 @@ private fun ConnectionStatusRow(
             color = if (failure) AppError else AppPrimaryText,
             modifier = Modifier.weight(1f),
         )
-        when {
-            state.running -> CircularProgressIndicator(
-                modifier = Modifier.size(18.dp),
-                strokeWidth = 2.dp,
-                color = AppAccent,
-            )
-            else -> TextButton(enabled = enabled, onClick = onClick) {
-                Text(
-                    when {
-                        state.success == true -> "重新测试"
-                        failure -> "重试"
-                        else -> "测试连接"
+        Box(
+            modifier = Modifier
+                .width(120.dp)
+                .height(40.dp)
+                .graphicsLayer {
+                    scaleX = pressScale
+                    scaleY = pressScale
+                }
+                .background(containerColor, ConnectionActionShape)
+                .border(1.dp, borderColor, ConnectionActionShape)
+                .clickable(
+                    enabled = actionEnabled,
+                    role = Role.Button,
+                    interactionSource = interactionSource,
+                    indication = null,
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onClick()
                     },
-                    color = if (enabled) AppAccent else AppSecondaryText,
                 )
+                .testTag("connection-test-action"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Crossfade(
+                targetState = phase,
+                animationSpec = tween(140),
+                label = "connection-action-state",
+            ) { currentPhase ->
+                val currentLabel =
+                    when (currentPhase) {
+                        ConnectionActionPhase.Testing -> "正在测试"
+                        ConnectionActionPhase.Success -> "连接成功"
+                        ConnectionActionPhase.Failure -> "重试"
+                        ConnectionActionPhase.Idle ->
+                            if (state.success == true && !stale) "重新测试" else "测试连接"
+                    }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    when (currentPhase) {
+                        ConnectionActionPhase.Testing -> CircularProgressIndicator(
+                            modifier = Modifier.size(15.dp),
+                            strokeWidth = 1.8.dp,
+                            color = AppAccent,
+                        )
+                        ConnectionActionPhase.Success -> Icon(
+                            imageVector = Icons.Outlined.Check,
+                            contentDescription = null,
+                            tint = actionColor,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        ConnectionActionPhase.Failure -> Icon(
+                            imageVector = Icons.Outlined.ErrorOutline,
+                            contentDescription = null,
+                            tint = actionColor,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        ConnectionActionPhase.Idle -> Icon(
+                            imageVector = Icons.Outlined.Refresh,
+                            contentDescription = null,
+                            tint = actionColor,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        text = currentLabel,
+                        color = actionColor,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                    )
+                }
             }
         }
     }

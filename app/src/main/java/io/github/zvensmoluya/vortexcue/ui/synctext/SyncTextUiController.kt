@@ -28,6 +28,7 @@ import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocol
 import io.github.zvensmoluya.vortexcue.synctext.TranslationReasoningLevel
 import java.security.MessageDigest
 import java.util.concurrent.CancellationException
+import kotlin.time.TimeSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -40,6 +41,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+private const val ConnectionTestMinimumVisibleMillis = 500L
 
 data class SyncTextConfigDraft(
     val asrProfile: AsrProfile,
@@ -520,7 +523,9 @@ class SyncTextUiController(
         }
         scope.launch {
             runCatching {
-                repository.testTranslationConnection(protocol, endpoint, model, reasoningLevel, credentialId, apiKey)
+                withMinimumConnectionTestDuration {
+                    repository.testTranslationConnection(protocol, endpoint, model, reasoningLevel, credentialId, apiKey)
+                }
             }.onSuccess {
                 overlay.update {
                     it.copy(
@@ -559,7 +564,9 @@ class SyncTextUiController(
         }
         scope.launch {
             runCatching {
-                repository.testAsrConnection(profile, endpoint, credentialId, apiKey)
+                withMinimumConnectionTestDuration {
+                    repository.testAsrConnection(profile, endpoint, credentialId, apiKey)
+                }
             }.onSuccess {
                 overlay.update {
                     it.copy(
@@ -580,6 +587,17 @@ class SyncTextUiController(
                     )
                 }
             }
+        }
+    }
+
+    private suspend fun <T> withMinimumConnectionTestDuration(block: suspend () -> T): T {
+        val startedAt = TimeSource.Monotonic.markNow()
+        return try {
+            block()
+        } finally {
+            val remainingMillis =
+                ConnectionTestMinimumVisibleMillis - startedAt.elapsedNow().inWholeMilliseconds
+            if (remainingMillis > 0L) delay(remainingMillis)
         }
     }
 

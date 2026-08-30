@@ -2,6 +2,8 @@ package io.github.zvensmoluya.vortexcue.ui.synctext
 
 import android.app.Application
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -144,5 +146,81 @@ class SyncTextConfigPagerComposeTest {
         compose.onNodeWithTag("translation-model-search").performTextInput("gemini-3.7-flash")
         compose.onNodeWithTag("translation-model-manual-action").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals("gemini-3.7-flash", selected) }
+    }
+
+    @Test
+    fun connectionTestActionProvidesStableIdleRunningAndFailureFeedback() {
+        var connectionState by
+            mutableStateOf(
+                ConnectionTestUiState(
+                    success = true,
+                    testedFingerprint = "current",
+                ),
+            )
+        var clickCount = 0
+        compose.setContent {
+            VortexCueTheme {
+                ConnectionStatusRow(
+                    state = connectionState,
+                    stale = false,
+                    enabled = true,
+                    onClick = { clickCount += 1 },
+                )
+            }
+        }
+
+        compose.onNodeWithTag("connection-test-action").assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithText("重新测试").assertIsDisplayed()
+        compose.onNodeWithTag("connection-test-action").performClick()
+        compose.runOnIdle { assertEquals(1, clickCount) }
+
+        compose.runOnIdle { connectionState = ConnectionTestUiState(running = true) }
+        compose.onNodeWithText("正在测试").assertIsDisplayed()
+        compose.onNodeWithTag("connection-test-action").assertIsNotEnabled()
+
+        compose.runOnIdle {
+            connectionState =
+                ConnectionTestUiState(
+                    success = false,
+                    message = "无法连接",
+                    testedFingerprint = "current",
+                )
+        }
+        compose.onNodeWithText("连接失败").assertIsDisplayed()
+        compose.onNodeWithText("重试").assertIsDisplayed()
+        compose.onNodeWithTag("connection-test-action").assertIsEnabled()
+    }
+
+    @Test
+    fun successfulConnectionTestBrieflyAcknowledgesCompletion() {
+        var connectionState by mutableStateOf(ConnectionTestUiState(running = true))
+        compose.mainClock.autoAdvance = false
+        compose.setContent {
+            VortexCueTheme {
+                ConnectionStatusRow(
+                    state = connectionState,
+                    stale = false,
+                    enabled = true,
+                    onClick = {},
+                )
+            }
+        }
+        compose.mainClock.advanceTimeByFrame()
+
+        compose.runOnIdle {
+            connectionState =
+                ConnectionTestUiState(
+                    success = true,
+                    message = "连接成功",
+                    testedFingerprint = "current",
+                )
+        }
+        compose.mainClock.advanceTimeBy(200L)
+        compose.onNodeWithText("连接成功").assertIsDisplayed()
+        compose.onNodeWithTag("connection-test-action").assertIsNotEnabled()
+
+        compose.mainClock.advanceTimeBy(1_100L)
+        compose.onNodeWithText("重新测试").assertIsDisplayed()
+        compose.onNodeWithTag("connection-test-action").assertIsEnabled()
     }
 }
