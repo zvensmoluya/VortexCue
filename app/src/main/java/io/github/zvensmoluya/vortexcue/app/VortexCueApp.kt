@@ -142,6 +142,7 @@ internal fun VortexCueApp(
     onWindowBrightnessChanged: (Float?) -> Unit,
     onImmersiveModeChanged: (Boolean) -> Unit,
     onPlaybackActiveChanged: (Boolean) -> Unit,
+    onGlowLandscapeChanged: (Boolean) -> Unit,
     externalMediaRequest: ExternalMediaRequest?,
     onExternalMediaRequestConsumed: (Long) -> Unit,
     modifier: Modifier = Modifier,
@@ -177,6 +178,7 @@ internal fun VortexCueApp(
     var playerOriginPlaylistViewId by rememberSaveable { mutableStateOf<String?>(null) }
     var importHubRequest by rememberSaveable { mutableIntStateOf(0) }
     var playerSurface by rememberSaveable { mutableStateOf(PlayerSurface.Normal) }
+    var glowLandscape by rememberSaveable { mutableStateOf(false) }
     var mediaPickTarget by remember { mutableStateOf(MediaPickTarget.Import) }
     var mediaImportPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
     var singleFileImportResult by remember { mutableStateOf<SingleFileImportResult?>(null) }
@@ -608,9 +610,16 @@ internal fun VortexCueApp(
     }
 
     val glowActive = destination == AppDestination.Player && playerSurface != PlayerSurface.Normal
+    val glowSurfaceActive = destination == AppDestination.Player && playerSurface == PlayerSurface.Glow
     LaunchedEffect(glowActive, displayProfile) {
         onImmersiveModeChanged(glowActive)
         onWindowBrightnessChanged(if (glowActive) displayProfile.glowWindowBrightness else null)
+    }
+    LaunchedEffect(glowSurfaceActive) {
+        if (!glowSurfaceActive) glowLandscape = false
+    }
+    LaunchedEffect(glowSurfaceActive, glowLandscape) {
+        onGlowLandscapeChanged(glowSurfaceActive && glowLandscape)
     }
     LaunchedEffect(destination, playerSurface, playback.isPlaying) {
         onPlaybackActiveChanged(
@@ -627,6 +636,7 @@ internal fun VortexCueApp(
             onPlaybackActiveChanged(false)
             onImmersiveModeChanged(false)
             onWindowBrightnessChanged(null)
+            onGlowLandscapeChanged(false)
         }
     }
 
@@ -772,6 +782,7 @@ internal fun VortexCueApp(
                     playback = playback,
                     surface = playerSurface,
                     displayProfile = displayProfile,
+                    isGlowLandscape = glowLandscape,
                     sleepTimer = sleepTimer,
                     showGestureHint = !glowGestureHintSeen,
                     isCollected = currentDetails?.disposition == ContentDisposition.Collected,
@@ -938,6 +949,7 @@ internal fun VortexCueApp(
                         displayProfile = profile
                         scope.launch { settingsStore.saveDisplayProfile(profile) }
                     },
+                    onGlowLandscapeChanged = { glowLandscape = it },
                     onCalibrationCompleted = {
                         glowCalibrationCompleted = true
                         playerSurface = PlayerSurface.Glow

@@ -2,6 +2,7 @@ package io.github.zvensmoluya.vortexcue.app
 
 import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -50,6 +51,7 @@ class MainActivity : ComponentActivity() {
                         onWindowBrightnessChanged = ::setWindowBrightness,
                         onImmersiveModeChanged = ::setImmersiveMode,
                         onPlaybackActiveChanged = ::setKeepScreenOn,
+                        onGlowLandscapeChanged = ::setGlowLandscape,
                         externalMediaRequest = externalMediaRequestState.value,
                         onExternalMediaRequestConsumed = ::consumeExternalMediaRequest,
                     )
@@ -186,6 +188,16 @@ class MainActivity : ComponentActivity() {
             value?.coerceIn(0.01f, 1f)
                 ?: WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
         window.attributes = params
+    }
+
+    private fun setGlowLandscape(enabled: Boolean) {
+        val orientation =
+            if (enabled) {
+                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+        if (requestedOrientation != orientation) requestedOrientation = orientation
     }
 
     private fun setImmersiveMode(enabled: Boolean) {

@@ -14,6 +14,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
@@ -46,7 +47,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Forward10
-import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
@@ -55,6 +56,7 @@ import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.RepeatOne
 import androidx.compose.material.icons.outlined.Replay10
+import androidx.compose.material.icons.outlined.ScreenRotation
 import androidx.compose.material.icons.outlined.Shuffle
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.SkipPrevious
@@ -90,6 +92,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -135,6 +138,9 @@ import io.github.zvensmoluya.vortexcue.ui.theme.*
 
 private val GlowTrackColor = Color(0xFF242424)
 private val PlaybackSpeeds = listOf(0.75f, 1f, 1.25f, 1.5f, 2f)
+private const val MinGlowSubtitleLevel = 4
+private const val MaxGlowSubtitleLevel = 96
+private const val GlowBrightnessGestureStartFraction = 2f / 3f
 
 @Composable
 internal fun PlayerScreen(
@@ -143,6 +149,7 @@ internal fun PlayerScreen(
     playback: PlaybackSnapshot,
     surface: PlayerSurface,
     displayProfile: DisplayProfile,
+    isGlowLandscape: Boolean,
     sleepTimer: SleepTimerState,
     showGestureHint: Boolean,
     isCollected: Boolean,
@@ -174,6 +181,7 @@ internal fun PlayerScreen(
     onGeneratedPresentationModeChanged: (String, TextPresentationMode) -> Unit,
     onSubtitleOffsetChanged: (Long) -> Unit,
     onDisplayProfileChanged: (DisplayProfile) -> Unit,
+    onGlowLandscapeChanged: (Boolean) -> Unit,
     onCalibrationCompleted: () -> Unit,
     onGestureHintSeen: () -> Unit,
     onSetSleepTimer: (Long) -> Unit,
@@ -296,9 +304,12 @@ internal fun PlayerScreen(
                 hasPrimaryText = hasPrimaryText,
                 hasSecondaryText = hasSecondaryText,
                 displayProfile = displayProfile,
+                isLandscape = isGlowLandscape,
                 sleepTimer = sleepTimer,
                 showGestureHint = showGestureHint,
                 onPlayPause = onPlayPause,
+                onDisplayProfileChanged = onDisplayProfileChanged,
+                onLandscapeChanged = onGlowLandscapeChanged,
                 onExitGlow = { onSurfaceChanged(PlayerSurface.Normal) },
                 onRelinkMedia = onRelinkMedia,
                 onManageTextTracks = { textTracksVisible = true },
@@ -1700,9 +1711,12 @@ private fun GlowPlayer(
     hasPrimaryText: Boolean,
     hasSecondaryText: Boolean,
     displayProfile: DisplayProfile,
+    isLandscape: Boolean,
     sleepTimer: SleepTimerState,
     showGestureHint: Boolean,
     onPlayPause: () -> Unit,
+    onDisplayProfileChanged: (DisplayProfile) -> Unit,
+    onLandscapeChanged: (Boolean) -> Unit,
     onExitGlow: () -> Unit,
     onRelinkMedia: () -> Unit,
     onManageTextTracks: () -> Unit,
@@ -1714,7 +1728,15 @@ private fun GlowPlayer(
     var controlInteractionRevision by rememberSaveable { mutableIntStateOf(0) }
     var gestureFeedback by remember { mutableStateOf<String?>(null) }
     var gestureFeedbackRevision by remember { mutableIntStateOf(0) }
-    val subtitleLevel = displayProfile.glowSubtitleLevel.coerceIn(0, 255)
+    var brightnessPreviewLevel by remember { mutableStateOf<Int?>(null) }
+    var brightnessFeedbackVisible by remember { mutableStateOf(false) }
+    var brightnessDragging by remember { mutableStateOf(false) }
+    var brightnessFeedbackRevision by remember { mutableIntStateOf(0) }
+    val latestDisplayProfile by rememberUpdatedState(displayProfile)
+    val latestOnDisplayProfileChanged by rememberUpdatedState(onDisplayProfileChanged)
+    val subtitleLevel =
+        (brightnessPreviewLevel ?: displayProfile.glowSubtitleLevel)
+            .coerceIn(MinGlowSubtitleLevel, MaxGlowSubtitleLevel)
     val controlLevel = displayProfile.glowControlLevel.coerceIn(0, 255)
     val subtitleColor = Color(subtitleLevel, subtitleLevel, subtitleLevel)
     val controlColor = Color(controlLevel, controlLevel, controlLevel)
@@ -1750,6 +1772,13 @@ private fun GlowPlayer(
             if (revision == gestureFeedbackRevision) gestureFeedback = null
         }
     }
+    LaunchedEffect(brightnessDragging, brightnessFeedbackRevision) {
+        if (brightnessFeedbackVisible && !brightnessDragging) {
+            val revision = brightnessFeedbackRevision
+            delay(800L)
+            if (revision == brightnessFeedbackRevision) brightnessFeedbackVisible = false
+        }
+    }
     LaunchedEffect(showGestureHint) {
         if (showGestureHint) {
             delay(6_500L)
@@ -1764,15 +1793,73 @@ private fun GlowPlayer(
                 .background(Color.Black)
                 .semantics {
                     contentDescription =
-                        if (controlsVisible) "微光临时控制已显示" else "微光已锁定，长按显示控制"
+                        if (controlsVisible) "微光临时控制已显示" else "微光播放，长按显示控制"
                     onClick(
-                        label = if (controlsVisible) "锁定微光" else "显示微光控制",
+                        label = if (controlsVisible) "收起微光控制" else "显示微光控制",
                     ) {
                         if (controlsVisible) controlsVisible = false else showControls()
                         true
                     }
                 }
                 .pointerInput(controlsVisible) {
+                    var adjustsBrightness = false
+                    var startLevel = MinGlowSubtitleLevel
+                    var accumulatedDragPx = 0f
+                    detectVerticalDragGestures(
+                        onDragStart = { offset ->
+                            adjustsBrightness =
+                                !controlsVisible && offset.x >= size.width * GlowBrightnessGestureStartFraction
+                            if (adjustsBrightness) {
+                                startLevel =
+                                    latestDisplayProfile.glowSubtitleLevel
+                                        .coerceIn(MinGlowSubtitleLevel, MaxGlowSubtitleLevel)
+                                accumulatedDragPx = 0f
+                                brightnessPreviewLevel = startLevel
+                                brightnessDragging = true
+                                brightnessFeedbackVisible = true
+                            }
+                        },
+                        onVerticalDrag = { change, dragAmount ->
+                            if (adjustsBrightness) {
+                                change.consume()
+                                accumulatedDragPx += dragAmount
+                                brightnessPreviewLevel =
+                                    adjustedGlowSubtitleLevel(
+                                        startLevel = startLevel,
+                                        accumulatedDragPx = accumulatedDragPx,
+                                        gestureHeightPx = size.height.toFloat(),
+                                    )
+                            }
+                        },
+                        onDragEnd = {
+                            if (adjustsBrightness) {
+                                val level = brightnessPreviewLevel
+                                val profile = latestDisplayProfile
+                                if (level != null && level != profile.glowSubtitleLevel) {
+                                    latestOnDisplayProfileChanged(
+                                        profile.copy(
+                                            name = DisplayProfile.CustomName,
+                                            glowSubtitleLevel = level,
+                                        ),
+                                    )
+                                }
+                                brightnessPreviewLevel = null
+                                brightnessDragging = false
+                                brightnessFeedbackRevision += 1
+                            }
+                            adjustsBrightness = false
+                        },
+                        onDragCancel = {
+                            if (adjustsBrightness) {
+                                brightnessPreviewLevel = null
+                                brightnessDragging = false
+                                brightnessFeedbackVisible = false
+                            }
+                            adjustsBrightness = false
+                        },
+                    )
+                }
+                .pointerInput(controlsVisible, playback.isPlaying) {
                     detectTapGestures(
                         onTap = {
                             if (controlsVisible) controlsVisible = false
@@ -1840,6 +1927,30 @@ private fun GlowPlayer(
         }
 
         AnimatedVisibility(
+            visible = brightnessFeedbackVisible,
+            modifier = Modifier.align(Alignment.TopEnd).padding(top = 18.dp, end = 18.dp),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Outlined.LightMode,
+                    contentDescription = null,
+                    tint = controlColor,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    "文字 ${glowSubtitleBrightnessPercent(subtitleLevel)}%",
+                    color = controlColor,
+                    fontSize = 11.sp,
+                )
+            }
+        }
+
+        AnimatedVisibility(
             visible = gestureFeedback != null,
             modifier = Modifier.align(Alignment.Center),
             enter = fadeIn(),
@@ -1871,6 +1982,7 @@ private fun GlowPlayer(
                     Text("中央双击\n播放 / 暂停", color = controlColor, fontSize = 10.sp, textAlign = TextAlign.Center)
                     Text("右侧双击\n快进", color = controlColor, fontSize = 10.sp, textAlign = TextAlign.End)
                 }
+                Text("右侧上下滑动调节文字亮度", color = controlColor, fontSize = 10.sp)
                 Text("长按任意位置显示临时控制", color = controlColor, fontSize = 10.sp)
             }
         }
@@ -1911,6 +2023,18 @@ private fun GlowPlayer(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    IconButton(
+                        onClick = {
+                            onLandscapeChanged(!isLandscape)
+                            showControls()
+                        },
+                    ) {
+                        Icon(
+                            Icons.Outlined.ScreenRotation,
+                            contentDescription = if (isLandscape) "切换为竖屏" else "切换为横屏",
+                            tint = controlColor,
+                        )
+                    }
                     IconButton(onClick = onShowTimer) {
                         Icon(
                             Icons.Outlined.Timer,
@@ -1918,14 +2042,14 @@ private fun GlowPlayer(
                             tint = controlColor,
                         )
                     }
-                    IconButton(onClick = { controlsVisible = false }) {
-                        Icon(Icons.Outlined.Lock, contentDescription = "隐藏控制", tint = controlColor)
-                    }
                     IconButton(onClick = onManageTextTracks) {
                         Icon(Icons.Outlined.Subtitles, contentDescription = "同步文字", tint = controlColor)
                     }
                     IconButton(onClick = onExitGlow) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "退出微光", tint = controlColor)
+                    }
+                    IconButton(onClick = { controlsVisible = false }) {
+                        Icon(Icons.Outlined.Close, contentDescription = "收起控制", tint = controlColor)
                     }
                 }
                 playback.errorMessage?.let { message ->
@@ -2594,6 +2718,26 @@ internal fun sleepTimerRemainingFraction(state: SleepTimerState): Float =
 
 private fun sleepTimerLabel(state: SleepTimerState): String =
     if (state.isActive) "还剩 ${formatSleepTimerRemaining(state.remainingMs)}" else "未开启"
+
+internal fun adjustedGlowSubtitleLevel(
+    startLevel: Int,
+    accumulatedDragPx: Float,
+    gestureHeightPx: Float,
+): Int {
+    val clampedStart = startLevel.coerceIn(MinGlowSubtitleLevel, MaxGlowSubtitleLevel)
+    if (!accumulatedDragPx.isFinite() || !gestureHeightPx.isFinite() || gestureHeightPx <= 0f) {
+        return clampedStart
+    }
+    val levelRange = MaxGlowSubtitleLevel - MinGlowSubtitleLevel
+    val delta = (-accumulatedDragPx / gestureHeightPx * levelRange).roundToInt()
+    return (clampedStart + delta).coerceIn(MinGlowSubtitleLevel, MaxGlowSubtitleLevel)
+}
+
+internal fun glowSubtitleBrightnessPercent(level: Int): Int =
+    ((level.coerceIn(MinGlowSubtitleLevel, MaxGlowSubtitleLevel) - MinGlowSubtitleLevel) *
+        100f /
+        (MaxGlowSubtitleLevel - MinGlowSubtitleLevel))
+        .roundToInt()
 
 internal fun shouldDisplayTimedText(
     playbackState: Int,
