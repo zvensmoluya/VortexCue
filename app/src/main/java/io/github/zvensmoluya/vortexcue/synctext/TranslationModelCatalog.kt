@@ -20,7 +20,7 @@ class TranslationModelCatalog(
     private val executor: BoundedHttpExecutor,
     private val endpointResolver: TranslationEndpointResolver = TranslationEndpointResolver(),
 ) {
-    suspend fun fetch(protocol: TranslationProtocol, endpoint: String, apiKey: String): List<String> {
+    suspend fun fetch(protocol: TranslationProtocol, endpoint: String, apiKey: String): List<DiscoveredTranslationModel> {
         var lastRouteStatus: Int? = null
         endpointResolver.modelCandidates(protocol, endpoint).forEach { route ->
             val request =
@@ -40,7 +40,7 @@ class TranslationModelCatalog(
             val exchange = executor.execute(request)
             if (exchange.status in 200..299) {
                 endpointResolver.remember(protocol, endpoint, route.requestBase)
-                return parseModelIds(exchange.body)
+                return parseDiscoveredModels(protocol, exchange.body)
             }
             lastRouteStatus = exchange.status
             if (exchange.status !in RouteFallbackStatuses) {
@@ -55,10 +55,20 @@ class TranslationModelCatalog(
     }
 }
 
+/** A catalogue entry keeps the provider's request identifier separate from presentation metadata. */
+data class DiscoveredTranslationModel(
+    val requestId: String,
+    val displayName: String,
+    val groupLabel: String? = null,
+)
+
 internal fun resolveModelsEndpoint(protocol: TranslationProtocol, endpoint: String): HttpUrl =
     TranslationEndpointResolver().modelCandidates(protocol, endpoint).first().modelsUrl
 
-internal fun parseModelIds(bytes: ByteArray): List<String> {
+internal fun parseDiscoveredModels(
+    protocol: TranslationProtocol,
+    bytes: ByteArray,
+): List<DiscoveredTranslationModel> {
     val root = runCatching { Json.parseToJsonElement(bytes.toString(Charsets.UTF_8)).jsonObject }.getOrNull()
         ?: return emptyList()
     val candidates = buildList {
@@ -67,12 +77,49 @@ internal fun parseModelIds(bytes: ByteArray): List<String> {
     }
     return candidates
         .mapNotNull { item ->
-            val id = item["id"]?.jsonPrimitive?.contentOrNull
-                ?: item["name"]?.jsonPrimitive?.contentOrNull
-            id?.removePrefix("models/")?.trim()?.takeIf(String::isNotBlank)
+            val rawId =
+                item["id"]?.jsonPrimitive?.contentOrNull
+                    ?: item["name"]?.jsonPrimitive?.contentOrNull
+            val requestId = rawId
+                ?.trim()
+                ?.let { id ->
+                    if (protocol == TranslationProtocol.GoogleGenerateContent) {
+                        id.removePrefix("models/")
+                    } else {
+                        id
+                    }
+                }
+                ?.takeIf(String::isNotBlank)
+                ?: return@mapNotNull null
+            val responseName =
+                item["displayName"]?.jsonPrimitive?.contentOrNull
+                    ?: item["name"]?.jsonPrimitive?.contentOrNull?.takeIf { item["id"] != null }
+            val openRouterMetadata = item["canonical_slug"]?.jsonPrimitive?.contentOrNull
+            val authorSlug =
+                requestId
+                    .substringBefore('/', missingDelimiterValue = "")
+                    .removePrefix("~")
+                    .takeIf { openRouterMetadata != null && it.isNotBlank() }
+            val namePrefix = responseName
+                ?.substringBefore(':', missingDelimiterValue = "")
+                ?.trim()
+                ?.takeIf(String::isNotBlank)
+            val groupLabel = authorSlug?.let { namePrefix ?: it }
+            val displayName =
+                responseName
+                    ?.trim()
+                    ?.let { name ->
+                        if (groupLabel != null && ':' in name) name.substringAfter(':').trim() else name
+                    }
+                    ?.takeIf(String::isNotBlank)
+                    ?: requestId
+            DiscoveredTranslationModel(
+                requestId = requestId,
+                displayName = displayName,
+                groupLabel = groupLabel,
+            )
         }
-        .distinct()
-        .sorted()
+        .distinctBy(DiscoveredTranslationModel::requestId)
 }
 
 private fun kotlinx.serialization.json.JsonElement?.asModelArray(): List<JsonObject> =

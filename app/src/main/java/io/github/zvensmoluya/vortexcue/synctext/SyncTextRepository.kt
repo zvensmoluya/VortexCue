@@ -152,7 +152,7 @@ class SyncTextRepository(
         endpoint: String,
         credentialId: String?,
         apiKey: String? = null,
-    ): List<String> {
+    ): List<DiscoveredTranslationModel> {
         val catalog = modelCatalog ?: return emptyList()
         val resolvedKey = validatedApiKey(apiKey?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId)))
         return catalog.fetch(protocol, endpoint, resolvedKey)

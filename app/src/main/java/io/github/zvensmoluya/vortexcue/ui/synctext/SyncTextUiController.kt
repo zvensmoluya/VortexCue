@@ -8,6 +8,7 @@ import io.github.zvensmoluya.vortexcue.synctext.AudioTrackInfo
 import io.github.zvensmoluya.vortexcue.synctext.AudioWindowExtractor
 import io.github.zvensmoluya.vortexcue.synctext.CredentialMetadata
 import io.github.zvensmoluya.vortexcue.synctext.CredentialPurpose
+import io.github.zvensmoluya.vortexcue.synctext.DiscoveredTranslationModel
 import io.github.zvensmoluya.vortexcue.synctext.GenerationInput
 import io.github.zvensmoluya.vortexcue.synctext.GenerationErrorCategory
 import io.github.zvensmoluya.vortexcue.synctext.GenerationOutput
@@ -25,6 +26,7 @@ import io.github.zvensmoluya.vortexcue.synctext.SyncTextRepository
 import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocol
 import io.github.zvensmoluya.vortexcue.synctext.TranslationReasoningLevel
+import java.security.MessageDigest
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -90,8 +92,9 @@ data class SyncTextUiState(
     val audioTracks: List<AudioTrackInfo> = emptyList(),
     val inspectingAudioTracks: Boolean = false,
     val audioInspectionError: String? = null,
-    val availableTranslationModels: List<String> = emptyList(),
+    val availableTranslationModels: List<DiscoveredTranslationModel> = emptyList(),
     val loadingTranslationModels: Boolean = false,
+    val translationModelsError: String? = null,
     val translationConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val asrConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val configSaving: Boolean = false,
@@ -183,8 +186,9 @@ private data class OverlayState(
     val audioTracks: List<AudioTrackInfo> = emptyList(),
     val inspectingAudioTracks: Boolean = false,
     val audioInspectionError: String? = null,
-    val availableTranslationModels: List<String> = emptyList(),
+    val availableTranslationModels: List<DiscoveredTranslationModel> = emptyList(),
     val loadingTranslationModels: Boolean = false,
+    val translationModelsError: String? = null,
     val translationConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val asrConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val configSaving: Boolean = false,
@@ -196,6 +200,12 @@ private data class OverlayState(
     val generationActivationTrackId: String? = null,
     val busy: Boolean = false,
     val message: String? = null,
+)
+
+private data class ModelDiscoveryKey(
+    val protocol: TranslationProtocol,
+    val endpoint: String,
+    val credentialFingerprint: String,
 )
 
 class SyncTextUiController(
@@ -212,6 +222,8 @@ class SyncTextUiController(
     private var credentialSaveRequestId = 0L
     private var modelDiscoveryJob: Job? = null
     private var modelDiscoveryToken = 0L
+    private var modelDiscoveryCacheKey: ModelDiscoveryKey? = null
+    private var modelDiscoveryInFlightKey: ModelDiscoveryKey? = null
 
     val state: StateFlow<SyncTextUiState> =
         combine(
@@ -230,6 +242,7 @@ class SyncTextUiController(
                 audioInspectionError = local.audioInspectionError,
                 availableTranslationModels = local.availableTranslationModels,
                 loadingTranslationModels = local.loadingTranslationModels,
+                translationModelsError = local.translationModelsError,
                 translationConnectionTest = local.translationConnectionTest,
                 asrConnectionTest = local.asrConnectionTest,
                 configSaving = local.configSaving,
@@ -383,6 +396,9 @@ class SyncTextUiController(
                             ),
                     )
                 }
+                if (action.purpose == CredentialPurpose.Translation || action.purpose == CredentialPurpose.Shared) {
+                    modelDiscoveryCacheKey = null
+                }
                 diagnostics.record(
                     SyncTextDiagnosticEventType.UiAction,
                     stage = "Credential",
@@ -420,21 +436,39 @@ class SyncTextUiController(
         credentialId: String?,
         apiKey: String?,
     ) {
-        modelDiscoveryJob?.cancel()
-        val token = ++modelDiscoveryToken
         if (endpoint.isBlank() || credentialId.isNullOrBlank() && apiKey.isNullOrBlank()) {
+            modelDiscoveryJob?.cancel()
+            modelDiscoveryCacheKey = null
+            modelDiscoveryInFlightKey = null
             overlay.update {
                 it.copy(
                     availableTranslationModels = emptyList(),
                     loadingTranslationModels = false,
+                    translationModelsError = null,
                 )
             }
             return
         }
+        val discoveryKey =
+            ModelDiscoveryKey(
+                protocol = protocol,
+                endpoint = endpoint.trim().removeSuffix("/"),
+                credentialFingerprint = modelCredentialFingerprint(credentialId, apiKey),
+            )
+        if (discoveryKey == modelDiscoveryCacheKey) {
+            overlay.update { it.copy(loadingTranslationModels = false, translationModelsError = null) }
+            return
+        }
+        if (discoveryKey == modelDiscoveryInFlightKey) return
+
+        modelDiscoveryJob?.cancel()
+        modelDiscoveryInFlightKey = discoveryKey
+        val token = ++modelDiscoveryToken
         overlay.update {
             it.copy(
                 availableTranslationModels = emptyList(),
                 loadingTranslationModels = true,
+                translationModelsError = null,
             )
         }
         modelDiscoveryJob =
@@ -444,18 +478,22 @@ class SyncTextUiController(
                     repository.discoverTranslationModels(protocol, endpoint, credentialId, apiKey)
                 }.onSuccess { models ->
                     if (token != modelDiscoveryToken) return@onSuccess
+                    modelDiscoveryCacheKey = discoveryKey
+                    modelDiscoveryInFlightKey = null
                     overlay.update {
                         it.copy(
                             availableTranslationModels = models,
                             loadingTranslationModels = false,
+                            translationModelsError = null,
                         )
                     }
                 }.onFailure { error ->
                     if (token != modelDiscoveryToken || error is CancellationException) return@onFailure
+                    modelDiscoveryInFlightKey = null
                     overlay.update {
                         it.copy(
-                            availableTranslationModels = emptyList(),
                             loadingTranslationModels = false,
+                            translationModelsError = "无法获取模型目录，可以直接输入模型 ID",
                         )
                     }
                 }
@@ -857,6 +895,16 @@ private fun Throwable.toCredentialSaveMessage(): String {
         raw.contains("遮罩") || raw.contains("不可发送") -> "请输入完整的 API Key"
         else -> "API Key 保存失败"
     }
+}
+
+private fun modelCredentialFingerprint(
+    credentialId: String?,
+    apiKey: String?,
+): String {
+    val inlineKey = apiKey?.takeIf(String::isNotBlank)
+    if (inlineKey == null) return "saved:${credentialId.orEmpty()}"
+    val digest = MessageDigest.getInstance("SHA-256").digest(inlineKey.toByteArray(Charsets.UTF_8))
+    return "inline:${digest.joinToString("") { "%02x".format(it.toInt() and 0xff) }}"
 }
 
 private fun Throwable.toConnectionTestUiState(fingerprint: String): ConnectionTestUiState {

@@ -43,7 +43,7 @@ class TranslationModelCatalogTest {
 
             val models = catalog.fetch(TranslationProtocol.ChatCompletions, server.url("/").toString(), "secret")
 
-            assertEquals(listOf("model-a", "model-b"), models)
+            assertEquals(listOf("model-b", "model-a"), models.map { it.requestId })
             val request = server.takeRequest()
             assertEquals("/models", request.target)
             assertEquals("Bearer secret", request.headers["Authorization"])
@@ -61,7 +61,7 @@ class TranslationModelCatalogTest {
 
             assertEquals(
                 listOf("deepseek-chat"),
-                catalog.fetch(TranslationProtocol.ChatCompletions, server.url("/").toString(), "secret"),
+                catalog.fetch(TranslationProtocol.ChatCompletions, server.url("/").toString(), "secret").map { it.requestId },
             )
             assertEquals("/models", server.takeRequest().target)
             assertEquals("/v1/models", server.takeRequest().target)
@@ -115,8 +115,65 @@ class TranslationModelCatalogTest {
 
     @Test
     fun `catalog returns empty when provider has no model data`() {
-        assertTrue(parseModelIds("{}".toByteArray()).isEmpty())
-        assertEquals(listOf("gemini-2"), parseModelIds("""{"models":[{"name":"models/gemini-2"}]}""".toByteArray()))
+        assertTrue(parseDiscoveredModels(TranslationProtocol.ChatCompletions, "{}".toByteArray()).isEmpty())
+    }
+
+    @Test
+    fun `OpenRouter entries retain canonical ids and presentation metadata`() {
+        val models =
+            parseDiscoveredModels(
+                TranslationProtocol.ChatCompletions,
+                """
+                {
+                  "data": [
+                    {
+                      "id": "google/gemini-3.7-flash",
+                      "canonical_slug": "google/gemini-3.7-flash-20260813",
+                      "name": "Google: Gemini 3.7 Flash"
+                    }
+                  ]
+                }
+                """.trimIndent().toByteArray(),
+            )
+
+        assertEquals(
+            DiscoveredTranslationModel(
+                requestId = "google/gemini-3.7-flash",
+                displayName = "Gemini 3.7 Flash",
+                groupLabel = "Google",
+            ),
+            models.single(),
+        )
+    }
+
+    @Test
+    fun `Google resource names are normalized only for Google protocol`() {
+        val response =
+            """
+            {"models":[{"name":"models/gemini-2","displayName":"Gemini 2"}]}
+            """.trimIndent().toByteArray()
+
+        assertEquals(
+            "gemini-2",
+            parseDiscoveredModels(TranslationProtocol.GoogleGenerateContent, response).single().requestId,
+        )
+        assertEquals(
+            "models/gemini-2",
+            parseDiscoveredModels(TranslationProtocol.ChatCompletions, response).single().requestId,
+        )
+    }
+
+    @Test
+    fun `custom namespaced ids remain opaque request values`() {
+        val models =
+            parseDiscoveredModels(
+                TranslationProtocol.ChatCompletions,
+                """{"data":[{"id":"tenant/models/custom-v1"}]}""".toByteArray(),
+            )
+
+        assertEquals("tenant/models/custom-v1", models.single().requestId)
+        assertEquals("tenant/models/custom-v1", models.single().displayName)
+        assertEquals(null, models.single().groupLabel)
     }
 
     private fun testClient() =

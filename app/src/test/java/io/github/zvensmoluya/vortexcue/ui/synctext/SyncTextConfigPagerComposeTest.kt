@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
@@ -19,7 +20,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import io.github.zvensmoluya.vortexcue.synctext.TranslationReasoningLevel
+import io.github.zvensmoluya.vortexcue.synctext.DiscoveredTranslationModel
 import io.github.zvensmoluya.vortexcue.ui.theme.VortexCueTheme
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -102,5 +105,44 @@ class SyncTextConfigPagerComposeTest {
         compose.onNodeWithTag("translation-reasoning-medium").performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("translation-reasoning-medium").assertIsSelected()
+    }
+
+    @Test
+    fun modelPickerSearchesLargeCatalogAndPreservesManualRequestIds() {
+        val models =
+            (0 until 300).map { index ->
+                val author = if (index < 150) "Alpha" else "Zulu"
+                DiscoveredTranslationModel(
+                    requestId = "${author.lowercase()}/model-$index",
+                    displayName = "Model $index",
+                    groupLabel = author,
+                )
+            }
+        var selected by mutableStateOf(models.first().requestId)
+        compose.setContent {
+            VortexCueTheme {
+                ModelPicker(
+                    value = selected,
+                    options = models,
+                    loading = false,
+                    error = null,
+                    onOpen = {},
+                    onValueChange = { selected = it },
+                )
+            }
+        }
+
+        compose.onNodeWithText(models.first().requestId).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("translation-model-search").performTextInput("model-299")
+        compose.waitForIdle()
+        compose.onNodeWithTag("translation-model-zulu/model-299").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals("zulu/model-299", selected) }
+
+        compose.onNodeWithText("zulu/model-299").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("translation-model-search").performTextInput("gemini-3.7-flash")
+        compose.onNodeWithTag("translation-model-manual-action").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals("gemini-3.7-flash", selected) }
     }
 }

@@ -50,6 +50,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.runtime.Composable
@@ -97,6 +98,7 @@ import io.github.zvensmoluya.vortexcue.synctext.AsrProvider
 import io.github.zvensmoluya.vortexcue.synctext.AudioTrackInfo
 import io.github.zvensmoluya.vortexcue.synctext.CredentialMetadata
 import io.github.zvensmoluya.vortexcue.synctext.CredentialPurpose
+import io.github.zvensmoluya.vortexcue.synctext.DiscoveredTranslationModel
 import io.github.zvensmoluya.vortexcue.synctext.GenerationInput
 import io.github.zvensmoluya.vortexcue.synctext.LanguageTags
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextConfig
@@ -354,6 +356,7 @@ internal fun SyncTextConfigPage(
                         draft = translationDraft,
                         availableModels = state.availableTranslationModels,
                         loadingModels = state.loadingTranslationModels,
+                        modelsError = state.translationModelsError,
                         connectionTest = state.translationConnectionTest,
                         busy = state.busy || state.configSaving,
                         hasSavedKey = translationSavedCredential != null,
@@ -555,8 +558,9 @@ private fun PagerTabs(
 @Composable
 private fun TranslationPage(
     draft: TranslationPageDraft,
-    availableModels: List<String>,
+    availableModels: List<DiscoveredTranslationModel>,
     loadingModels: Boolean,
+    modelsError: String?,
     connectionTest: ConnectionTestUiState,
     busy: Boolean,
     hasSavedKey: Boolean,
@@ -611,6 +615,7 @@ private fun TranslationPage(
                 value = draft.model,
                 options = availableModels,
                 loading = loadingModels,
+                error = modelsError,
                 onOpen = { onDiscoverModels(draft) },
                 onValueChange = {
                     val next = draft.copy(model = it)
@@ -970,73 +975,294 @@ private fun ProtocolPicker(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-private fun ModelPicker(
+internal fun ModelPicker(
     value: String,
-    options: List<String>,
+    options: List<DiscoveredTranslationModel>,
     loading: Boolean,
+    error: String?,
     onOpen: () -> Unit,
     onValueChange: (String) -> Unit,
 ) {
     var visible by remember { mutableStateOf(false) }
-    var manualEntry by remember { mutableStateOf(false) }
-    var manualValue by remember(value) { mutableStateOf(value) }
-    Column {
-        ConfigChoiceRow(label = "模型", value = value.ifBlank { "选择模型" }, onClick = {
+    var query by rememberSaveable { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ConfigChoiceRow(
+        label = "模型",
+        value = value.ifBlank { "选择模型" },
+        onClick = {
             onOpen()
-            manualEntry = false
-            manualValue = value
+            query = ""
             visible = true
-        })
-    }
+        },
+        modifier = Modifier.testTag("translation-model-picker"),
+    )
     if (visible) {
+        val trimmedQuery = query.trim()
+        val matchingModels =
+            remember(options, trimmedQuery) {
+                if (trimmedQuery.isBlank()) {
+                    options
+                } else {
+                    options
+                        .filter { model -> model.matches(trimmedQuery) }
+                        .sortedWith(
+                            compareBy<DiscoveredTranslationModel> { it.matchRank(trimmedQuery) }
+                                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
+                                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.requestId },
+                        )
+                }
+            }
+        val selectedModel =
+            remember(options, value) {
+                options.firstOrNull { it.requestId == value }
+                    ?: value.takeIf(String::isNotBlank)?.let { DiscoveredTranslationModel(it, it) }
+            }
+        val browseGroups =
+            remember(options, value) {
+                options
+                    .filterNot { it.requestId == value }
+                    .toBrowseGroups()
+            }
+        val canUseManualValue =
+            trimmedQuery.isNotBlank() && options.none { it.requestId == trimmedQuery }
         ModalBottomSheet(
             onDismissRequest = { visible = false },
             containerColor = AppSurfaceRaised,
+            sheetState = sheetState,
         ) {
-            SheetTitle("模型")
-            if (loading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = AppAccent)
-            options.forEach { option ->
-                SheetChoiceRow(
-                    title = option,
-                    selected = option == value,
-                    onClick = {
-                        onValueChange(option)
-                        visible = false
-                    },
+            Column(
+                modifier = Modifier.fillMaxWidth().fillMaxHeight(0.92f),
+            ) {
+                SheetTitle("模型")
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("搜索名称或输入模型 ID") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 8.dp)
+                        .testTag("translation-model-search"),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
                 )
-            }
-            TextButton(onClick = { manualEntry = true; manualValue = value }) {
-                Text("手动输入模型 ID", color = AppAccent)
-            }
-            if (manualEntry) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text("模型 ID", color = AppSecondaryText, fontSize = 12.sp)
-                    OutlinedTextField(
-                        value = manualValue,
-                        onValueChange = { manualValue = it },
-                        singleLine = true,
+                if (loading) {
+                    LinearProgressIndicator(
                         modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = {
-                            manualValue.trim().takeIf(String::isNotBlank)?.let(onValueChange)
-                            visible = false
-                        }),
+                        color = AppAccent,
                     )
-                    TextButton(
-                        enabled = manualValue.isNotBlank(),
+                }
+                error?.let { message ->
+                    Text(
+                        message,
+                        color = AppError,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+                    )
+                }
+                if (canUseManualValue) {
+                    ManualModelRow(
+                        modelId = trimmedQuery,
                         onClick = {
-                            onValueChange(manualValue.trim())
+                            onValueChange(trimmedQuery)
                             visible = false
                         },
-                    ) { Text("完成", color = AppAccent) }
+                    )
                 }
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .testTag("translation-model-list"),
+                ) {
+                    if (trimmedQuery.isBlank()) {
+                        selectedModel?.let { model ->
+                            item(key = "current-model") {
+                                ModelSectionHeader("当前使用")
+                            }
+                            item(key = "current-model:${model.requestId}") {
+                                ModelChoiceRow(
+                                    model = model,
+                                    selected = true,
+                                    onClick = { visible = false },
+                                )
+                            }
+                        }
+                        browseGroups.forEach { group ->
+                            group.label?.let { label ->
+                                stickyHeader(key = "model-group:$label") {
+                                    ModelSectionHeader(label)
+                                }
+                            }
+                            items(
+                                items = group.models,
+                                key = { model -> "model:${model.requestId}" },
+                            ) { model ->
+                                ModelChoiceRow(
+                                    model = model,
+                                    selected = false,
+                                    onClick = {
+                                        onValueChange(model.requestId)
+                                        visible = false
+                                    },
+                                )
+                            }
+                        }
+                    } else {
+                        items(
+                            items = matchingModels,
+                            key = { model -> "search-model:${model.requestId}" },
+                        ) { model ->
+                            ModelChoiceRow(
+                                model = model,
+                                selected = model.requestId == value,
+                                onClick = {
+                                    onValueChange(model.requestId)
+                                    visible = false
+                                },
+                            )
+                        }
+                    }
+                    if (!loading && matchingModels.isEmpty()) {
+                        item(key = "empty-model-results") {
+                            Text(
+                                if (trimmedQuery.isBlank()) {
+                                    "服务未返回模型目录，可以直接输入模型 ID"
+                                } else {
+                                    "没有匹配的目录结果"
+                                },
+                                color = AppSecondaryText,
+                                fontSize = 13.sp,
+                                modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp),
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.navigationBarsPadding())
             }
-            Spacer(Modifier.navigationBarsPadding())
+        }
+    }
+}
+
+private data class ModelBrowseGroup(
+    val label: String?,
+    val models: List<DiscoveredTranslationModel>,
+)
+
+private fun List<DiscoveredTranslationModel>.toBrowseGroups(): List<ModelBrowseGroup> {
+    val namedGroups =
+        filter { it.groupLabel != null }
+            .groupBy { requireNotNull(it.groupLabel) }
+            .entries
+            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.key })
+            .map { (label, models) ->
+                ModelBrowseGroup(
+                    label = label,
+                    models = models.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }),
+                )
+            }
+    val ungrouped = filter { it.groupLabel == null }
+    return if (ungrouped.isEmpty()) namedGroups else namedGroups + ModelBrowseGroup(null, ungrouped)
+}
+
+private fun DiscoveredTranslationModel.matches(query: String): Boolean =
+    displayName.contains(query, ignoreCase = true) ||
+        requestId.contains(query, ignoreCase = true) ||
+        groupLabel?.contains(query, ignoreCase = true) == true
+
+private fun DiscoveredTranslationModel.matchRank(query: String): Int =
+    when {
+        requestId.equals(query, ignoreCase = true) -> 0
+        displayName.equals(query, ignoreCase = true) -> 1
+        displayName.startsWith(query, ignoreCase = true) -> 2
+        requestId.startsWith(query, ignoreCase = true) -> 3
+        else -> 4
+    }
+
+@Composable
+private fun ModelSectionHeader(title: String) {
+    Text(
+        title,
+        color = AppSecondaryText,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(AppSurfaceRaised)
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+    )
+}
+
+@Composable
+private fun ModelChoiceRow(
+    model: DiscoveredTranslationModel,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 60.dp)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 9.dp)
+            .testTag("translation-model-${model.requestId}"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                model.displayName,
+                color = AppPrimaryText,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (model.displayName != model.requestId) {
+                Text(
+                    model.requestId,
+                    color = AppMutedText,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (selected) {
+            Icon(
+                Icons.Outlined.Check,
+                contentDescription = "已选择",
+                tint = AppAccent,
+                modifier = Modifier.padding(start = 12.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ManualModelRow(
+    modelId: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 10.dp)
+            .testTag("translation-model-manual-action"),
+    ) {
+        Column {
+            Text(
+                "使用“$modelId”",
+                color = AppAccent,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                "作为模型 ID 原样保存",
+                color = AppMutedText,
+                fontSize = 12.sp,
+            )
         }
     }
 }
@@ -1237,8 +1463,12 @@ private fun ConfigChoiceRow(
     label: String,
     value: String,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         ConfigFieldLabel(label)
         Row(
             modifier = Modifier
