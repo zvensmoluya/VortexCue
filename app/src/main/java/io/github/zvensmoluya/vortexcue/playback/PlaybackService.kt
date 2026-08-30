@@ -553,6 +553,14 @@ class PlaybackService : MediaSessionService() {
                             applyProjection(projection, explicitlyCleared = projection.queue.isEmpty())
                             queueResult(projection)
                         }
+                        PlaybackCommands.RemoveWork.customAction -> {
+                            ensureMaterializedInside()
+                            val workId = args.getString(PlaybackCommands.WorkId)
+                                ?: return@withLock SessionResult(SessionError.ERROR_BAD_VALUE)
+                            val projection = playbackRepository.removeWork(workId)
+                            applyProjection(projection, explicitlyCleared = projection.queue.isEmpty())
+                            queueResult(projection)
+                        }
                         PlaybackCommands.Move.customAction -> {
                             ensureMaterializedInside()
                             val projection =

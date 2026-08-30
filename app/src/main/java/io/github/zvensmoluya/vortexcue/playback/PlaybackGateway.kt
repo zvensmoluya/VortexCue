@@ -74,6 +74,12 @@ class PlaybackGateway(private val controller: MediaController) {
             Bundle().apply { putString(PlaybackCommands.ContentId, contentId) },
         )
 
+    suspend fun removeWork(workId: String): SessionResult =
+        send(
+            PlaybackCommands.RemoveWork,
+            Bundle().apply { putString(PlaybackCommands.WorkId, workId) },
+        )
+
     suspend fun move(fromIndex: Int, toIndex: Int): SessionResult =
         send(
             PlaybackCommands.Move,
@@ -118,6 +124,7 @@ internal object PlaybackCommands {
     private const val Prefix = "io.github.zvensmoluya.vortexcue.PLAYBACK_"
     const val ContentIds = "content_ids"
     const val ContentId = "content_id"
+    const val WorkId = "work_id"
     const val OriginWorkIds = "origin_work_ids"
     const val OriginPlaylistEntryIds = "origin_playlist_entry_ids"
     const val CurrentIndex = "current_index"
@@ -131,6 +138,7 @@ internal object PlaybackCommands {
     val Replace = SessionCommand(Prefix + "REPLACE", Bundle.EMPTY)
     val Append = SessionCommand(Prefix + "APPEND", Bundle.EMPTY)
     val Remove = SessionCommand(Prefix + "REMOVE", Bundle.EMPTY)
+    val RemoveWork = SessionCommand(Prefix + "REMOVE_WORK", Bundle.EMPTY)
     val Move = SessionCommand(Prefix + "MOVE", Bundle.EMPTY)
     val Clear = SessionCommand(Prefix + "CLEAR", Bundle.EMPTY)
     val Materialize = SessionCommand(Prefix + "MATERIALIZE", Bundle.EMPTY)
@@ -141,6 +149,7 @@ internal object PlaybackCommands {
             Replace,
             Append,
             Remove,
+            RemoveWork,
             Move,
             Clear,
             Materialize,

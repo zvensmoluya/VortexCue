@@ -121,6 +121,31 @@ class PlaybackStateRepository(
             )
         }
 
+    suspend fun removeWork(workId: String): PlaybackRecoveryProjection =
+        database.withWriteTransaction {
+            val session = sessionInside()
+            val previous = playbackDao.queueEntries().map {
+                QueueContentRef(it.contentId, it.originWorkId, it.originPlaylistEntryId)
+            }
+            val retained = previous.filterNot { it.originWorkId == workId }
+            if (retained.size == previous.size) {
+                return@withWriteTransaction projection(session, playbackDao.queueItems())
+            }
+            val currentIndex = previous.indexOfFirst { it.contentId == session.currentContentId }
+            val nextCurrent =
+                when {
+                    retained.isEmpty() -> null
+                    retained.any { it.contentId == session.currentContentId } -> session.currentContentId
+                    else -> retained[currentIndex.coerceAtLeast(0).coerceAtMost(retained.lastIndex)].contentId
+                }
+            writeStructure(
+                entries = retained,
+                currentContentId = nextCurrent,
+                positionMs = if (nextCurrent == session.currentContentId) session.positionMs else 0L,
+                durationMs = if (nextCurrent == session.currentContentId) session.durationMs else 0L,
+            )
+        }
+
     suspend fun move(fromIndex: Int, toIndex: Int): PlaybackRecoveryProjection =
         database.withWriteTransaction {
             val session = sessionInside()

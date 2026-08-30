@@ -97,6 +97,31 @@ class PlaybackStateRepositoryTest {
     }
 
     @Test
+    fun removingWorkOnlyDropsQueueEntriesOriginatingFromThatWork() = runBlocking {
+        val initial =
+            repository.replaceEntries(
+                listOf(
+                    QueueContentRef("one", originWorkId = "removed-work"),
+                    QueueContentRef("two", originWorkId = "removed-work"),
+                    QueueContentRef("three", originPlaylistEntryId = "manual-entry"),
+                ),
+                currentIndex = 1,
+                positionMs = 500L,
+            )
+
+        val retained = repository.removeWork("removed-work")
+
+        assertEquals(listOf("three"), retained.queue.map { it.contentId })
+        assertEquals("three", retained.currentItem?.contentId)
+        assertEquals("manual-entry", retained.currentItem?.originPlaylistEntryId)
+        assertEquals(0L, retained.positionMs)
+        assertEquals(initial.queueRevision + 1L, retained.queueRevision)
+
+        val noOp = repository.removeWork("other-work")
+        assertEquals(retained.queueRevision, noOp.queueRevision)
+    }
+
+    @Test
     fun clearInvalidatesOldProgressAndRecoveryRetainsPlaybackParameters() = runBlocking {
         val active = repository.replace(listOf("one", "two"), currentIndex = 0, positionMs = 200L)
         repository.updatePlaybackParameters(playbackSpeed = 1.5f, shuffleEnabled = true, repeatMode = 2)

@@ -758,6 +758,7 @@ internal fun MainTabScreen(
                     onClick = {
                         workToDelete = null
                         scope.launch {
+                            gateway.removeWork(work.workId)
                             repository.deleteWork(work.workId)
                             onPlaylistViewChanged(null)
                             notice = "已移出作品（原文件未删除）"
