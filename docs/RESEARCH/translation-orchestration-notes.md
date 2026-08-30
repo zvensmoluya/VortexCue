@@ -346,6 +346,10 @@ Source Patch、SourceContext、Preparation policy version 及其失效关系需�
 
 首轮日语真实样本中，Gemini 3.7 Flash（Low）在完整 59 cue 扫描里删除了 5 条片尾式感谢污染，并把共同出现的 `吐息`、`トイキ` 和 `トイキ達` 聚为同一实体。样本所有者随后确认 `吐息` 确为角色本名，因此这里不是 ASR 把普通名词误作名字：至少在 `吐息` 这一处 ASR 原文正确，跨汉字与片假名表面形式的 alias 发现也得到真实语义验证。该结论不等于确认模型对同一批次的每一处源修复都正确。
 
+同一份 59 cue 与同一 prompt hash 的 OpenRouter 对照中，GPT-5.6 Luna（Low）使用 736 reasoning tokens，但编造了不存在的 evidence cue id，并误改 `吐息`，整份输出被严格校验拒绝；Luna（Medium）使用 970 reasoning tokens，通过校验且转为保守清理，但没有识别 `吐息 / トイキ` 关系。GPT-5.6 Terra（High）使用 2,932 reasoning tokens，在约 38 秒内通过校验并正确建立该 alias，同时完成污染删除与关键句修复。三个档位不能单独证明模型能力排序，但 Luna 的 Low / Medium 与 Terra 的 High 都呈现了可观察的推理投入和行为差异。
+
+相较之下，DeepSeek v4 Flash 在明确请求 Low 时仍产生约 15,000 reasoning tokens，耗时和语义结果也明显异常。当前只把它记录为该模型版本或服务端 effort 映射的兼容性异常，不据此否定 Preparation 使用显式思考档位的总体设计，也不假定 Low 是跨提供商可比较的绝对预算。
+
 同次翻译把源侧表达性标记处理成了不完整的括号式 `（笑`。翻译 policy v3 因此增加目标语言无关于具体标记和模型名称的通用约束：自然化非词汇语气标记、网络速记和表达性符号，避免重复表达情绪，不新增括号式说明，并保证标点完整。具体标记只进入回归样例，不写成生产 Prompt 的专项规则。
 
 ### 10.6 可选 Work Reference
