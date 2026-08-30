@@ -77,6 +77,12 @@ class AsrPlanningTest {
     }
 
     @Test
+    fun `empty provider timelines remain valid empty work units`() {
+        assertTrue(AsrTimelineMerger.mergeSegments(emptyList()).isEmpty())
+        assertTrue(AsrTimelineMerger.wordsToCues(emptyList()).isEmpty())
+    }
+
+    @Test
     fun `owned segments are clipped to the checkpoint ownership range`() {
         val windows = FixedAsrWindowPlanner().plan(597_000L)
         val firstBoundary = windows[0].ownedEndMs

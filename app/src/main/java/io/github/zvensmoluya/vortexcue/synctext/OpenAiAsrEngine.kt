@@ -66,7 +66,12 @@ class OpenAiAsrEngine(
         if (exchange.status !in 200..299) throw classifyFailure(exchange, request.apiKey)
 
         val root = parseRoot(exchange)
-        val relative = parseSegmentTimeline(root)
+        val relative =
+            try {
+                parseSegmentTimeline(root)
+            } catch (error: AsrException) {
+                throw error.withResponseContext(exchange)
+            }
         return AsrWindowResult(
             segments = AsrTimelineMerger.ownedSegments(request.window, relative),
             detectedLanguage =
@@ -146,6 +151,7 @@ class OpenAiAsrEngine(
         val values = root["segments"] as? JsonArray
             ?: throw timelineFailure("OpenAI ASR response omitted segment timestamps")
         if (values.isEmpty()) return emptyList()
+        if (values.containsOnlyExplicitBlankText("text")) return emptyList()
         val parsed =
             values.mapNotNull { element ->
                 val value = element as? JsonObject ?: return@mapNotNull null

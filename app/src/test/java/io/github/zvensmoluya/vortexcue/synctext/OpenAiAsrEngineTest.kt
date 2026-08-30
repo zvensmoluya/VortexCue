@@ -72,6 +72,17 @@ class OpenAiAsrEngineTest {
     }
 
     @Test
+    fun `explicitly blank segments are a valid silent window`() {
+        val engine = OpenAiAsrEngine(BoundedHttpExecutor(testClient()))
+        val root =
+            Json.parseToJsonElement(
+                """{"segments":[{"start":0.0,"end":0.0,"text":""},{"start":0.0,"end":1.0,"text":"  "}]}""",
+            ).jsonObject
+
+        assertTrue(engine.parseSegmentTimeline(root).isEmpty())
+    }
+
+    @Test
     fun `nonempty malformed segment array is rejected`() {
         val engine = OpenAiAsrEngine(BoundedHttpExecutor(testClient()))
         val root = Json.parseToJsonElement("""{"segments":[{"text":"missing timestamps"}]}""").jsonObject

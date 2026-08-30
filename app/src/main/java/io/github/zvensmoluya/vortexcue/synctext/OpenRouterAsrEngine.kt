@@ -110,9 +110,13 @@ class OpenRouterAsrEngine(
             if (exchange.status !in 200..299) throw classifyFailure(exchange, request.apiKey)
             val root = parseRoot(exchange)
             val relative =
-                when (request.profile.timelineStrategy) {
-                    AsrTimelineStrategy.Segment -> parseSegmentTimeline(root)
-                    AsrTimelineStrategy.Word -> parseGrokWords(root)
+                try {
+                    when (request.profile.timelineStrategy) {
+                        AsrTimelineStrategy.Segment -> parseSegmentTimeline(root)
+                        AsrTimelineStrategy.Word -> parseGrokWords(root)
+                    }
+                } catch (error: AsrException) {
+                    throw error.withResponseContext(exchange)
                 }
             val owned = AsrTimelineMerger.ownedSegments(request.window, relative)
             return AsrWindowResult(
@@ -177,6 +181,7 @@ class OpenRouterAsrEngine(
         val values = root["segments"] as? JsonArray
             ?: throw timelineFailure("ASR response omitted segment timestamps")
         if (values.isEmpty()) return emptyList()
+        if (values.containsOnlyExplicitBlankText("text")) return emptyList()
         val parsed = values.mapNotNull(::parseTimestampedText)
         if (parsed.isEmpty()) throw timelineFailure("ASR response contained no valid segments")
         return parsed
@@ -186,6 +191,7 @@ class OpenRouterAsrEngine(
         val values = root["words"] as? JsonArray
             ?: throw timelineFailure("Grok response omitted word timestamps")
         if (values.isEmpty()) return emptyList()
+        if (values.containsOnlyExplicitBlankText("word", "text")) return emptyList()
         val parsed = values.mapNotNull { element ->
             val value = element as? JsonObject ?: return@mapNotNull null
             parseTimestampedText(value, value.string("word") ?: value.string("text"))
@@ -269,6 +275,29 @@ internal fun asrTransportFailure(error: IOException) =
         message = "ASR request failed before a valid response",
         cause = error,
     )
+
+internal fun AsrException.withResponseContext(exchange: HttpExchange) =
+    AsrException(
+        category = category,
+        retryable = retryable,
+        shouldSplit = shouldSplit,
+        retryAfterMs = retryAfterMs,
+        httpStatus = httpStatus ?: exchange.status,
+        requestId = requestId ?: exchange.requestId,
+        rawResponse = rawResponse ?: exchange.body,
+        message = message ?: "ASR response timeline was invalid",
+        cause = this,
+    )
+
+internal fun JsonArray.containsOnlyExplicitBlankText(vararg fieldNames: String): Boolean =
+    isNotEmpty() &&
+        all { element ->
+            val value = element as? JsonObject ?: return@all false
+            fieldNames
+                .firstNotNullOfOrNull { fieldName ->
+                    (value[fieldName] as? JsonPrimitive)?.contentOrNull
+                }?.isBlank() == true
+        }
 
 internal fun parseRetryAfterMs(
     value: String?,

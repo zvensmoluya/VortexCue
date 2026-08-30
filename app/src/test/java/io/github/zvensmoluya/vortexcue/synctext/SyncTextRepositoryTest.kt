@@ -804,6 +804,46 @@ class SyncTextTaskRunnerRecoveryTest {
     }
 
     @Test
+    fun `silent tail window completes without cancelling the speaking main window`() = runBlocking {
+        insertAudioContent(durationMs = 303_000L)
+        repository.saveCredential("asr-silent-tail", "ASR", CredentialPurpose.Asr, "secret")
+        val scheme =
+            repository.createScheme(
+                name = "ASR silent tail",
+                asrProfile = AsrProfile.OpenRouterWhisperV1,
+                asrCredentialId = "asr-silent-tail",
+                isDefault = true,
+            )
+        val task =
+            repository.submit(
+                GenerationRequest(
+                    contentId = RunnerContentId,
+                    input = GenerationInput.AudioTrack("audio:0"),
+                    output = GenerationOutput.SourceOnly,
+                    schemeId = scheme.schemeId,
+                ),
+            )
+        val engine = SilentTailAsrEngine()
+
+        assertTrue(runner(engine).runUntilIdle())
+
+        val completedTask = requireNotNull(database.syncTextDao().task(task.taskId))
+        assertEquals(
+            "task failed: ${completedTask.errorCategory}: ${completedTask.errorMessage}",
+            GenerationTaskState.Completed.name,
+            completedTask.state,
+        )
+        val windows = database.syncTextDao().asrWindows(completedTask.currentAttemptId).sortedBy { it.ordinal }
+        val final = requireNotNull(repository.currentSourceResult(RunnerContentId))
+        val published = revisionReader.read(final.sourceRevisionId)
+        assertEquals(listOf("main speech"), published.cues.map { it.text })
+        assertEquals(listOf(1, 0), windows.map { it.cueCount })
+        assertTrue(windows.all { it.state == "Completed" && it.transcriptArtifactId != null })
+        assertEquals(1, engine.calls(0))
+        assertEquals(1, engine.calls(1))
+    }
+
+    @Test
     fun `runner continues from audio recognition into translation in one task`() = runBlocking {
         insertAudioContent(durationMs = 100_000L)
         repository.saveCredential("asr-combined", "ASR", CredentialPurpose.Asr, "asr-secret")
@@ -1209,6 +1249,39 @@ private class RecoveringAsrEngine : AsrEngine {
             requestBytes = 1L,
             responseBytes = 1L,
             requestId = null,
+        )
+    }
+
+    fun calls(ordinal: Int): Int = callCounts[ordinal] ?: 0
+}
+
+private class SilentTailAsrEngine : AsrEngine {
+    private val callCounts = ConcurrentHashMap<Int, Int>()
+    private val mainStarted = CompletableDeferred<Unit>()
+    private val tailCompleted = CompletableDeferred<Unit>()
+
+    override suspend fun transcribe(request: AsrRequest): AsrWindowResult {
+        val ordinal = request.window.ordinal
+        callCounts.merge(ordinal, 1, Int::plus)
+        val segments =
+            if (ordinal == 0) {
+                mainStarted.complete(Unit)
+                tailCompleted.await()
+                listOf(AsrTimestampedToken(10L, 1_000L, "main speech"))
+            } else {
+                mainStarted.await()
+                tailCompleted.complete(Unit)
+                emptyList()
+            }
+        return AsrWindowResult(
+            segments = segments,
+            detectedLanguage = "en",
+            usage = UsageRecord(totalTokens = 1L),
+            rawResponse = if (segments.isEmpty()) "{\"segments\":[]}".toByteArray() else byteArrayOf(1),
+            httpStatus = 200,
+            requestBytes = 1L,
+            responseBytes = 1L,
+            requestId = "response-$ordinal",
         )
     }
 

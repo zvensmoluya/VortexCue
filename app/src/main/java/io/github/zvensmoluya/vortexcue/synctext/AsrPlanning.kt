@@ -151,6 +151,7 @@ object AsrTimelineMerger {
         }
 
     fun mergeSegments(segments: List<AsrTimestampedToken>): List<SubtitleCue> {
+        if (segments.isEmpty()) return emptyList()
         val sorted = segments.sortedWith(compareBy<AsrTimestampedToken> { it.startMs }.thenBy { it.endMs })
         val deduplicated = mutableListOf<AsrTimestampedToken>()
         sorted.forEach { candidate ->
@@ -167,6 +168,7 @@ object AsrTimelineMerger {
     }
 
     fun wordsToCues(words: List<AsrTimestampedToken>): List<SubtitleCue> {
+        if (words.isEmpty()) return emptyList()
         val sorted = words.sortedWith(compareBy<AsrTimestampedToken> { it.startMs }.thenBy { it.endMs })
         val groups = mutableListOf<MutableList<AsrTimestampedToken>>()
         sorted.forEach { word ->
