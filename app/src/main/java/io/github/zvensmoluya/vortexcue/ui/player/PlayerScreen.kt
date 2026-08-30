@@ -1198,14 +1198,17 @@ internal fun SyncTextProgressStatus(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            WorkUnitRing(presentation = presentation, size = 112.dp)
+            if (presentation.showWorkUnitRing) {
+                WorkUnitRing(presentation = presentation, size = 112.dp)
+            } else {
+                StreamActivityGlyph(presentation = presentation, size = 72.dp)
+            }
             Spacer(Modifier.height(20.dp))
             Text(
                 presentation.label,
                 color = AppPrimaryText,
                 fontSize = 16.sp,
                 maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
             )
             presentation.detail?.let { detail ->
@@ -1223,28 +1226,26 @@ internal fun SyncTextProgressStatus(
         Row(
             modifier = modifier.heightIn(min = 52.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (presentation.showWorkUnitRing) {
                 WorkUnitRing(presentation = presentation, size = 44.dp)
             } else {
-                StreamActivityGlyph(presentation = presentation)
+                StreamActivityGlyph(presentation = presentation, size = 52.dp)
             }
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     presentation.label,
                     color = AppPrimaryText,
                     fontSize = 13.sp,
                     maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 presentation.detail?.let { detail ->
                     Text(
                         detail,
                         color = AppSecondaryText,
                         fontSize = 11.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        maxLines = 2,
                     )
                 }
             }
@@ -1253,7 +1254,10 @@ internal fun SyncTextProgressStatus(
 }
 
 @Composable
-private fun StreamActivityGlyph(presentation: SyncTextProgressPresentation) {
+private fun StreamActivityGlyph(
+    presentation: SyncTextProgressPresentation,
+    size: androidx.compose.ui.unit.Dp,
+) {
     val glow = remember { Animatable(0.16f) }
     val initialRevision = remember { presentation.streamActivityRevision }
     LaunchedEffect(presentation.streamActivityRevision) {
@@ -1265,27 +1269,39 @@ private fun StreamActivityGlyph(presentation: SyncTextProgressPresentation) {
             glow.animateTo(0.16f, animationSpec = tween(850))
         }
     }
-    Canvas(
-        modifier =
-            Modifier.size(30.dp).semantics {
-                contentDescription = presentation.label
-            },
-    ) {
-        val stroke = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
-        drawArc(
-            color = AppHairline,
-            startAngle = 140f,
-            sweepAngle = 260f,
-            useCenter = false,
-            style = stroke,
-        )
-        drawArc(
-            color = AppAccent.copy(alpha = 0.25f + glow.value * 0.75f),
-            startAngle = 300f,
-            sweepAngle = 80f,
-            useCenter = false,
-            style = stroke,
-        )
+    Box(modifier = Modifier.size(size), contentAlignment = Alignment.Center) {
+        Canvas(modifier = Modifier.fillMaxSize().padding(if (size > 60.dp) 3.dp else 2.dp)) {
+            val stroke = Stroke(width = if (size > 60.dp) 5.dp.toPx() else 3.dp.toPx(), cap = StrokeCap.Round)
+            drawArc(
+                color = AppHairline,
+                startAngle = 140f,
+                sweepAngle = 260f,
+                useCenter = false,
+                style = stroke,
+            )
+            drawArc(
+                color = AppAccent.copy(alpha = 0.25f + glow.value * 0.75f),
+                startAngle = 300f,
+                sweepAngle = 80f,
+                useCenter = false,
+                style = stroke,
+            )
+        }
+        presentation.ringCenterText?.let { centerText ->
+            Text(
+                centerText,
+                color = AppPrimaryText,
+                fontSize =
+                    when {
+                        size > 60.dp -> 12.sp
+                        centerText.length <= 5 -> 10.sp
+                        centerText.length <= 7 -> 8.sp
+                        else -> 7.sp
+                    },
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+        }
     }
 }
 
@@ -1578,7 +1594,7 @@ private fun SyncTextTaskIndicator(
                         }
                     } else {
                         IconButton(onClick = onCancel) {
-                            Icon(Icons.Outlined.Pause, contentDescription = "暂停同步文字", tint = AppSecondaryText)
+                            Icon(Icons.Outlined.Pause, contentDescription = "暂停生成", tint = AppSecondaryText)
                         }
                         IconButton(onClick = onAbort) {
                             Icon(Icons.Outlined.Stop, contentDescription = "停止生成", tint = AppError)
@@ -1589,7 +1605,6 @@ private fun SyncTextTaskIndicator(
         }
     } else {
         Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
-            if (launch == null) Spacer(Modifier.size(48.dp))
             SyncTextProgressStatus(task = task, launch = launch, modifier = Modifier.weight(1f))
             if (launch == null) {
                 if (task?.networkWaitReason == GenerationNetworkWaitReason.MeteredPermissionRequired) {
@@ -1598,7 +1613,7 @@ private fun SyncTextTaskIndicator(
                     }
                 } else {
                     IconButton(onClick = onCancel) {
-                        Icon(Icons.Outlined.Pause, contentDescription = "暂停同步文字", tint = AppSecondaryText)
+                        Icon(Icons.Outlined.Pause, contentDescription = "暂停生成", tint = AppSecondaryText)
                     }
                     IconButton(onClick = onAbort) {
                         Icon(Icons.Outlined.Stop, contentDescription = "停止生成", tint = AppError)

@@ -92,7 +92,9 @@ class SyncTextProgressStatusComposeTest {
         }
 
         compose.onNodeWithText("正在接收译文").assertIsDisplayed()
-        compose.onNodeWithText("17/60 · ≈3.1k tokens").assertIsDisplayed()
+        compose.onNodeWithText("17/60").assertIsDisplayed()
+        compose.onNodeWithText("≈3.1k tokens").assertIsDisplayed()
+        compose.onNodeWithText("17/60 · ≈3.1k tokens").assertDoesNotExist()
         compose.onNodeWithText("0/1").assertDoesNotExist()
     }
 
@@ -220,8 +222,10 @@ class SyncTextProgressStatusComposeTest {
             }
         }
 
-        compose.onNodeWithContentDescription("暂停同步文字").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("暂停生成").assertIsDisplayed().performClick()
         compose.onNodeWithContentDescription("停止生成").assertIsDisplayed().performClick()
+        compose.onNodeWithText("暂停生成").assertDoesNotExist()
+        compose.onNodeWithText("停止生成").assertDoesNotExist()
         compose.runOnIdle {
             assertEquals(1, pauses)
             assertEquals(1, stops)

@@ -6,12 +6,14 @@ import io.github.zvensmoluya.vortexcue.synctext.GenerationStage
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskKind
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskState
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskSummary
+import io.github.zvensmoluya.vortexcue.synctext.GenerationWorkUnitKind
 import io.github.zvensmoluya.vortexcue.synctext.GenerationWorkUnitState
 import java.util.Locale
 
 internal data class SyncTextProgressPresentation(
     val label: String,
     val detail: String? = null,
+    val ringCenterText: String? = null,
     val completedUnitCount: Int = 0,
     val totalUnitCount: Int = 0,
     val activeUnitCount: Int = 0,
@@ -44,6 +46,7 @@ internal fun syncTextProgressPresentation(
     val active = workUnits.count { it.state == GenerationWorkUnitState.Running }
     val total = workUnits.size
     val phases = workUnits.mapNotNull { it.runtimePhase }
+    val translationCoverage = activeTask.translationCoverage()
     val (label, detail) =
         when {
             activeTask.networkWaitReason == GenerationNetworkWaitReason.MeteredPermissionRequired ->
@@ -55,20 +58,28 @@ internal fun syncTextProgressPresentation(
                 "已排队 · 等待$operation" to
                     (activeTask.queuePosition.takeIf { it > 0 }?.let { "前方 $it 项任务" } ?: "等待内核接手")
             }
+            translationCoverage != null ->
+                translationRuntimeFact(activeTask, phases, completed, total, translationCoverage)
             activeTask.kind == GenerationTaskKind.SourceGeneration ->
                 sourceRuntimeFact(activeTask.runtimePhase, phases, active, completed, total)
-            else -> translationRuntimeFact(activeTask, phases, completed, total)
+            else -> translationRuntimeFact(activeTask, phases, completed, total, translationCoverage)
         }
     return SyncTextProgressPresentation(
         label = label,
         detail = detail,
+        ringCenterText =
+            translationCoverage
+                ?.takeIf { it.observed > 0 }
+                ?.let { "${it.observed}/${it.expected}" },
         completedUnitCount = completed,
         totalUnitCount = total,
         activeUnitCount = active,
         unitStates = workUnits.map { it.state },
         streamedTokens = activeTask.streamedTokenEstimate?.takeIf { it > 0L }?.let(::formatStreamedTokens),
         streamActivityRevision = activeTask.streamActivityRevision,
-        showWorkUnitRing = activeTask.kind == GenerationTaskKind.SourceGeneration,
+        showWorkUnitRing =
+            activeTask.kind == GenerationTaskKind.SourceGeneration &&
+                workUnits.none { it.kind == GenerationWorkUnitKind.TranslationBatch },
     )
 }
 
@@ -107,16 +118,15 @@ private fun translationRuntimeFact(
     phases: List<GenerationRuntimePhase>,
     completed: Int,
     total: Int,
+    coverage: TranslationCoverage?,
 ): Pair<String, String?> {
-    val observed = task.workUnits.sumOf { it.observedItemCount ?: 0 }
-    val expected = task.workUnits.sumOf { it.expectedItemCount ?: 0 }
     val tokens = task.streamedTokenEstimate?.takeIf { it > 0L }?.let(::formatStreamedTokens)
     val batches = total.takeIf { it > 1 }?.let { "$completed/$it 批" }
     return when {
         GenerationRuntimePhase.RetryingTranslation in phases -> "正在重试" to compactDetail(tokens, batches)
         GenerationRuntimePhase.ReceivingTranslation in phases ->
-            "正在接收译文" to
-                compactDetail(expected.takeIf { it > 0 }?.let { "$observed/$it" }, tokens, batches)
+            (if (coverage?.isFullyObserved == true) "仍在接收译文" else "正在接收译文") to
+                compactDetail(tokens, batches)
         GenerationRuntimePhase.ValidatingTranslation in phases -> "正在校验译文" to compactDetail(tokens, batches)
         GenerationRuntimePhase.ModelReasoning in phases ->
             "模型正在处理" to compactDetail(tokens, batches)
@@ -128,6 +138,24 @@ private fun translationRuntimeFact(
             "正在准备翻译" to compactDetail(tokens, batches)
         else -> task.stage.progressLabel(task.kind) to compactDetail(tokens, batches)
     }
+}
+
+private data class TranslationCoverage(
+    val observed: Int,
+    val expected: Int,
+) {
+    val isFullyObserved: Boolean
+        get() = observed >= expected
+}
+
+private fun GenerationTaskSummary.translationCoverage(): TranslationCoverage? {
+    val translationUnits = workUnits.filter { it.kind == GenerationWorkUnitKind.TranslationBatch }
+    val expected = translationUnits.sumOf { it.expectedItemCount ?: 0 }
+    if (expected <= 0) return null
+    return TranslationCoverage(
+        observed = translationUnits.sumOf { it.observedItemCount ?: 0 }.coerceIn(0, expected),
+        expected = expected,
+    )
 }
 
 private fun compactDetail(vararg values: String?): String? =

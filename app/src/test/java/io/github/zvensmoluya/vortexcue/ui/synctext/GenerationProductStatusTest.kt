@@ -122,7 +122,8 @@ class GenerationProductStatusTest {
         assertEquals(
             SyncTextProgressPresentation(
                 label = "正在接收译文",
-                detail = "17/60 · ≈3.1k tokens",
+                detail = "≈3.1k tokens",
+                ringCenterText = "17/60",
                 completedUnitCount = 0,
                 totalUnitCount = 1,
                 activeUnitCount = 1,
@@ -143,6 +144,36 @@ class GenerationProductStatusTest {
                 launch = null,
             ),
         )
+    }
+
+    @Test
+    fun presentsFullyObservedRowsAsStillReceivingUntilValidationStarts() {
+        val receiving =
+            GenerationWorkUnitSummary(
+                workUnitId = "batch-1",
+                kind = GenerationWorkUnitKind.TranslationBatch,
+                ordinal = 0,
+                state = GenerationWorkUnitState.Running,
+                runtimePhase = GenerationRuntimePhase.ReceivingTranslation,
+                observedItemCount = 99,
+                expectedItemCount = 99,
+            )
+
+        val presentation =
+            syncTextProgressPresentation(
+                task(
+                    state = GenerationTaskState.Running,
+                    stage = GenerationStage.Translating,
+                    kind = GenerationTaskKind.TranslationDerivation,
+                    workUnits = listOf(receiving),
+                    streamedTokenEstimate = 89_000L,
+                ),
+                launch = null,
+            )
+
+        assertEquals("仍在接收译文", presentation?.label)
+        assertEquals("99/99", presentation?.ringCenterText)
+        assertEquals("≈89k tokens", presentation?.detail)
     }
 
     private fun task(
