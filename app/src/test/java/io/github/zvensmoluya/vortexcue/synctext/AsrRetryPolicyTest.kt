@@ -99,7 +99,7 @@ class AsrRetryPolicyTest {
             uploadEndMs = 300_000L,
             pcmStartFrame = 0L,
             pcmEndFrame = 4_800_000L,
-            cutReason = "fixed_v1",
+            cutReason = "fixed_v2",
             isLast = true,
         )
 }

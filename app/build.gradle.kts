@@ -15,6 +15,7 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.0.1"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -110,5 +111,7 @@ dependencies {
     testImplementation(libs.sqlite.async.jvm)
     testImplementation(libs.sqlite.bundled.jvm)
     testImplementation(libs.robolectric)
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
 }
 

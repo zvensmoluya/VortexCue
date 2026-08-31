@@ -63,17 +63,21 @@ class LiveMediaPipelineTest {
                     ),
                 )
             }
-            val sourceCues = mergeAsrWindows(config.asrProfile, asrResults)
+            val sourceCues = mergeAsrWindows(config.asrProfile, windows, asrResults)
             require(sourceCues.isNotEmpty()) {
                 "Live media ASR returned no usable timestamped speech across ${windows.size} windows"
             }
 
             val report = liveReportFile(sourceFile, config.asrProfile)
-            writeReport(report, config, asrResults, sourceCues, emptyList(), emptyList(), windows.size)
+            writeReport(report, config, windows, asrResults, sourceCues, emptyList(), emptyList())
+            if (config.mediaAsrOnly) {
+                println("Live media ASR report: ${report.absolutePath}")
+                return@runBlocking
+            }
             val outputs = translate(config, httpClientWrapper, sourceCues)
             val targetCues = outputs.flatMap(TranslationBatchOutput::targetCues)
             require(targetCues.size == sourceCues.size) { "Translated cue count does not match ASR output" }
-            writeReport(report, config, asrResults, sourceCues, targetCues, outputs, windows.size)
+            writeReport(report, config, windows, asrResults, sourceCues, targetCues, outputs)
             println("Live media report: ${report.absolutePath}")
         } finally {
             normalizedWavs.forEach(File::delete)
@@ -85,18 +89,20 @@ class LiveMediaPipelineTest {
 
     private fun mergeAsrWindows(
         profile: AsrProfile,
+        windows: List<AsrWindowPlan>,
         results: List<AsrWindowResult>,
     ): List<SubtitleCue> {
-        val windowCues =
-            results.flatMap { result ->
+        require(windows.size == results.size)
+        val stitchInputs =
+            windows.zip(results).map { (window, result) ->
+                val cues =
                 when (profile.timelineStrategy) {
-                    AsrTimelineStrategy.Segment -> AsrTimelineMerger.mergeSegments(result.segments)
+                    AsrTimelineStrategy.Segment -> AsrTimelineMerger.segmentsToCues(result.segments)
                     AsrTimelineStrategy.Word -> AsrTimelineMerger.wordsToCues(result.segments)
                 }
+                AsrStitchWindow(window, cues.map { cue -> AsrTimestampedToken(cue.startMs, cue.endMs, cue.text) })
             }
-        return AsrTimelineMerger.mergeSegments(
-            windowCues.map { cue -> AsrTimestampedToken(cue.startMs, cue.endMs, cue.text) },
-        )
+        return AsrTimelineMerger.segmentsToCues(AsrOverlapStitcher.stitch(stitchInputs))
     }
 
     private fun normalizeWindow(
@@ -201,12 +207,13 @@ class LiveMediaPipelineTest {
     private fun writeReport(
         report: File,
         config: LiveProviderProbeConfig,
+        windows: List<AsrWindowPlan>,
         asrResults: List<AsrWindowResult>,
         sourceCues: List<SubtitleCue>,
         targetCues: List<SubtitleCue>,
         translationOutputs: List<TranslationBatchOutput>,
-        windowCount: Int,
     ) {
+        require(windows.size == asrResults.size)
         val targetById = targetCues.associateBy(SubtitleCue::stableId)
         val asrUsage = asrResults.map(AsrWindowResult::usage).sumRealUsage()
         val usage = translationOutputs.map(TranslationBatchOutput::usage).sumRealUsage()
@@ -216,7 +223,7 @@ class LiveMediaPipelineTest {
                 appendLine()
                 appendLine("- Excerpt: ${decimal(config.mediaStartSeconds)}s + ${decimal(config.mediaDurationSeconds)}s")
                 appendLine("- ASR profile: ${config.asrProfile}")
-                appendLine("- ASR windows: $windowCount")
+                appendLine("- ASR windows: ${windows.size}")
                 appendLine("- Detected language: ${asrResults.mapNotNull(AsrWindowResult::detectedLanguage).distinct().joinToString().ifEmpty { "unknown" }}")
                 appendLine("- Source cues: ${sourceCues.size}")
                 appendLine("- Translation batches: ${translationOutputs.size}")
@@ -224,6 +231,25 @@ class LiveMediaPipelineTest {
                 appendLine("- Repair calls: ${translationOutputs.sumOf(TranslationBatchOutput::repairCount)}")
                 appendLine("- ASR cost USD: ${asrUsage.costUsd ?: "unreported"}")
                 appendLine("- Translation cost USD: ${usage.costUsd ?: "unreported"}")
+                appendLine()
+                appendLine("## Raw ASR windows")
+                appendLine()
+                windows.zip(asrResults).forEachIndexed { index, (window, result) ->
+                    appendLine(
+                        "### Window $index: upload ${timestamp(window.uploadStartMs)} - " +
+                            "${timestamp(window.uploadEndMs)}, ownership ${timestamp(window.ownedStartMs)} - " +
+                            timestamp(window.ownedEndMs),
+                    )
+                    appendLine()
+                    result.segments.forEach { segment ->
+                        appendLine(
+                            "- ${timestamp(segment.startMs)} - ${timestamp(segment.endMs)}: " +
+                                markdownCell(segment.text),
+                        )
+                    }
+                    appendLine()
+                }
+                appendLine("## Stitched timeline")
                 appendLine()
                 appendLine("| Time | ASR (${config.mediaSourceLanguage}) | Translation (${config.targetLanguage}) |")
                 appendLine("| --- | --- | --- |")

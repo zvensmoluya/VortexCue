@@ -876,6 +876,44 @@ class SyncTextTaskRunnerRecoveryTest {
     }
 
     @Test
+    fun `runner reconciles complete overlap cues before final publication`() = runBlocking {
+        insertAudioContent(durationMs = 347_000L)
+        repository.saveCredential("asr-stitch", "ASR", CredentialPurpose.Asr, "secret")
+        val scheme =
+            repository.createScheme(
+                name = "ASR stitch",
+                asrProfile = AsrProfile.OpenRouterQwen3Asr17BV1,
+                asrCredentialId = "asr-stitch",
+                isDefault = true,
+            )
+        val task =
+            repository.submit(
+                GenerationRequest(
+                    contentId = RunnerContentId,
+                    input = GenerationInput.AudioTrack("audio:0"),
+                    output = GenerationOutput.SourceOnly,
+                    schemeId = scheme.schemeId,
+                ),
+            )
+
+        assertTrue(runner(BoundaryStitchAsrEngine()).runUntilIdle())
+
+        val completedTask = requireNotNull(database.syncTextDao().task(task.taskId))
+        assertEquals(GenerationTaskState.Completed.name, completedTask.state)
+        val windows = database.syncTextDao().asrWindows(completedTask.currentAttemptId).sortedBy { it.ordinal }
+        assertEquals(
+            listOf(FixedAsrWindowPlanner.PlannerVersion, FixedAsrWindowPlanner.PlannerVersion),
+            windows.map { it.plannerVersion },
+        )
+        assertEquals(listOf(1, 1), windows.map { it.cueCount })
+        val final = requireNotNull(repository.currentSourceResult(RunnerContentId))
+        val published = revisionReader.read(final.sourceRevisionId)
+        assertEquals(listOf("Good night"), published.cues.map { it.text })
+        assertEquals(170_000L, published.cues.single().startMs)
+        assertEquals(178_000L, published.cues.single().endMs)
+    }
+
+    @Test
     fun `runner continues from audio recognition into translation in one task`() = runBlocking {
         insertAudioContent(durationMs = 100_000L)
         repository.saveCredential("asr-combined", "ASR", CredentialPurpose.Asr, "asr-secret")
@@ -1354,6 +1392,27 @@ private class SilentTailAsrEngine : AsrEngine {
     }
 
     fun calls(ordinal: Int): Int = callCounts[ordinal] ?: 0
+}
+
+private class BoundaryStitchAsrEngine : AsrEngine {
+    override suspend fun transcribe(request: AsrRequest): AsrWindowResult {
+        val segment =
+            if (request.window.ordinal == 0) {
+                AsrTimestampedToken(170_000L, 175_000L, "Good night.")
+            } else {
+                AsrTimestampedToken(172_000L, 178_000L, "Good night")
+            }
+        return AsrWindowResult(
+            segments = listOf(segment),
+            detectedLanguage = "en",
+            usage = UsageRecord(totalTokens = 1L),
+            rawResponse = byteArrayOf(1),
+            httpStatus = 200,
+            requestBytes = 1L,
+            responseBytes = 1L,
+            requestId = "stitch-${request.window.ordinal}",
+        )
+    }
 }
 
 private class SuccessfulTranslationAdapter : TranslationProtocolAdapter {

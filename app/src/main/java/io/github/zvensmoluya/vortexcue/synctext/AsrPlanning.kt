@@ -65,7 +65,7 @@ class FixedAsrWindowPlanner(
                 uploadEndMs = uploadEnd,
                 pcmStartFrame = framesAt(uploadStart),
                 pcmEndFrame = framesAt(uploadEnd),
-                cutReason = "fixed_v1",
+                cutReason = "fixed_v2",
                 isLast = index == uploads.lastIndex,
             )
         }.also { validateCoverage(it, durationMs) }
@@ -95,6 +95,7 @@ class FixedAsrWindowPlanner(
                     pcmStartFrame = framesAt(uploadStart),
                     pcmEndFrame = framesAt(uploadEnd),
                     cutReason = "retry_split_v1",
+                    plannerVersion = parent.plannerVersion,
                     parentWindowId = parent.windowId,
                     isLast = parent.isLast && index == 1,
                 )
@@ -112,7 +113,8 @@ class FixedAsrWindowPlanner(
     private fun framesAt(milliseconds: Long): Long = milliseconds * sampleRate / 1_000L
 
     companion object {
-        const val PlannerVersion = "fixed_v1"
+        const val PlannerVersion = "fixed_v2"
+        const val LegacyPlannerVersion = "fixed_v1"
         private const val BytesPerFrame = 2L
         private const val WavHeaderBytes = 44L
 
@@ -135,20 +137,48 @@ data class AsrTimestampedToken(
 )
 
 object AsrTimelineMerger {
-    fun ownedSegments(
+    fun windowSegments(
+        window: AsrWindowPlan,
+        relativeSegments: List<AsrTimestampedToken>,
+    ): List<AsrTimestampedToken> =
+        if (window.plannerVersion == FixedAsrWindowPlanner.LegacyPlannerVersion) {
+            legacyOwnedSegments(window, relativeSegments)
+        } else {
+            absoluteSegments(window, relativeSegments)
+        }
+
+    private fun absoluteSegments(
         window: AsrWindowPlan,
         relativeSegments: List<AsrTimestampedToken>,
     ): List<AsrTimestampedToken> =
         relativeSegments.mapNotNull { segment ->
-            val start = (window.uploadStartMs + segment.startMs).coerceAtLeast(0L)
+            val start = (window.uploadStartMs + segment.startMs).coerceAtLeast(window.uploadStartMs)
             val end = (window.uploadStartMs + segment.endMs).coerceAtMost(window.uploadEndMs)
             if (end <= start || segment.text.isBlank()) return@mapNotNull null
+            AsrTimestampedToken(start, end, segment.text.trim())
+        }
+
+    private fun legacyOwnedSegments(
+        window: AsrWindowPlan,
+        relativeSegments: List<AsrTimestampedToken>,
+    ): List<AsrTimestampedToken> =
+        absoluteSegments(window, relativeSegments).mapNotNull { segment ->
+            val start = segment.startMs
+            val end = segment.endMs
             val midpoint = start + (end - start) / 2L
             if (!window.owns(midpoint)) return@mapNotNull null
             val ownedStart = maxOf(start, window.ownedStartMs)
             val ownedEnd = minOf(end, window.ownedEndMs)
-            AsrTimestampedToken(ownedStart, ownedEnd, segment.text.trim())
+            AsrTimestampedToken(ownedStart, ownedEnd, segment.text)
         }
+
+    fun segmentsToCues(segments: List<AsrTimestampedToken>): List<SubtitleCue> {
+        if (segments.isEmpty()) return emptyList()
+        val sorted = segments.sortedWith(compareBy<AsrTimestampedToken> { it.startMs }.thenBy { it.endMs })
+        return CueIdNormalizer.normalize(
+            sorted.map { segment -> SubtitleCue(segment.startMs, segment.endMs, segment.text) },
+        )
+    }
 
     fun mergeSegments(segments: List<AsrTimestampedToken>): List<SubtitleCue> {
         if (segments.isEmpty()) return emptyList()

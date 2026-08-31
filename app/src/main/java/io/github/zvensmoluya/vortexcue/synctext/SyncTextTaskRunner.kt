@@ -744,8 +744,29 @@ class SyncTextTaskRunner(
     }
 
     private fun mergeWindowTranscripts(transcripts: List<WindowTranscript>): List<SubtitleCue> {
-        val tokens = transcripts.flatMap { transcript -> transcript.cues.map { it.toTimestampedToken() } }
-        return AsrTimelineMerger.mergeSegments(tokens)
+        if (transcripts.isEmpty()) return emptyList()
+        val usesOverlapStitcher =
+            transcripts.all { transcript ->
+                transcript.plan.plannerVersion != FixedAsrWindowPlanner.LegacyPlannerVersion
+            }
+        val tokens =
+            if (usesOverlapStitcher) {
+                AsrOverlapStitcher.stitch(
+                    transcripts.map { transcript ->
+                        AsrStitchWindow(
+                            plan = transcript.plan,
+                            segments = transcript.cues.map { it.toTimestampedToken() },
+                        )
+                    },
+                )
+            } else {
+                transcripts.flatMap { transcript -> transcript.cues.map { it.toTimestampedToken() } }
+            }
+        return if (usesOverlapStitcher) {
+            AsrTimelineMerger.segmentsToCues(tokens)
+        } else {
+            AsrTimelineMerger.mergeSegments(tokens)
+        }
     }
 
     private fun resolveAsrLanguage(
@@ -766,6 +787,7 @@ class SyncTextTaskRunner(
         entity: AsrWindowEntity,
     ): List<WindowTranscript> {
         ensureRunnable(task.taskId)
+        val plan = entity.toPlan(mediaDurationMs)
         if (entity.state == CompletedState && entity.transcriptArtifactId != null) {
             diagnostics.record(
                 SyncTextDiagnosticEventType.WorkUnitLifecycle,
@@ -778,6 +800,7 @@ class SyncTextTaskRunner(
             )
             return listOf(
                 WindowTranscript(
+                    plan = plan,
                     cues = readAsrCheckpoint(entity),
                     language = entity.detectedLanguage,
                     usage = UsageRecord(entity.inputTokens, entity.outputTokens, entity.totalTokens, entity.costUsd),
@@ -792,7 +815,6 @@ class SyncTextTaskRunner(
             }
         }
 
-        val plan = entity.toPlan(mediaDurationMs)
         val workUnitStartedElapsedMs = elapsedRealtimeMs()
         diagnostics.record(
             SyncTextDiagnosticEventType.WorkUnitLifecycle,
@@ -853,7 +875,12 @@ class SyncTextTaskRunner(
                     )
                     val cues =
                         when (AsrProfile.fromStoredValue(attempt.asrProfile).timelineStrategy) {
-                            AsrTimelineStrategy.Segment -> AsrTimelineMerger.mergeSegments(result.segments)
+                            AsrTimelineStrategy.Segment ->
+                                if (plan.plannerVersion == FixedAsrWindowPlanner.LegacyPlannerVersion) {
+                                    AsrTimelineMerger.mergeSegments(result.segments)
+                                } else {
+                                    AsrTimelineMerger.segmentsToCues(result.segments)
+                                }
                             AsrTimelineStrategy.Word -> AsrTimelineMerger.wordsToCues(result.segments)
                         }
                     val timeline = CanonicalTextNormalizer.normalizeAsrWorkUnit(cues)
@@ -895,10 +922,11 @@ class SyncTextTaskRunner(
                     )
                     return listOf(
                         WindowTranscript(
-                            timeline.toSubtitleCues(),
-                            result.detectedLanguage,
-                            result.usage,
-                            checkpoint.artifactId,
+                            plan = plan,
+                            cues = timeline.toSubtitleCues(),
+                            language = result.detectedLanguage,
+                            usage = result.usage,
+                            artifactId = checkpoint.artifactId,
                         ),
                     )
                 } catch (error: AsrException) {
@@ -995,7 +1023,19 @@ class SyncTextTaskRunner(
         val cues = (decoded.payload as? TextArtifactPayload.Timeline)?.value?.toSubtitleCues()
             ?: throw CheckpointIntegrityException("ASR checkpoint payload is invalid")
         if (cues.size != expectedCueCount) throw CheckpointIntegrityException("ASR checkpoint cue count does not match")
-        if (cues.any { it.startMs < entity.ownedStartMs || it.endMs > entity.ownedEndMs }) {
+        val checkpointStartMs =
+            if (entity.plannerVersion == FixedAsrWindowPlanner.LegacyPlannerVersion) {
+                entity.ownedStartMs
+            } else {
+                entity.uploadStartMs
+            }
+        val checkpointEndMs =
+            if (entity.plannerVersion == FixedAsrWindowPlanner.LegacyPlannerVersion) {
+                entity.ownedEndMs
+            } else {
+                entity.uploadEndMs
+            }
+        if (cues.any { it.startMs < checkpointStartMs || it.endMs > checkpointEndMs }) {
             throw CheckpointIntegrityException("ASR checkpoint cue range is invalid")
         }
         return cues
@@ -1683,6 +1723,7 @@ private data class SourceWork(
 )
 
 private data class WindowTranscript(
+    val plan: AsrWindowPlan,
     val cues: List<SubtitleCue>,
     val language: String?,
     val usage: UsageRecord,

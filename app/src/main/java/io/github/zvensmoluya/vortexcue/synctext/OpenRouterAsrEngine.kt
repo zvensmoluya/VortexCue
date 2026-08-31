@@ -115,9 +115,9 @@ class OpenRouterAsrEngine internal constructor(
                 } catch (error: AsrException) {
                     throw error.withResponseContext(exchange)
                 }
-            val owned = AsrTimelineMerger.ownedSegments(request.window, parsed.timeline)
+            val windowSegments = AsrTimelineMerger.windowSegments(request.window, parsed.timeline)
             return AsrWindowResult(
-                segments = owned,
+                segments = windowSegments,
                 detectedLanguage = parsed.detectedLanguage,
                 usage = root.objectValue("usage").usage(),
                 rawResponse = exchange.body,

@@ -73,7 +73,7 @@ class OpenAiAsrEngine(
                 throw error.withResponseContext(exchange)
             }
         return AsrWindowResult(
-            segments = AsrTimelineMerger.ownedSegments(request.window, relative),
+            segments = AsrTimelineMerger.windowSegments(request.window, relative),
             detectedLanguage =
                 root.string("language")
                     ?.let { runCatching { LanguageTags.normalize(it) }.getOrNull() }
