@@ -29,24 +29,32 @@ enum class AsrProfile(
     val modelId: String,
     val experimental: Boolean,
     val timelineStrategy: AsrTimelineStrategy,
+    val windowDurationMs: Long,
+    val windowOverlapMs: Long,
 ) {
     OpenRouterWhisperV1(
         provider = AsrProvider.OpenRouter,
         modelId = "openai/whisper-large-v3",
         experimental = false,
         timelineStrategy = AsrTimelineStrategy.Segment,
+        windowDurationMs = 300_000L,
+        windowOverlapMs = 3_000L,
     ),
     OpenRouterQwen3Asr17BV1(
         provider = AsrProvider.OpenRouter,
         modelId = "qwen/qwen3-asr-1.7b",
         experimental = true,
         timelineStrategy = AsrTimelineStrategy.Segment,
+        windowDurationMs = 175_000L,
+        windowOverlapMs = 3_000L,
     ),
     OpenAiWhisperV1(
         provider = AsrProvider.OpenAi,
         modelId = "whisper-1",
         experimental = false,
         timelineStrategy = AsrTimelineStrategy.Segment,
+        windowDurationMs = 300_000L,
+        windowOverlapMs = 3_000L,
     ),
     ;
 

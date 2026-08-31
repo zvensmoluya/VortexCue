@@ -10,6 +10,14 @@ import org.junit.Test
 
 class AsrPlanningTest {
     @Test
+    fun `qwen uses 175 second windows with 3 second overlap`() {
+        assertEquals(175_000L, AsrProfile.OpenRouterQwen3Asr17BV1.windowDurationMs)
+        assertEquals(3_000L, AsrProfile.OpenRouterQwen3Asr17BV1.windowOverlapMs)
+        assertEquals(300_000L, AsrProfile.OpenRouterWhisperV1.windowDurationMs)
+        assertEquals(300_000L, AsrProfile.OpenAiWhisperV1.windowDurationMs)
+    }
+
+    @Test
     fun `fixed windows own the complete timeline exactly once`() {
         val durationMs = 897_000L
         val windows = FixedAsrWindowPlanner().plan(durationMs)

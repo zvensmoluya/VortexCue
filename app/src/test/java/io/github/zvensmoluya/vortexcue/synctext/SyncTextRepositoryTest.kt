@@ -220,6 +220,38 @@ class SyncTextRepositoryTest {
     }
 
     @Test
+    fun `qwen attempt freezes 175 second window strategy`() = runBlocking {
+        insertContentWithTextTrack()
+        repository.saveCredential("asr-key", "ASR", CredentialPurpose.Asr, "asr-secret")
+        val scheme =
+            repository.createScheme(
+                name = "Qwen",
+                asrProfile = AsrProfile.OpenRouterQwen3Asr17BV1,
+                asrCredentialId = "asr-key",
+            )
+
+        val task =
+            repository.submit(
+                GenerationRequest(
+                    contentId = ContentId,
+                    input = GenerationInput.ExistingTrack(TrackId),
+                    output = GenerationOutput.SourceOnly,
+                    schemeId = scheme.schemeId,
+                ),
+            )
+        val taskEntity = requireNotNull(database.syncTextDao().task(task.taskId))
+        val attempt = requireNotNull(database.syncTextDao().attempt(taskEntity.currentAttemptId))
+
+        assertEquals(175_000L, attempt.asrWindowMs)
+        assertEquals(3_000L, attempt.asrOverlapMs)
+
+        repository.saveScheme(scheme.copy(asrProfile = AsrProfile.OpenRouterWhisperV1))
+        val frozenAttempt = requireNotNull(database.syncTextDao().attempt(taskEntity.currentAttemptId))
+        assertEquals(175_000L, frozenAttempt.asrWindowMs)
+        assertEquals(3_000L, frozenAttempt.asrOverlapMs)
+    }
+
+    @Test
     fun `task snapshots dedupe attempts and keep latest generated alternatives atomic`() = runBlocking {
         insertContentWithTextTrack()
         repository.saveCredential("asr-key", "ASR", CredentialPurpose.Asr, "asr-secret")

@@ -39,7 +39,11 @@ class LiveMediaPipelineTest {
                     ),
                 )
             val durationMs = (config.mediaDurationSeconds * 1_000.0).toLong()
-            val windows = FixedAsrWindowPlanner().plan(durationMs)
+            val windows =
+                FixedAsrWindowPlanner(
+                    targetUploadMs = config.asrProfile.windowDurationMs,
+                    overlapMs = config.asrProfile.windowOverlapMs,
+                ).plan(durationMs)
             val asrResults = windows.map { window ->
                 val normalizedWav =
                     normalizeWindow(

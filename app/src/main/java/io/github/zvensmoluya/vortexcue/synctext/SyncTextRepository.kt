@@ -1457,8 +1457,9 @@ class SyncTextRepository(
         policy: TranslationPolicy?,
         sourceResultId: String?,
         timestamp: Long,
-    ) =
-        GenerationAttemptEntity(
+    ): GenerationAttemptEntity {
+        val profile = AsrProfile.fromStoredValue(asrProfile)
+        return GenerationAttemptEntity(
             attemptId = attemptId,
             taskId = taskId,
             ordinal = ordinal,
@@ -1480,13 +1481,14 @@ class SyncTextRepository(
             requestSchemaVersion = policy?.requestSchemaVersion ?: 1,
             sourcePreparationPolicyVersion = SourcePreparationPolicyRegistry.PolicyVersion,
             sourcePreparationPromptSha256 = SourcePreparationPolicyRegistry.PromptSha256,
-            asrWindowMs = AsrWindowMs,
-            asrOverlapMs = AsrOverlapMs,
+            asrWindowMs = profile.windowDurationMs,
+            asrOverlapMs = profile.windowOverlapMs,
             asrMaxEncodedBytes = AsrMaxEncodedBytes,
             sourceResultId = sourceResultId,
             state = GenerationTaskState.Waiting.name,
             createdAtMs = timestamp,
         )
+    }
 
     private fun SyncTextScheme.normalizedAndValidated(): SyncTextScheme {
         val normalizedAsrEndpoint = asrProfile.normalizedAsrEndpoint(asrEndpoint)
@@ -1518,8 +1520,6 @@ class SyncTextRepository(
         private const val QueueSchedulerKey = "sync-text-queue"
         private const val DefaultProbeTargetLanguage = "zh-CN"
         private const val NoTranslationPolicyId = "none.v1"
-        private const val AsrWindowMs = 300_000L
-        private const val AsrOverlapMs = 3_000L
         private const val AsrMaxEncodedBytes = 24L * 1024L * 1024L
         private const val SourcePublishedProgress = 0.55f
         private const val MaxErrorMessageLength = 600
