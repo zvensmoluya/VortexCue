@@ -289,6 +289,7 @@ internal fun PlayerScreen(
         PlayerSurface.Calibration ->
             GlowCalibrationScreen(
                 profile = displayProfile,
+                isOnboarding = true,
                 onProfileChanged = onDisplayProfileChanged,
                 onComplete = onCalibrationCompleted,
                 onCancel = { onSurfaceChanged(PlayerSurface.Normal) },
@@ -378,6 +379,26 @@ internal fun PlayerScreen(
 @Composable
 internal fun GlowCalibrationScreen(
     profile: DisplayProfile,
+    isOnboarding: Boolean,
+    onProfileChanged: (DisplayProfile) -> Unit,
+    onComplete: () -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    GlowDisplayEditor(
+        profile = profile,
+        isOnboarding = isOnboarding,
+        onProfileChanged = onProfileChanged,
+        onComplete = onComplete,
+        onCancel = onCancel,
+        modifier = modifier,
+    )
+}
+
+@Composable
+internal fun GlowDisplayEditor(
+    profile: DisplayProfile,
+    isOnboarding: Boolean,
     onProfileChanged: (DisplayProfile) -> Unit,
     onComplete: () -> Unit,
     onCancel: () -> Unit,
@@ -387,6 +408,9 @@ internal fun GlowCalibrationScreen(
     val controlLevel = profile.glowControlLevel.coerceIn(0, 255)
     val subtitleColor = Color(subtitleLevel, subtitleLevel, subtitleLevel)
     val controlColor = Color(controlLevel, controlLevel, controlLevel)
+    var adjustmentPanelVisible by rememberSaveable { mutableStateOf(true) }
+    var previewControlsVisible by rememberSaveable { mutableStateOf(false) }
+    var previewControlsRevision by rememberSaveable { mutableIntStateOf(0) }
     val sliderColors =
         SliderDefaults.colors(
             thumbColor = controlColor,
@@ -394,105 +418,263 @@ internal fun GlowCalibrationScreen(
             inactiveTrackColor = GlowTrackColor,
         )
 
-    Column(
+    LaunchedEffect(previewControlsRevision) {
+        if (previewControlsRevision > 0) {
+            delay(2_400L)
+            previewControlsVisible = false
+        }
+    }
+
+    BoxWithConstraints(
         modifier =
             modifier
                 .fillMaxSize()
                 .background(Color.Black)
-                .safeDrawingPadding()
-                .padding(horizontal = 24.dp, vertical = 22.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+                .safeDrawingPadding(),
     ) {
-        Text("第一次微光校准", color = controlColor, fontSize = 15.sp)
-        Text(
-            "把文字调到刚好能看清。这里的变化会直接作用于真实微光窗口。",
-            color = controlColor.copy(alpha = 0.72f),
-            fontSize = 12.sp,
-            lineHeight = 18.sp,
-        )
+        val panelMaxHeight = maxHeight * 0.62f
+        val revealPanelModifier =
+            if (adjustmentPanelVisible) {
+                Modifier.fillMaxSize()
+            } else {
+                Modifier
+                    .fillMaxSize()
+                    .semantics { contentDescription = "显示微光调整面板" }
+                    .clickable { adjustmentPanelVisible = true }
+            }
 
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            Text(
-                text = "声音继续，画面退场",
+        Box(modifier = revealPanelModifier) {
+            Column(
                 modifier =
                     Modifier
-                        .align(Alignment.Center)
+                        .align(
+                            BiasAlignment(
+                                horizontalBias = 0f,
+                                verticalBias = profile.glowSubtitleVerticalBias.coerceIn(-0.60f, 0.60f),
+                            ),
+                        )
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp),
-                color = subtitleColor,
-                fontSize = profile.glowSubtitleSizeSp.sp,
-                lineHeight = (profile.glowSubtitleSizeSp * 1.4f).sp,
-                textAlign = TextAlign.Center,
-            )
+                        .padding(horizontal = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = "声音继续，画面退场。\n需要时，只让当前文字发光。",
+                    modifier = Modifier.fillMaxWidth(),
+                    color = subtitleColor,
+                    fontSize = profile.glowSubtitleSizeSp.coerceIn(18f, 36f).sp,
+                    fontWeight = FontWeight.Medium,
+                    lineHeight = (profile.glowSubtitleSizeSp.coerceIn(18f, 36f) * 1.4f).sp,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    text = "The sound continues as the screen fades away.",
+                    modifier = Modifier.fillMaxWidth(),
+                    color = subtitleColor.copy(alpha = 0.68f),
+                    fontSize = (profile.glowSubtitleSizeSp.coerceIn(18f, 36f) * 0.68f).sp,
+                    lineHeight = (profile.glowSubtitleSizeSp.coerceIn(18f, 36f) * 0.95f).sp,
+                    textAlign = TextAlign.Center,
+                )
+            }
         }
 
-        CalibrationSlider(
-            label = "屏幕",
-            value = profile.glowWindowBrightness,
-            valueRange = 0.01f..0.30f,
-            colors = sliderColors,
-            controlColor = controlColor,
-            onValueChange = {
-                onProfileChanged(
-                    profile.copy(
-                        name = DisplayProfile.CustomName,
-                        glowWindowBrightness = it,
-                    ),
-                )
-            },
-        )
-        CalibrationSlider(
-            label = "文字",
-            value = profile.glowSubtitleLevel.toFloat(),
-            valueRange = 4f..96f,
-            colors = sliderColors,
-            controlColor = controlColor,
-            onValueChange = {
-                onProfileChanged(
-                    profile.copy(
-                        name = DisplayProfile.CustomName,
-                        glowSubtitleLevel = it.toInt(),
-                    ),
-                )
-            },
-        )
-        CalibrationSlider(
-            label = "临时控制",
-            value = profile.glowControlLevel.toFloat(),
-            valueRange = 24f..160f,
-            colors = sliderColors,
-            controlColor = controlColor,
-            onValueChange = {
-                onProfileChanged(
-                    profile.copy(
-                        name = DisplayProfile.CustomName,
-                        glowControlLevel = it.toInt(),
-                    ),
-                )
-            },
-        )
-
-        OutlinedButton(
-            onClick = onComplete,
-            modifier = Modifier.fillMaxWidth(),
-            border = BorderStroke(1.dp, controlColor),
-            colors =
-                ButtonDefaults.outlinedButtonColors(
-                    containerColor = Color.Transparent,
-                    contentColor = controlColor,
-                ),
+        AnimatedVisibility(
+            visible = previewControlsVisible,
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 64.dp),
+            enter = fadeIn(),
+            exit = fadeOut(),
         ) {
-            Text("完成并进入微光")
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Replay10, contentDescription = "控制亮度预览：后退 10 秒", tint = controlColor)
+                Icon(Icons.Outlined.Pause, contentDescription = "控制亮度预览：暂停", tint = controlColor, modifier = Modifier.size(30.dp))
+                Icon(Icons.Outlined.Forward10, contentDescription = "控制亮度预览：前进 10 秒", tint = controlColor)
+            }
         }
-        TextButton(onClick = onCancel, modifier = Modifier.align(Alignment.CenterHorizontally)) {
-            Text("返回播放器", color = controlColor.copy(alpha = 0.72f))
+
+        AnimatedVisibility(
+            visible = adjustmentPanelVisible,
+            modifier = Modifier.align(Alignment.TopCenter),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onCancel) {
+                    Icon(
+                        Icons.AutoMirrored.Outlined.ArrowBack,
+                        contentDescription = if (isOnboarding) "返回播放器" else "返回设置",
+                        tint = controlColor,
+                    )
+                }
+                Text(
+                    if (isOnboarding) "第一次微光校准" else "微光显示",
+                    color = controlColor,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                    textAlign = TextAlign.Center,
+                )
+                if (isOnboarding) {
+                    Spacer(Modifier.size(48.dp))
+                } else {
+                    TextButton(onClick = onComplete, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text("完成", color = controlColor)
+                    }
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = adjustmentPanelVisible,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            Column(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = panelMaxHeight)
+                        .background(AppSurfaceRaised.copy(alpha = 0.96f), RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (isOnboarding) {
+                    Text(
+                        "把文字调到刚好能看清。当前页面使用与微光相同的真实窗口亮度。",
+                        color = controlColor.copy(alpha = 0.72f),
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                    )
+                }
+                Text("预设", color = controlColor.copy(alpha = 0.72f), fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DisplayProfile.Presets.forEach { preset ->
+                        val selected = profile.name == preset.name
+                        OutlinedButton(
+                            onClick = { onProfileChanged(preset) },
+                            border = BorderStroke(1.dp, controlColor.copy(alpha = if (selected) 1f else 0.36f)),
+                            colors =
+                                ButtonDefaults.outlinedButtonColors(
+                                    containerColor = if (selected) controlColor.copy(alpha = 0.12f) else Color.Transparent,
+                                    contentColor = controlColor,
+                                ),
+                        ) {
+                            Text(preset.name)
+                        }
+                    }
+                }
+
+                CalibrationSlider(
+                    label = "窗口亮度",
+                    valueLabel = "${(profile.glowWindowBrightness * 100f).roundToInt()}%",
+                    startLabel = "更暗",
+                    endLabel = "更亮",
+                    value = profile.glowWindowBrightness,
+                    valueRange = 0.01f..0.30f,
+                    colors = sliderColors,
+                    controlColor = controlColor,
+                    onValueChange = {
+                        onProfileChanged(profile.copy(name = DisplayProfile.CustomName, glowWindowBrightness = it))
+                    },
+                )
+                CalibrationSlider(
+                    label = "文字亮度",
+                    valueLabel = "${glowSubtitleBrightnessPercent(profile.glowSubtitleLevel)}%",
+                    startLabel = "更暗",
+                    endLabel = "更亮",
+                    value = profile.glowSubtitleLevel.toFloat(),
+                    valueRange = 4f..96f,
+                    colors = sliderColors,
+                    controlColor = controlColor,
+                    onValueChange = {
+                        onProfileChanged(profile.copy(name = DisplayProfile.CustomName, glowSubtitleLevel = it.toInt()))
+                    },
+                )
+                CalibrationSlider(
+                    label = "控制亮度",
+                    valueLabel = "${(profile.glowControlLevel / 255f * 100f).roundToInt()}%",
+                    startLabel = "更暗",
+                    endLabel = "更亮",
+                    value = profile.glowControlLevel.toFloat(),
+                    valueRange = 24f..160f,
+                    colors = sliderColors,
+                    controlColor = controlColor,
+                    onValueChange = {
+                        previewControlsVisible = true
+                        previewControlsRevision += 1
+                        onProfileChanged(profile.copy(name = DisplayProfile.CustomName, glowControlLevel = it.toInt()))
+                    },
+                )
+                CalibrationSlider(
+                    label = "文字大小",
+                    valueLabel = "${profile.glowSubtitleSizeSp.roundToInt()}sp",
+                    startLabel = "更小",
+                    endLabel = "更大",
+                    value = profile.glowSubtitleSizeSp,
+                    valueRange = 18f..36f,
+                    colors = sliderColors,
+                    controlColor = controlColor,
+                    onValueChange = {
+                        onProfileChanged(profile.copy(name = DisplayProfile.CustomName, glowSubtitleSizeSp = it))
+                    },
+                )
+                CalibrationSlider(
+                    label = "垂直位置",
+                    valueLabel = glowVerticalPositionLabel(profile.glowSubtitleVerticalBias),
+                    startLabel = "偏上",
+                    endLabel = "偏下",
+                    value = profile.glowSubtitleVerticalBias,
+                    valueRange = -0.6f..0.6f,
+                    colors = sliderColors,
+                    controlColor = controlColor,
+                    onValueChange = {
+                        onProfileChanged(profile.copy(name = DisplayProfile.CustomName, glowSubtitleVerticalBias = it))
+                    },
+                )
+
+                OutlinedButton(
+                    onClick = { adjustmentPanelVisible = false },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    border = BorderStroke(1.dp, controlColor.copy(alpha = 0.48f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = controlColor),
+                ) {
+                    Text("隐藏面板，查看纯净预览")
+                }
+                if (isOnboarding) {
+                    OutlinedButton(
+                        onClick = onComplete,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        border = BorderStroke(1.dp, controlColor),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = controlColor),
+                    ) {
+                        Text("完成并进入微光")
+                    }
+                }
+            }
         }
     }
 }
 
+internal fun glowVerticalPositionLabel(bias: Float): String =
+    when {
+        bias < -0.15f -> "偏上"
+        bias > 0.15f -> "偏下"
+        else -> "居中"
+    }
+
 @Composable
 private fun CalibrationSlider(
     label: String,
+    valueLabel: String,
+    startLabel: String,
+    endLabel: String,
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
     colors: androidx.compose.material3.SliderColors,
@@ -501,15 +683,20 @@ private fun CalibrationSlider(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(label, color = controlColor, fontSize = 11.sp)
-            Text("更暗  ·  更清晰", color = controlColor.copy(alpha = 0.60f), fontSize = 10.sp)
+            Text(label, color = controlColor, fontSize = 12.sp)
+            Text(valueLabel, color = controlColor.copy(alpha = 0.72f), fontSize = 11.sp)
         }
         Slider(
             value = value.coerceIn(valueRange),
             onValueChange = onValueChange,
             valueRange = valueRange,
+            modifier = Modifier.semantics { contentDescription = label },
             colors = colors,
         )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(startLabel, color = controlColor.copy(alpha = 0.52f), fontSize = 10.sp)
+            Text(endLabel, color = controlColor.copy(alpha = 0.52f), fontSize = 10.sp)
+        }
     }
 }
 
@@ -1732,6 +1919,9 @@ private fun GlowPlayer(
     var brightnessFeedbackVisible by remember { mutableStateOf(false) }
     var brightnessDragging by remember { mutableStateOf(false) }
     var brightnessFeedbackRevision by remember { mutableIntStateOf(0) }
+    var primaryGestureHintVisible by rememberSaveable { mutableStateOf(showGestureHint) }
+    var gestureGuideVisible by rememberSaveable { mutableStateOf(false) }
+    var gestureGuideShown by rememberSaveable { mutableStateOf(!showGestureHint) }
     val latestDisplayProfile by rememberUpdatedState(displayProfile)
     val latestOnDisplayProfileChanged by rememberUpdatedState(onDisplayProfileChanged)
     val subtitleLevel =
@@ -1751,7 +1941,17 @@ private fun GlowPlayer(
     fun showControls() {
         controlsVisible = true
         controlInteractionRevision += 1
+        primaryGestureHintVisible = false
+        if (!gestureGuideShown) {
+            gestureGuideVisible = true
+            gestureGuideShown = true
+        }
         onGestureHintSeen()
+    }
+
+    fun hideControls() {
+        controlsVisible = false
+        gestureGuideVisible = false
     }
 
     fun showGestureFeedback(message: String) {
@@ -1762,7 +1962,7 @@ private fun GlowPlayer(
     LaunchedEffect(controlsVisible, controlInteractionRevision) {
         if (controlsVisible) {
             delay(5_000L)
-            controlsVisible = false
+            hideControls()
         }
     }
     LaunchedEffect(gestureFeedbackRevision) {
@@ -1782,7 +1982,9 @@ private fun GlowPlayer(
     LaunchedEffect(showGestureHint) {
         if (showGestureHint) {
             delay(6_500L)
-            onGestureHintSeen()
+            primaryGestureHintVisible = false
+        } else {
+            primaryGestureHintVisible = false
         }
     }
 
@@ -1797,7 +1999,7 @@ private fun GlowPlayer(
                     onClick(
                         label = if (controlsVisible) "收起微光控制" else "显示微光控制",
                     ) {
-                        if (controlsVisible) controlsVisible = false else showControls()
+                        if (controlsVisible) hideControls() else showControls()
                         true
                     }
                 }
@@ -1810,6 +2012,8 @@ private fun GlowPlayer(
                             adjustsBrightness =
                                 !controlsVisible && offset.x >= size.width * GlowBrightnessGestureStartFraction
                             if (adjustsBrightness) {
+                                primaryGestureHintVisible = false
+                                onGestureHintSeen()
                                 startLevel =
                                     latestDisplayProfile.glowSubtitleLevel
                                         .coerceIn(MinGlowSubtitleLevel, MaxGlowSubtitleLevel)
@@ -1862,7 +2066,7 @@ private fun GlowPlayer(
                 .pointerInput(controlsVisible, playback.isPlaying) {
                     detectTapGestures(
                         onTap = {
-                            if (controlsVisible) controlsVisible = false
+                            if (controlsVisible) hideControls()
                         },
                         onDoubleTap = { offset ->
                             when {
@@ -1964,27 +2168,12 @@ private fun GlowPlayer(
         }
 
         AnimatedVisibility(
-            visible = showGestureHint && !controlsVisible,
+            visible = primaryGestureHintVisible && !controlsVisible,
             modifier = Modifier.align(Alignment.BottomCenter),
             enter = fadeIn(),
             exit = fadeOut(),
         ) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 28.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text("左侧双击\n快退", color = controlColor, fontSize = 10.sp)
-                    Text("中央双击\n播放 / 暂停", color = controlColor, fontSize = 10.sp, textAlign = TextAlign.Center)
-                    Text("右侧双击\n快进", color = controlColor, fontSize = 10.sp, textAlign = TextAlign.End)
-                }
-                Text("右侧上下滑动调节文字亮度", color = controlColor, fontSize = 10.sp)
-                Text("长按任意位置显示临时控制", color = controlColor, fontSize = 10.sp)
-            }
+            GlowGestureHint(controlColor = controlColor)
         }
 
         playback.errorMessage?.let { message ->
@@ -2048,9 +2237,12 @@ private fun GlowPlayer(
                     IconButton(onClick = onExitGlow) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "退出微光", tint = controlColor)
                     }
-                    IconButton(onClick = { controlsVisible = false }) {
+                    IconButton(onClick = ::hideControls) {
                         Icon(Icons.Outlined.Close, contentDescription = "收起控制", tint = controlColor)
                     }
+                }
+                if (gestureGuideVisible) {
+                    GlowGestureGuide(controlColor = controlColor)
                 }
                 playback.errorMessage?.let { message ->
                     Text(
@@ -2076,6 +2268,39 @@ private fun GlowPlayer(
                 )
             }
         }
+    }
+}
+
+@Composable
+internal fun GlowGestureHint(controlColor: Color, modifier: Modifier = Modifier) {
+    Text(
+        "长按屏幕，显示播放控制",
+        modifier = modifier.padding(horizontal = 24.dp, vertical = 28.dp),
+        color = controlColor,
+        fontSize = 11.sp,
+        textAlign = TextAlign.Center,
+    )
+}
+
+@Composable
+internal fun GlowGestureGuide(controlColor: Color, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            "双击左 / 中 / 右侧：快退 / 暂停 / 快进",
+            color = controlColor.copy(alpha = 0.72f),
+            fontSize = 10.sp,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            "右侧上下滑动：调节文字亮度",
+            color = controlColor.copy(alpha = 0.72f),
+            fontSize = 10.sp,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 

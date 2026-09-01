@@ -498,7 +498,7 @@ private fun WorkCard(work: WorkSummary, onClick: () -> Unit, modifier: Modifier 
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(work.title, color = AppPrimaryText, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(
-                "作品 · ${work.releaseCode} · ${work.playbackPartCount} 段 · ${formatWorkDuration(work.playbackDurationMs)}",
+                "作品 · ${work.releaseCode} · ${work.playbackPartCount} 段 · ${formatMediaDuration(work.playbackDurationMs)}",
                 color = AppSecondaryText,
                 fontSize = 12.sp,
                 maxLines = 1,
@@ -508,7 +508,7 @@ private fun WorkCard(work: WorkSummary, onClick: () -> Unit, modifier: Modifier 
     }
 }
 
-private fun formatWorkDuration(durationMs: Long): String {
+internal fun formatMediaDuration(durationMs: Long): String {
     val totalMinutes = durationMs.coerceAtLeast(0L) / 60_000L
     val hours = totalMinutes / 60L
     val minutes = totalMinutes % 60L
@@ -607,7 +607,7 @@ private fun WorkPartRow(item: ContentSummary, onClick: () -> Unit, onLongPress: 
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(item.media.displayTitle, color = AppPrimaryText, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(formatWorkDuration(item.media.durationMs), color = AppSecondaryText, fontSize = 12.sp)
+            Text(formatMediaDuration(item.media.durationMs), color = AppSecondaryText, fontSize = 12.sp)
         }
         HorizontalDivider(color = AppHairline)
     }

@@ -22,6 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import io.github.zvensmoluya.vortexcue.core.model.ContentAvailability
+import io.github.zvensmoluya.vortexcue.core.model.DisplayProfile
 import io.github.zvensmoluya.vortexcue.core.model.MediaSourceRef
 import io.github.zvensmoluya.vortexcue.data.ContentDisposition
 import io.github.zvensmoluya.vortexcue.data.ContentSummary
@@ -148,6 +149,24 @@ class MainSurfaceComposeTest {
         compose.onNodeWithText("添加内容").performClick()
 
         compose.runOnIdle { assertEquals(listOf("hub"), calls) }
+    }
+
+    @Test
+    fun settingsCollapsesGlowControlsIntoOneDisplayEntry() {
+        var opens = 0
+        compose.setContent {
+            VortexCueTheme {
+                GlowDisplaySettingsEntry(
+                    profile = DisplayProfile.Balanced,
+                    onClick = { opens += 1 },
+                )
+            }
+        }
+
+        compose.onNodeWithText("微光显示").assertExists().performClick()
+        compose.onNodeWithText("平衡 · 调整亮度、字号和位置").assertExists()
+        compose.onNodeWithText("窗口亮度").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(1, opens) }
     }
 
     @Test
@@ -474,6 +493,7 @@ class MainSurfaceComposeTest {
                         uri = Uri.parse("content://test/content"),
                         displayName = "长按示例.mp3",
                         mimeType = "audio/mpeg",
+                        durationMs = 3_720_000L,
                     ),
                 availability = ContentAvailability.Available,
                 disposition = ContentDisposition.Collected,
@@ -492,6 +512,7 @@ class MainSurfaceComposeTest {
 
         compose.onNodeWithText("长按示例").performClick()
         compose.onNodeWithText("长按示例").performTouchInput { longClick() }
+        compose.onNodeWithText("1小时2分").assertExists()
         compose.runOnIdle {
             assertEquals(1, plays)
             assertEquals(1, menus)

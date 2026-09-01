@@ -736,11 +736,7 @@ internal fun VortexCueApp(
                 },
                 syncTextUiState = syncTextUiState,
                 onSyncTextAction = dispatchSyncTextAction,
-                onDisplayProfileChanged = { profile ->
-                    displayProfile = profile
-                    scope.launch { settingsStore.saveDisplayProfile(profile) }
-                },
-                onCalibrateGlow = {
+                onOpenGlowDisplay = {
                     playerOriginTab = MainTab.Settings
                     playerSurface = PlayerSurface.Calibration
                     destination = AppDestination.Player
@@ -752,6 +748,7 @@ internal fun VortexCueApp(
             if (playerSurface == PlayerSurface.Calibration && playerOriginTab == MainTab.Settings) {
                 GlowCalibrationScreen(
                     profile = displayProfile,
+                    isOnboarding = false,
                     onProfileChanged = { profile ->
                         displayProfile = profile
                         scope.launch { settingsStore.saveDisplayProfile(profile) }

@@ -51,6 +51,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AudioFile
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
@@ -183,8 +184,7 @@ internal fun MainTabScreen(
     onOpenSyncText: (ContentSummary) -> Unit,
     syncTextUiState: SyncTextUiState,
     onSyncTextAction: (SyncTextAction) -> Unit,
-    onDisplayProfileChanged: (DisplayProfile) -> Unit,
-    onCalibrateGlow: () -> Unit,
+    onOpenGlowDisplay: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -479,8 +479,7 @@ internal fun MainTabScreen(
                 MainTab.Settings ->
                     SettingsTab(
                         profile = displayProfile,
-                        onProfileChanged = onDisplayProfileChanged,
-                        onCalibrate = onCalibrateGlow,
+                        onOpenGlowDisplay = onOpenGlowDisplay,
                         coordinator = coordinator,
                         onRequestFullStorageAccess = onRequestLibraryAccess,
                         listState = settingsListState,
@@ -832,6 +831,14 @@ internal fun ContentRow(item: ContentSummary, status: String?, onClick: () -> Un
                 if (detail.isNotBlank()) Text(detail, color = AppSecondaryText, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
                 status?.let { Text(it, color = if (it == "失败") AppError else AppAccent, fontSize = 11.sp) }
             }
+            item.media.durationMs.takeIf { it > 0L }?.let { durationMs ->
+                Text(
+                    formatMediaDuration(durationMs),
+                    color = AppSecondaryText,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(start = 12.dp),
+                )
+            }
         }
         HorizontalDivider(color = AppHairline)
     }
@@ -862,12 +869,6 @@ private fun QueueTab(
     listState: LazyListState,
 ) {
     Column(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
-        Row(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("当前播放列表", color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
-                Text("${recovery.queue.size} 项 · 播放顺序", color = AppSecondaryText, fontSize = 12.sp)
-            }
-        }
         if (recovery.queue.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("播放列表为空", color = AppSecondaryText) }
         } else {
@@ -900,63 +901,16 @@ private fun ConfigTab(
 }
 
 @Composable
-private fun SettingsTab(
+internal fun SettingsTab(
     profile: DisplayProfile,
-    onProfileChanged: (DisplayProfile) -> Unit,
-    onCalibrate: () -> Unit,
+    onOpenGlowDisplay: () -> Unit,
     coordinator: LibraryCoordinatorState,
     onRequestFullStorageAccess: () -> Unit,
     listState: LazyListState,
 ) {
-    var local by remember(profile) { mutableStateOf(profile) }
-    LaunchedEffect(profile) { local = profile }
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize().safeDrawingPadding(), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Text("Glow", color = AppPrimaryText, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-        }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DisplayProfile.Presets.forEach { preset ->
-                    OutlinedButton(onClick = { local = preset; onProfileChanged(preset) }) { Text(preset.name) }
-                }
-            }
-            TextButton(onClick = onCalibrate) {
-                Icon(Icons.Outlined.Tune, null)
-                Spacer(Modifier.width(6.dp))
-                Text("校准")
-            }
-        }
-        item {
-            Text("窗口亮度 ${(local.glowWindowBrightness * 100).toInt()}%", color = AppSecondaryText)
-            androidx.compose.material3.Slider(
-                value = local.glowWindowBrightness,
-                onValueChange = { local = local.copy(name = DisplayProfile.CustomName, glowWindowBrightness = it); onProfileChanged(local) },
-                valueRange = 0.01f..0.30f,
-            )
-            Text("文字亮度 ${local.glowSubtitleLevel}", color = AppSecondaryText)
-            androidx.compose.material3.Slider(
-                value = local.glowSubtitleLevel.toFloat(),
-                onValueChange = { local = local.copy(name = DisplayProfile.CustomName, glowSubtitleLevel = it.toInt()); onProfileChanged(local) },
-                valueRange = 4f..96f,
-            )
-            Text("控制亮度 ${local.glowControlLevel}", color = AppSecondaryText)
-            androidx.compose.material3.Slider(
-                value = local.glowControlLevel.toFloat(),
-                onValueChange = { local = local.copy(name = DisplayProfile.CustomName, glowControlLevel = it.toInt()); onProfileChanged(local) },
-                valueRange = 24f..160f,
-            )
-            Text("文字大小 ${local.glowSubtitleSizeSp.toInt()}sp", color = AppSecondaryText)
-            androidx.compose.material3.Slider(
-                value = local.glowSubtitleSizeSp,
-                onValueChange = { local = local.copy(name = DisplayProfile.CustomName, glowSubtitleSizeSp = it); onProfileChanged(local) },
-                valueRange = 18f..36f,
-            )
-            Text("垂直位置", color = AppSecondaryText)
-            androidx.compose.material3.Slider(
-                value = local.glowSubtitleVerticalBias,
-                onValueChange = { local = local.copy(name = DisplayProfile.CustomName, glowSubtitleVerticalBias = it); onProfileChanged(local) },
-                valueRange = -0.6f..0.6f,
-            )
+            GlowDisplaySettingsEntry(profile = profile, onClick = onOpenGlowDisplay)
         }
         item {
             Text("权限", color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
@@ -986,6 +940,37 @@ private fun SettingsTab(
             Text("关于", color = AppPrimaryText, fontWeight = FontWeight.SemiBold)
             Text("VortexCue · OLED 优先的同步文字播放器", color = AppSecondaryText, fontSize = 13.sp)
         }
+    }
+}
+
+@Composable
+internal fun GlowDisplaySettingsEntry(
+    profile: DisplayProfile,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .heightIn(min = 76.dp)
+                .background(AppSurfaceRaised, RoundedCornerShape(8.dp))
+                .clickable(onClick = onClick)
+                .padding(horizontal = 18.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Outlined.DarkMode, contentDescription = null, tint = AppSecondaryText)
+        Spacer(Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text("微光显示", color = AppPrimaryText, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+            Text(
+                "${profile.name} · 调整亮度、字号和位置",
+                color = AppSecondaryText,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+        Text("›", color = AppMutedText, fontSize = 24.sp)
     }
 }
 
