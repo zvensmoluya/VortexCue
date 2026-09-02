@@ -67,6 +67,12 @@ data class SyncTextSchemeEntity(
     val translationModel: String?,
     @ColumnInfo(name = "translation_reasoning_level", defaultValue = "'Off'")
     val translationReasoningLevel: String = "Off",
+    @ColumnInfo(name = "translation_openrouter_routing_mode", defaultValue = "'Auto'")
+    val translationOpenRouterRoutingMode: String = "Auto",
+    @ColumnInfo(name = "translation_openrouter_provider")
+    val translationOpenRouterProvider: String? = null,
+    @ColumnInfo(name = "translation_openrouter_allow_fallbacks", defaultValue = "1")
+    val translationOpenRouterAllowFallbacks: Boolean = true,
     @ColumnInfo(name = "translation_credential_id")
     val translationCredentialId: String?,
     @ColumnInfo(name = "default_target_language")
@@ -263,6 +269,12 @@ data class GenerationAttemptEntity(
     val translationModel: String?,
     @ColumnInfo(name = "translation_reasoning_level", defaultValue = "'Off'")
     val translationReasoningLevel: String = "Off",
+    @ColumnInfo(name = "translation_openrouter_routing_mode", defaultValue = "'Auto'")
+    val translationOpenRouterRoutingMode: String = "Auto",
+    @ColumnInfo(name = "translation_openrouter_provider")
+    val translationOpenRouterProvider: String? = null,
+    @ColumnInfo(name = "translation_openrouter_allow_fallbacks", defaultValue = "1")
+    val translationOpenRouterAllowFallbacks: Boolean = true,
     @ColumnInfo(name = "translation_credential_id")
     val translationCredentialId: String?,
     @ColumnInfo(name = "policy_id")

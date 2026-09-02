@@ -21,6 +21,38 @@ import org.junit.Test
 
 class TranslationProtocolAdaptersTest {
     @Test
+    fun `openrouter chat requests express routing without affecting generic gateways`() {
+        val adapter = ChatCompletionsTranslationAdapter(BoundedHttpExecutor(testClient()))
+        val price = adapter.requestBodyForTest(
+            request("https://openrouter.ai/api/v1").copy(
+                openRouterRouting = OpenRouterRoutingPolicy(OpenRouterRoutingMode.Price),
+            ),
+        )
+        val provider = adapter.requestBodyForTest(
+            request("https://openrouter.ai/api/v1").copy(
+                openRouterRouting =
+                    OpenRouterRoutingPolicy(
+                        mode = OpenRouterRoutingMode.Provider,
+                        providerTag = "google-ai-studio",
+                        allowFallbacks = false,
+                    ),
+            ),
+        )
+        val generic = adapter.requestBodyForTest(
+            request("https://example.test/v1").copy(
+                openRouterRouting = OpenRouterRoutingPolicy(OpenRouterRoutingMode.Throughput),
+            ),
+        )
+
+        assertEquals("price", price["provider"]!!.jsonObject["sort"]!!.jsonPrimitive.content)
+        assertEquals(
+            """{"only":["google-ai-studio"],"allow_fallbacks":false}""",
+            provider["provider"]!!.jsonObject.toString(),
+        )
+        assertFalse("provider" in generic)
+    }
+
+    @Test
     fun `empty successful response reaches format recovery layer`() = runBlocking {
         MockWebServer().use { server ->
             server.start()

@@ -361,3 +361,22 @@ internal val MIGRATION_14_15 =
             )
         }
     }
+
+internal val MIGRATION_15_16 =
+    object : Migration(15, 16) {
+        override suspend fun migrate(connection: SQLiteConnection) {
+            listOf("sync_text_scheme", "generation_attempt").forEach { table ->
+                connection.execSQL(
+                    "ALTER TABLE `$table` ADD COLUMN `translation_openrouter_routing_mode` " +
+                        "TEXT NOT NULL DEFAULT 'Auto'",
+                )
+                connection.execSQL(
+                    "ALTER TABLE `$table` ADD COLUMN `translation_openrouter_provider` TEXT",
+                )
+                connection.execSQL(
+                    "ALTER TABLE `$table` ADD COLUMN `translation_openrouter_allow_fallbacks` " +
+                        "INTEGER NOT NULL DEFAULT 1",
+                )
+            }
+        }
+    }

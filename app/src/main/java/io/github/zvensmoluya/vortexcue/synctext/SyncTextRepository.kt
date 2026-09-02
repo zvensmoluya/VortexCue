@@ -158,6 +158,17 @@ class SyncTextRepository(
         return catalog.fetch(protocol, endpoint, resolvedKey)
     }
 
+    suspend fun discoverOpenRouterProviders(
+        endpoint: String,
+        model: String,
+        credentialId: String?,
+        apiKey: String? = null,
+    ): List<OpenRouterProviderOption> {
+        val catalog = modelCatalog ?: return emptyList()
+        val resolvedKey = validatedApiKey(apiKey?.takeIf(String::isNotBlank) ?: credentials.get(requireNotNull(credentialId)))
+        return catalog.fetchOpenRouterProviders(endpoint, model, resolvedKey)
+    }
+
     suspend fun testTranslationConnection(
         protocol: TranslationProtocol,
         endpoint: String,
@@ -165,6 +176,7 @@ class SyncTextRepository(
         reasoningLevel: TranslationReasoningLevel,
         credentialId: String?,
         apiKey: String? = null,
+        openRouterRouting: OpenRouterRoutingPolicy = OpenRouterRoutingPolicy(),
     ) {
         val tester = requireNotNull(connectionTester) { "Translation connection test is unavailable" }
         val resolvedKey =
@@ -180,6 +192,7 @@ class SyncTextRepository(
             targetLanguage = current?.targetLanguage ?: DefaultProbeTargetLanguage,
             reasoningLevel = reasoningLevel,
             userAgent = current?.translationUserAgent,
+            openRouterRouting = openRouterRouting,
         )
     }
 
@@ -277,6 +290,7 @@ class SyncTextRepository(
                 translationEndpoint = config.translationEndpoint,
                 translationModel = config.translationModel,
                 translationReasoningLevel = config.translationReasoningLevel,
+                openRouterRouting = config.openRouterRouting,
                 translationCredentialId = config.translationCredentialId,
                 defaultTargetLanguage = config.targetLanguage,
                 defaultPresentationMode = config.presentationMode,
@@ -293,6 +307,7 @@ class SyncTextRepository(
                 translationEndpoint = config.translationEndpoint,
                 translationModel = config.translationModel,
                 translationReasoningLevel = config.translationReasoningLevel,
+                openRouterRouting = config.openRouterRouting,
                 translationCredentialId = config.translationCredentialId,
                 defaultTargetLanguage = config.targetLanguage,
                 defaultPresentationMode = config.presentationMode,
@@ -437,6 +452,7 @@ class SyncTextRepository(
         translationUserAgent: String? = null,
         translationModel: String? = null,
         translationReasoningLevel: TranslationReasoningLevel = TranslationReasoningLevel.Off,
+        openRouterRouting: OpenRouterRoutingPolicy = OpenRouterRoutingPolicy(),
         translationCredentialId: String? = null,
         defaultTargetLanguage: String = DefaultProbeTargetLanguage,
         defaultPresentationMode: TextPresentationMode = TextPresentationMode.TargetOnly,
@@ -454,6 +470,7 @@ class SyncTextRepository(
                 translationUserAgent = translationUserAgent,
                 translationModel = translationModel,
                 translationReasoningLevel = translationReasoningLevel,
+                openRouterRouting = openRouterRouting,
                 translationCredentialId = translationCredentialId,
                 defaultTargetLanguage = defaultTargetLanguage,
                 defaultPresentationMode = defaultPresentationMode,
@@ -1472,6 +1489,9 @@ class SyncTextRepository(
             translationUserAgent = translationUserAgent,
             translationModel = translationModel,
             translationReasoningLevel = translationReasoningLevel,
+            translationOpenRouterRoutingMode = translationOpenRouterRoutingMode,
+            translationOpenRouterProvider = translationOpenRouterProvider,
+            translationOpenRouterAllowFallbacks = translationOpenRouterAllowFallbacks,
             translationCredentialId = translationCredentialId,
             policyId = policy?.policyId ?: NoTranslationPolicyId,
             policyVersion = policy?.version ?: 1,
@@ -1499,6 +1519,16 @@ class SyncTextRepository(
         require(configuredParts == 0 || configuredParts == 3) { "Translation configuration is incomplete" }
         endpoint?.let { normalizeHttpsEndpoint(it.replace("{model}", "model"), "Translation endpoint") }
         val userAgent = translationUserAgent?.trim()?.takeIf(String::isNotBlank)
+        val providerTag = openRouterRouting.providerTag?.trim()?.takeIf(String::isNotBlank)
+        val usesOpenRouterRouting =
+            translationProtocol == TranslationProtocol.ChatCompletions &&
+                endpoint?.let(::isOfficialOpenRouterEndpoint) == true
+        if (usesOpenRouterRouting && openRouterRouting.mode == OpenRouterRoutingMode.Provider) {
+            require(providerTag != null) { "OpenRouter provider is required for provider routing" }
+            require(providerTag.length <= 128 && providerTag.all { it.code in 0x21..0x7f }) {
+                "OpenRouter provider is invalid"
+            }
+        }
         require(userAgent == null || userAgent.length <= MaxUserAgentLength) {
             "Translation User-Agent must not exceed $MaxUserAgentLength characters"
         }
@@ -1512,6 +1542,7 @@ class SyncTextRepository(
             translationUserAgent = userAgent,
             translationModel = model,
             translationCredentialId = credentialId,
+            openRouterRouting = openRouterRouting.copy(providerTag = providerTag),
             defaultTargetLanguage = LanguageTags.normalize(defaultTargetLanguage),
         )
     }
@@ -1562,6 +1593,12 @@ private fun SyncTextSchemeEntity.toDomain() =
         translationUserAgent = translationUserAgent,
         translationModel = translationModel,
         translationReasoningLevel = translationReasoningLevel.enumValueOr(TranslationReasoningLevel.Off),
+        openRouterRouting =
+            OpenRouterRoutingPolicy(
+                mode = translationOpenRouterRoutingMode.enumValueOr(OpenRouterRoutingMode.Auto),
+                providerTag = translationOpenRouterProvider,
+                allowFallbacks = translationOpenRouterAllowFallbacks,
+            ),
         translationCredentialId = translationCredentialId,
         defaultTargetLanguage = defaultTargetLanguage,
         defaultPresentationMode = defaultPresentationMode.enumValueOr(TextPresentationMode.TargetOnly),
@@ -1580,6 +1617,7 @@ private fun SyncTextScheme.toConfig() =
         translationEndpoint = translationEndpoint,
         translationModel = translationModel,
         translationReasoningLevel = translationReasoningLevel,
+        openRouterRouting = openRouterRouting,
         translationCredentialId = translationCredentialId,
         targetLanguage = defaultTargetLanguage,
         presentationMode = defaultPresentationMode,
@@ -1624,6 +1662,9 @@ private fun SyncTextScheme.toEntity() =
         translationUserAgent = translationUserAgent,
         translationModel = translationModel,
         translationReasoningLevel = translationReasoningLevel.name,
+        translationOpenRouterRoutingMode = openRouterRouting.mode.name,
+        translationOpenRouterProvider = openRouterRouting.providerTag,
+        translationOpenRouterAllowFallbacks = openRouterRouting.allowFallbacks,
         translationCredentialId = translationCredentialId,
         defaultTargetLanguage = defaultTargetLanguage,
         defaultPresentationMode = defaultPresentationMode.name,

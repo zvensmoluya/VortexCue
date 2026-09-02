@@ -93,6 +93,19 @@ enum class TranslationReasoningLevel {
     High,
 }
 
+enum class OpenRouterRoutingMode {
+    Auto,
+    Price,
+    Throughput,
+    Provider,
+}
+
+data class OpenRouterRoutingPolicy(
+    val mode: OpenRouterRoutingMode = OpenRouterRoutingMode.Auto,
+    val providerTag: String? = null,
+    val allowFallbacks: Boolean = true,
+)
+
 enum class TextPresentationMode {
     TargetOnly,
     SourceTarget,
@@ -123,6 +136,7 @@ data class SyncTextScheme(
     val translationUserAgent: String? = null,
     val translationModel: String?,
     val translationReasoningLevel: TranslationReasoningLevel = TranslationReasoningLevel.Off,
+    val openRouterRouting: OpenRouterRoutingPolicy = OpenRouterRoutingPolicy(),
     val translationCredentialId: String?,
     val defaultTargetLanguage: String,
     val defaultPresentationMode: TextPresentationMode = TextPresentationMode.TargetOnly,
@@ -142,6 +156,7 @@ data class SyncTextConfig(
     val translationEndpoint: String?,
     val translationModel: String?,
     val translationReasoningLevel: TranslationReasoningLevel = TranslationReasoningLevel.Off,
+    val openRouterRouting: OpenRouterRoutingPolicy = OpenRouterRoutingPolicy(),
     val translationCredentialId: String?,
     val targetLanguage: String,
     val presentationMode: TextPresentationMode,

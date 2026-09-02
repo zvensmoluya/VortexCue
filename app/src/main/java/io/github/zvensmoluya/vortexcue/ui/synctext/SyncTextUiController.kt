@@ -15,6 +15,8 @@ import io.github.zvensmoluya.vortexcue.synctext.GenerationOutput
 import io.github.zvensmoluya.vortexcue.synctext.GenerationRequest
 import io.github.zvensmoluya.vortexcue.synctext.GenerationTaskSummary
 import io.github.zvensmoluya.vortexcue.synctext.LanguageTags
+import io.github.zvensmoluya.vortexcue.synctext.OpenRouterProviderOption
+import io.github.zvensmoluya.vortexcue.synctext.OpenRouterRoutingPolicy
 import io.github.zvensmoluya.vortexcue.synctext.AsrException
 import io.github.zvensmoluya.vortexcue.synctext.CredentialUnavailableException
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocolException
@@ -54,6 +56,7 @@ data class SyncTextConfigDraft(
     val translationUserAgent: String?,
     val translationModel: String,
     val translationReasoningLevel: TranslationReasoningLevel,
+    val openRouterRouting: OpenRouterRoutingPolicy,
     val translationCredentialId: String?,
     val translationSecret: String?,
     val targetLanguage: String,
@@ -98,6 +101,9 @@ data class SyncTextUiState(
     val availableTranslationModels: List<DiscoveredTranslationModel> = emptyList(),
     val loadingTranslationModels: Boolean = false,
     val translationModelsError: String? = null,
+    val availableOpenRouterProviders: List<OpenRouterProviderOption> = emptyList(),
+    val loadingOpenRouterProviders: Boolean = false,
+    val openRouterProvidersError: String? = null,
     val translationConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val asrConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val configSaving: Boolean = false,
@@ -130,11 +136,19 @@ sealed interface SyncTextAction {
         val apiKey: String?,
     ) : SyncTextAction
 
+    data class DiscoverOpenRouterProviders(
+        val endpoint: String,
+        val model: String,
+        val credentialId: String?,
+        val apiKey: String?,
+    ) : SyncTextAction
+
     data class TestTranslationConnection(
         val protocol: TranslationProtocol,
         val endpoint: String,
         val model: String,
         val reasoningLevel: TranslationReasoningLevel,
+        val openRouterRouting: OpenRouterRoutingPolicy,
         val credentialId: String?,
         val apiKey: String?,
         val configurationFingerprint: String,
@@ -195,6 +209,9 @@ private data class OverlayState(
     val availableTranslationModels: List<DiscoveredTranslationModel> = emptyList(),
     val loadingTranslationModels: Boolean = false,
     val translationModelsError: String? = null,
+    val availableOpenRouterProviders: List<OpenRouterProviderOption> = emptyList(),
+    val loadingOpenRouterProviders: Boolean = false,
+    val openRouterProvidersError: String? = null,
     val translationConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val asrConnectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val configSaving: Boolean = false,
@@ -230,6 +247,7 @@ class SyncTextUiController(
     private var modelDiscoveryToken = 0L
     private var modelDiscoveryCacheKey: ModelDiscoveryKey? = null
     private var modelDiscoveryInFlightKey: ModelDiscoveryKey? = null
+    private var providerDiscoveryJob: Job? = null
 
     val state: StateFlow<SyncTextUiState> =
         combine(
@@ -249,6 +267,9 @@ class SyncTextUiController(
                 availableTranslationModels = local.availableTranslationModels,
                 loadingTranslationModels = local.loadingTranslationModels,
                 translationModelsError = local.translationModelsError,
+                availableOpenRouterProviders = local.availableOpenRouterProviders,
+                loadingOpenRouterProviders = local.loadingOpenRouterProviders,
+                openRouterProvidersError = local.openRouterProvidersError,
                 translationConnectionTest = local.translationConnectionTest,
                 asrConnectionTest = local.asrConnectionTest,
                 configSaving = local.configSaving,
@@ -288,12 +309,20 @@ class SyncTextUiController(
                     credentialId = action.credentialId,
                     apiKey = action.apiKey,
                 )
+            is SyncTextAction.DiscoverOpenRouterProviders ->
+                discoverOpenRouterProviders(
+                    endpoint = action.endpoint,
+                    model = action.model,
+                    credentialId = action.credentialId,
+                    apiKey = action.apiKey,
+                )
             is SyncTextAction.TestTranslationConnection ->
                 testTranslationConnection(
                     protocol = action.protocol,
                     endpoint = action.endpoint,
                     model = action.model,
                     reasoningLevel = action.reasoningLevel,
+                    openRouterRouting = action.openRouterRouting,
                     credentialId = action.credentialId,
                     apiKey = action.apiKey,
                     configurationFingerprint = action.configurationFingerprint,
@@ -511,6 +540,7 @@ class SyncTextUiController(
         endpoint: String,
         model: String,
         reasoningLevel: TranslationReasoningLevel,
+        openRouterRouting: OpenRouterRoutingPolicy,
         credentialId: String?,
         apiKey: String?,
         configurationFingerprint: String,
@@ -524,7 +554,9 @@ class SyncTextUiController(
         scope.launch {
             runCatching {
                 withMinimumConnectionTestDuration {
-                    repository.testTranslationConnection(protocol, endpoint, model, reasoningLevel, credentialId, apiKey)
+                    repository.testTranslationConnection(
+                        protocol, endpoint, model, reasoningLevel, credentialId, apiKey, openRouterRouting,
+                    )
                 }
             }.onSuccess {
                 overlay.update {
@@ -543,6 +575,54 @@ class SyncTextUiController(
                     it.copy(
                         translationConnectionTest =
                             error.toConnectionTestUiState(configurationFingerprint),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun discoverOpenRouterProviders(
+        endpoint: String,
+        model: String,
+        credentialId: String?,
+        apiKey: String?,
+    ) {
+        providerDiscoveryJob?.cancel()
+        if (endpoint.isBlank() || model.isBlank() || credentialId.isNullOrBlank() && apiKey.isNullOrBlank()) {
+            overlay.update {
+                it.copy(
+                    availableOpenRouterProviders = emptyList(),
+                    loadingOpenRouterProviders = false,
+                    openRouterProvidersError = null,
+                )
+            }
+            return
+        }
+        overlay.update {
+            it.copy(
+                availableOpenRouterProviders = emptyList(),
+                loadingOpenRouterProviders = true,
+                openRouterProvidersError = null,
+            )
+        }
+        providerDiscoveryJob = scope.launch {
+            runCatching {
+                repository.discoverOpenRouterProviders(endpoint, model, credentialId, apiKey)
+            }.onSuccess { providers ->
+                overlay.update {
+                    it.copy(
+                        availableOpenRouterProviders = providers,
+                        loadingOpenRouterProviders = false,
+                        openRouterProvidersError = null,
+                    )
+                }
+            }.onFailure { error ->
+                if (error is CancellationException) return@onFailure
+                overlay.update {
+                    it.copy(
+                        availableOpenRouterProviders = emptyList(),
+                        loadingOpenRouterProviders = false,
+                        openRouterProvidersError = "无法获取这个模型的提供商",
                     )
                 }
             }
@@ -956,6 +1036,7 @@ private fun SyncTextConfigDraft.toConfig(configId: String?): SyncTextConfig =
         translationEndpoint = translationEndpoint.takeIf { translationConfigured },
         translationModel = translationModel.takeIf { translationConfigured },
         translationReasoningLevel = translationReasoningLevel,
+        openRouterRouting = openRouterRouting,
         translationCredentialId = translationCredentialId.takeIf { translationConfigured },
         targetLanguage = targetLanguage,
         presentationMode = presentationMode,

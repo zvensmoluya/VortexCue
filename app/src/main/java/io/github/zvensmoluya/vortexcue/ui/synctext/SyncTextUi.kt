@@ -107,10 +107,14 @@ import io.github.zvensmoluya.vortexcue.synctext.CredentialPurpose
 import io.github.zvensmoluya.vortexcue.synctext.DiscoveredTranslationModel
 import io.github.zvensmoluya.vortexcue.synctext.GenerationInput
 import io.github.zvensmoluya.vortexcue.synctext.LanguageTags
+import io.github.zvensmoluya.vortexcue.synctext.OpenRouterProviderOption
+import io.github.zvensmoluya.vortexcue.synctext.OpenRouterRoutingMode
+import io.github.zvensmoluya.vortexcue.synctext.OpenRouterRoutingPolicy
 import io.github.zvensmoluya.vortexcue.synctext.SyncTextConfig
 import io.github.zvensmoluya.vortexcue.synctext.TextPresentationMode
 import io.github.zvensmoluya.vortexcue.synctext.TranslationProtocol
 import io.github.zvensmoluya.vortexcue.synctext.TranslationReasoningLevel
+import io.github.zvensmoluya.vortexcue.synctext.isOfficialOpenRouterEndpoint
 import io.github.zvensmoluya.vortexcue.ui.theme.AppAccent
 import io.github.zvensmoluya.vortexcue.ui.theme.AppBackground
 import io.github.zvensmoluya.vortexcue.ui.theme.AppError
@@ -174,6 +178,7 @@ private data class TranslationPageDraft(
     val endpoint: String,
     val model: String,
     val reasoningLevel: TranslationReasoningLevel,
+    val openRouterRouting: OpenRouterRoutingPolicy,
     val credentialId: String?,
     val secret: String,
     val targetLanguage: String,
@@ -209,6 +214,7 @@ internal fun SyncTextConfigPage(
                     ?: TranslationProtocol.Responses.defaultBaseUrl(),
                 model = existing?.translationModel.orEmpty(),
                 reasoningLevel = existing?.translationReasoningLevel ?: TranslationReasoningLevel.Off,
+                openRouterRouting = existing?.openRouterRouting ?: OpenRouterRoutingPolicy(),
                 credentialId = existing?.translationCredentialId,
                 secret = "",
                 targetLanguage = existing?.targetLanguage ?: "zh-CN",
@@ -274,6 +280,7 @@ internal fun SyncTextConfigPage(
             translationUserAgent = existing?.translationUserAgent,
             translationModel = translation.model,
             translationReasoningLevel = translation.reasoningLevel,
+            openRouterRouting = translation.openRouterRouting,
             translationCredentialId = translation.credentialId,
             translationSecret = null,
             targetLanguage = translation.targetLanguage,
@@ -316,6 +323,18 @@ internal fun SyncTextConfigPage(
                 ),
             )
         }
+    }
+    fun discoverOpenRouterProviders(translation: TranslationPageDraft = translationDraft) {
+        if (translation.model.isBlank() || !isOfficialOpenRouterEndpoint(translation.endpoint)) return
+        if (translation.credentialId == null && translation.secret.isBlank()) return
+        onAction(
+            SyncTextAction.DiscoverOpenRouterProviders(
+                endpoint = translation.endpoint,
+                model = translation.model,
+                credentialId = translation.credentialId,
+                apiKey = translation.secret.takeIf(String::isNotBlank),
+            ),
+        )
     }
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.settledPage }.collect { page ->
@@ -373,6 +392,9 @@ internal fun SyncTextConfigPage(
                         availableModels = state.availableTranslationModels,
                         loadingModels = state.loadingTranslationModels,
                         modelsError = state.translationModelsError,
+                        availableProviders = state.availableOpenRouterProviders,
+                        loadingProviders = state.loadingOpenRouterProviders,
+                        providersError = state.openRouterProvidersError,
                         connectionTest = state.translationConnectionTest,
                         busy = state.busy || state.configSaving,
                         hasSavedKey = translationSavedCredential != null,
@@ -386,6 +408,7 @@ internal fun SyncTextConfigPage(
                         onDraftChanged = { translationDraft = it },
                         onCommit = { next -> commitDraft(translation = next) },
                         onDiscoverModels = { next -> discoverModels(next) },
+                        onDiscoverProviders = { next -> discoverOpenRouterProviders(next) },
                         onSaveCredential = { value ->
                             val next = translationDraft.copy(secret = value)
                             translationDraft = next
@@ -398,6 +421,7 @@ internal fun SyncTextConfigPage(
                                     translationDraft.endpoint,
                                     translationDraft.model,
                                     translationDraft.reasoningLevel,
+                                    translationDraft.openRouterRouting,
                                     translationDraft.credentialId,
                                     translationDraft.secret.takeIf(String::isNotBlank),
                                     fingerprint,
@@ -577,6 +601,9 @@ private fun TranslationPage(
     availableModels: List<DiscoveredTranslationModel>,
     loadingModels: Boolean,
     modelsError: String?,
+    availableProviders: List<OpenRouterProviderOption>,
+    loadingProviders: Boolean,
+    providersError: String?,
     connectionTest: ConnectionTestUiState,
     busy: Boolean,
     hasSavedKey: Boolean,
@@ -586,12 +613,18 @@ private fun TranslationPage(
     onDraftChanged: (TranslationPageDraft) -> Unit,
     onCommit: (TranslationPageDraft) -> Unit,
     onDiscoverModels: (TranslationPageDraft) -> Unit,
+    onDiscoverProviders: (TranslationPageDraft) -> Unit,
     onSaveCredential: (String) -> Unit,
     onTest: (String) -> Unit,
     onTextInputFocusChanged: (Boolean) -> Unit,
 ) {
     val fingerprint = draft.translationFingerprint()
     val stale = connectionTest.testedFingerprint != null && connectionTest.testedFingerprint != fingerprint
+    val routingReady =
+        draft.protocol != TranslationProtocol.ChatCompletions ||
+            !isOfficialOpenRouterEndpoint(draft.endpoint) ||
+            draft.openRouterRouting.mode != OpenRouterRoutingMode.Provider ||
+            !draft.openRouterRouting.providerTag.isNullOrBlank()
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().navigationBarsPadding().testTag("sync-text-translation-page"),
@@ -650,6 +683,22 @@ private fun TranslationPage(
                 },
             )
         }
+        if (draft.protocol == TranslationProtocol.ChatCompletions && isOfficialOpenRouterEndpoint(draft.endpoint)) {
+            item {
+                OpenRouterRoutingSection(
+                    value = draft.openRouterRouting,
+                    providers = availableProviders,
+                    loadingProviders = loadingProviders,
+                    providersError = providersError,
+                    onOpenProviders = { onDiscoverProviders(draft) },
+                    onValueChange = {
+                        val next = draft.copy(openRouterRouting = it)
+                        onDraftChanged(next)
+                        onCommit(next)
+                    },
+                )
+            }
+        }
         item {
             TargetLanguagePicker(
                 value = draft.targetLanguage,
@@ -679,7 +728,7 @@ private fun TranslationPage(
                     state = connectionTest,
                     stale = stale,
                     enabled = !busy && isHttpsEndpoint(draft.endpoint) && draft.model.isNotBlank() &&
-                        (draft.credentialId != null || draft.secret.isNotBlank()),
+                        (draft.credentialId != null || draft.secret.isNotBlank()) && routingReady,
                     onClick = { onTest(fingerprint) },
                 )
             }
@@ -979,6 +1028,150 @@ private fun ProtocolPicker(
             TranslationProtocol.entries.forEach { candidate ->
                 SheetChoiceRow(
                     title = candidate.label(),
+                    selected = candidate == value,
+                    onClick = {
+                        onValueChange(candidate)
+                        visible = false
+                    },
+                )
+            }
+            Spacer(Modifier.navigationBarsPadding())
+        }
+    }
+}
+
+@Composable
+private fun OpenRouterRoutingSection(
+    value: OpenRouterRoutingPolicy,
+    providers: List<OpenRouterProviderOption>,
+    loadingProviders: Boolean,
+    providersError: String?,
+    onOpenProviders: () -> Unit,
+    onValueChange: (OpenRouterRoutingPolicy) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("OpenRouter 路由", color = AppPrimaryText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        OpenRouterRoutingModePicker(value.mode) { mode ->
+            onValueChange(
+                value.copy(
+                    mode = mode,
+                    providerTag = value.providerTag.takeIf { mode == OpenRouterRoutingMode.Provider },
+                ),
+            )
+        }
+        if (value.mode == OpenRouterRoutingMode.Provider) {
+            OpenRouterProviderPicker(
+                value = value.providerTag,
+                providers = providers,
+                loading = loadingProviders,
+                error = providersError,
+                onOpen = onOpenProviders,
+                onValueChange = { onValueChange(value.copy(providerTag = it)) },
+            )
+            BooleanChoicePicker(
+                label = "提供商不可用时",
+                value = value.allowFallbacks,
+                trueLabel = "切换其他提供商",
+                falseLabel = "停止任务",
+                onValueChange = { onValueChange(value.copy(allowFallbacks = it)) },
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OpenRouterRoutingModePicker(
+    value: OpenRouterRoutingMode,
+    onValueChange: (OpenRouterRoutingMode) -> Unit,
+) {
+    var visible by remember { mutableStateOf(false) }
+    ConfigChoiceRow(label = "路由模式", value = value.routingLabel(), onClick = { visible = true })
+    if (visible) {
+        ModalBottomSheet(onDismissRequest = { visible = false }, containerColor = AppSurfaceRaised) {
+            SheetTitle("路由模式")
+            OpenRouterRoutingMode.entries.forEach { candidate ->
+                SheetChoiceRow(
+                    title = candidate.routingLabel(),
+                    selected = candidate == value,
+                    onClick = {
+                        onValueChange(candidate)
+                        visible = false
+                    },
+                )
+            }
+            Spacer(Modifier.navigationBarsPadding())
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OpenRouterProviderPicker(
+    value: String?,
+    providers: List<OpenRouterProviderOption>,
+    loading: Boolean,
+    error: String?,
+    onOpen: () -> Unit,
+    onValueChange: (String) -> Unit,
+) {
+    var visible by remember { mutableStateOf(false) }
+    val label = providers.firstOrNull { it.tag == value }?.displayName ?: value ?: "选择提供商"
+    ConfigChoiceRow(
+        label = "提供商",
+        value = label,
+        onClick = {
+            onOpen()
+            visible = true
+        },
+        modifier = Modifier.testTag("openrouter-provider-picker"),
+    )
+    if (visible) {
+        ModalBottomSheet(onDismissRequest = { visible = false }, containerColor = AppSurfaceRaised) {
+            Column(Modifier.fillMaxWidth().fillMaxHeight(0.8f)) {
+                SheetTitle("提供商")
+                if (loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = AppAccent)
+                error?.let { Text(it, color = AppError, fontSize = 12.sp, modifier = Modifier.padding(20.dp, 8.dp)) }
+                LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+                    items(providers, key = OpenRouterProviderOption::tag) { provider ->
+                        SheetChoiceRow(
+                            title = provider.displayName,
+                            selected = provider.tag == value,
+                            onClick = {
+                                onValueChange(provider.tag)
+                                visible = false
+                            },
+                        )
+                    }
+                    if (!loading && providers.isEmpty() && error == null) {
+                        item {
+                            Text("没有可用的提供商", color = AppSecondaryText, modifier = Modifier.padding(20.dp))
+                        }
+                    }
+                }
+                Spacer(Modifier.navigationBarsPadding())
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BooleanChoicePicker(
+    label: String,
+    value: Boolean,
+    trueLabel: String,
+    falseLabel: String,
+    onValueChange: (Boolean) -> Unit,
+) {
+    var visible by remember { mutableStateOf(false) }
+    ConfigChoiceRow(label = label, value = if (value) trueLabel else falseLabel, onClick = { visible = true })
+    if (visible) {
+        ModalBottomSheet(onDismissRequest = { visible = false }, containerColor = AppSurfaceRaised) {
+            SheetTitle(label)
+            listOf(true to trueLabel, false to falseLabel).forEach { (candidate, title) ->
+                SheetChoiceRow(
+                    title = title,
                     selected = candidate == value,
                     onClick = {
                         onValueChange(candidate)
@@ -1763,7 +1956,13 @@ private fun credentialsFor(
 
 private fun SyncTextConfigDraft.isComplete(): Boolean =
     isHttpsEndpoint(asrEndpoint) &&
-        (asrCredentialId != null || asrSecret?.isNotBlank() == true)
+        (asrCredentialId != null || asrSecret?.isNotBlank() == true) &&
+        (
+            translationProtocol != TranslationProtocol.ChatCompletions ||
+                !isOfficialOpenRouterEndpoint(translationEndpoint) ||
+                openRouterRouting.mode != OpenRouterRoutingMode.Provider ||
+                !openRouterRouting.providerTag.isNullOrBlank()
+        )
 
 private fun TranslationPageDraft.translationFingerprint(): String =
     fingerprintOf(
@@ -1771,6 +1970,9 @@ private fun TranslationPageDraft.translationFingerprint(): String =
         endpoint.trim(),
         model.trim(),
         reasoningLevel.name,
+        openRouterRouting.mode.name,
+        openRouterRouting.providerTag.orEmpty(),
+        openRouterRouting.allowFallbacks.toString(),
         credentialId.orEmpty(),
         secret,
         targetLanguage,
@@ -2037,6 +2239,14 @@ private fun TranslationReasoningLevel.reasoningHint(): String =
         TranslationReasoningLevel.Low -> "轻量思考"
         TranslationReasoningLevel.Medium -> "平衡"
         TranslationReasoningLevel.High -> "质量优先"
+    }
+
+private fun OpenRouterRoutingMode.routingLabel(): String =
+    when (this) {
+        OpenRouterRoutingMode.Auto -> "自动选择"
+        OpenRouterRoutingMode.Price -> "省钱优先"
+        OpenRouterRoutingMode.Throughput -> "速度优先"
+        OpenRouterRoutingMode.Provider -> "指定提供商"
     }
 
 private fun TranslationProtocol.defaultEndpoint(): String =

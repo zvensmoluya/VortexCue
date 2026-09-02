@@ -8,6 +8,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 
 /**
@@ -50,6 +51,34 @@ class TranslationModelCatalog(
         throw IOException("服务未提供模型列表，可以直接填写模型（HTTP ${lastRouteStatus ?: 404}）")
     }
 
+    suspend fun fetchOpenRouterProviders(
+        endpoint: String,
+        model: String,
+        apiKey: String,
+    ): List<OpenRouterProviderOption> {
+        require(isOfficialOpenRouterEndpoint(endpoint)) { "提供商路由仅支持 OpenRouter 官方地址" }
+        val base = endpoint.trim().removeSuffix("/").toHttpUrlOrNull()
+            ?: throw IOException("OpenRouter 地址无效")
+        val modelSegments = model.trim().split('/').filter(String::isNotBlank)
+        require(modelSegments.size >= 2) { "请先选择有效的 OpenRouter 模型" }
+        val url = base.newBuilder()
+            .encodedPath("/api/v1/models")
+            .apply { modelSegments.forEach(::addPathSegment) }
+            .addPathSegment("endpoints")
+            .build()
+        val exchange = executor.execute(
+            Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer $apiKey")
+                .get()
+                .build(),
+        )
+        if (exchange.status !in 200..299) {
+            throw IOException("提供商列表请求失败（HTTP ${exchange.status}）")
+        }
+        return parseOpenRouterProviders(exchange.body)
+    }
+
     companion object {
         private val RouteFallbackStatuses = setOf(404, 405)
     }
@@ -61,6 +90,14 @@ data class DiscoveredTranslationModel(
     val displayName: String,
     val groupLabel: String? = null,
 )
+
+data class OpenRouterProviderOption(
+    val tag: String,
+    val displayName: String,
+)
+
+fun isOfficialOpenRouterEndpoint(endpoint: String): Boolean =
+    endpoint.trim().replace("{model}", "model").toHttpUrlOrNull()?.host == "openrouter.ai"
 
 internal fun resolveModelsEndpoint(protocol: TranslationProtocol, endpoint: String): HttpUrl =
     TranslationEndpointResolver().modelCandidates(protocol, endpoint).first().modelsUrl
@@ -124,3 +161,24 @@ internal fun parseDiscoveredModels(
 
 private fun kotlinx.serialization.json.JsonElement?.asModelArray(): List<JsonObject> =
     (this as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
+
+internal fun parseOpenRouterProviders(bytes: ByteArray): List<OpenRouterProviderOption> {
+    val root = runCatching { Json.parseToJsonElement(bytes.toString(Charsets.UTF_8)).jsonObject }.getOrNull()
+        ?: return emptyList()
+    val endpoints = root["data"]?.let { it as? JsonObject }?.get("endpoints") as? JsonArray
+        ?: return emptyList()
+    return endpoints.mapNotNull { element ->
+        val item = element as? JsonObject ?: return@mapNotNull null
+        val tag = item["tag"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf(String::isNotBlank)
+            ?: return@mapNotNull null
+        val providerName = item["provider_name"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+        val variant = tag.substringAfter('/', missingDelimiterValue = "").replace("/", " · ")
+        OpenRouterProviderOption(
+            tag = tag,
+            displayName = listOf(providerName.ifBlank { tag.substringBefore('/') }, variant.takeIf(String::isNotBlank))
+                .filterNotNull()
+                .joinToString(" · "),
+        )
+    }.distinctBy(OpenRouterProviderOption::tag)
+        .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER, OpenRouterProviderOption::displayName))
+}

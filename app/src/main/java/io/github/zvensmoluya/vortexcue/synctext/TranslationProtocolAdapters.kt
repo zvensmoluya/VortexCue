@@ -49,6 +49,7 @@ data class TranslationProviderRequest(
     val userPrompt: String,
     /** Null is reserved for an internal compatibility retry that omits provider reasoning controls. */
     val reasoningLevel: TranslationReasoningLevel? = TranslationReasoningLevel.Off,
+    val openRouterRouting: OpenRouterRoutingPolicy = OpenRouterRoutingPolicy(),
     val userAgent: String? = null,
 )
 
@@ -1011,6 +1012,7 @@ class ChatCompletionsTranslationAdapter(
             } else {
                 request.reasoningLevel?.let { level -> put("reasoning_effort", level.wireValue()) }
             }
+            request.openRouterProviderBody()?.let { put("provider", it) }
             put(
                 "messages",
                 buildJsonArray {
@@ -1061,6 +1063,26 @@ class ChatCompletionsTranslationAdapter(
             usage = root.objectValue("usage").toUsage("prompt_tokens", "completion_tokens", "total_tokens"),
             providerRequestId = root.string("id"),
         )
+    }
+}
+
+private fun TranslationProviderRequest.openRouterProviderBody(): JsonObject? {
+    if (!isOfficialOpenRouterEndpoint(endpoint)) return null
+    return when (openRouterRouting.mode) {
+        OpenRouterRoutingMode.Auto -> null
+        OpenRouterRoutingMode.Price -> buildJsonObject { put("sort", "price") }
+        OpenRouterRoutingMode.Throughput -> buildJsonObject { put("sort", "throughput") }
+        OpenRouterRoutingMode.Provider -> {
+            val tag = openRouterRouting.providerTag?.takeIf(String::isNotBlank) ?: return null
+            buildJsonObject {
+                if (openRouterRouting.allowFallbacks) {
+                    put("order", buildJsonArray { add(JsonPrimitive(tag)) })
+                } else {
+                    put("only", buildJsonArray { add(JsonPrimitive(tag)) })
+                }
+                put("allow_fallbacks", openRouterRouting.allowFallbacks)
+            }
+        }
     }
 }
 

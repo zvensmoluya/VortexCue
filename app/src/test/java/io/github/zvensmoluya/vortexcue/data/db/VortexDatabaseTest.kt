@@ -760,6 +760,34 @@ class VortexDatabaseTest {
     }
 
     @Test
+    fun versionFifteenAddsFrozenOpenRouterRouting() = runBlocking {
+        val path = temporaryFolder.root.resolve("migration-v15-v16.db").toPath()
+        val helper =
+            MigrationTestHelper(
+                databasePath = path,
+                schemaDirectoryPath = File("schemas").toPath(),
+                driver = BundledSQLiteDriver(),
+                databaseClass = VortexDatabase::class,
+                databaseFactory = { VortexDatabase_Impl() },
+                autoMigrationSpecs = emptyList(),
+            )
+        helper.createDatabase(15).close()
+
+        helper.runMigrationsAndValidate(16, listOf(MIGRATION_15_16)).use { connection ->
+            listOf("sync_text_scheme", "generation_attempt").forEach { table ->
+                connection.prepare("PRAGMA table_info($table)").use { statement ->
+                    val columns = buildSet {
+                        while (statement.step()) add(statement.getText(1))
+                    }
+                    assertTrue("translation_openrouter_routing_mode" in columns)
+                    assertTrue("translation_openrouter_provider" in columns)
+                    assertTrue("translation_openrouter_allow_fallbacks" in columns)
+                }
+            }
+        }
+    }
+
+    @Test
     fun versionSixIsDestructivelyRebuiltAsVersionNine() = runBlocking {
         val path = temporaryFolder.root.resolve("migration-v6-v9.db").toPath()
         val helper =

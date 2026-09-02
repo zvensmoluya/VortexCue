@@ -53,7 +53,7 @@ import androidx.sqlite.driver.AndroidSQLiteDriver
     ],
     // The new content model intentionally allows a destructive upgrade. Original
     // media remains in user storage; only app-owned indexes are rebuilt.
-    version = 15,
+    version = 16,
     autoMigrations = [
         AutoMigration(from = 2, to = 3),
         AutoMigration(from = 4, to = 5),
@@ -89,6 +89,7 @@ abstract class VortexDatabase : RoomDatabase() {
                     MIGRATION_12_13,
                     MIGRATION_13_14,
                     MIGRATION_14_15,
+                    MIGRATION_15_16,
                 )
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()

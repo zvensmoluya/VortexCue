@@ -480,6 +480,7 @@ class SyncTextTaskRunner(
                                     signals.flags,
                                 ),
                             reasoningLevel = policy.reasoningLevel,
+                            openRouterRouting = attempt.openRouterRouting(),
                             userAgent = attempt.translationUserAgent,
                         )
                     val response =
@@ -1207,6 +1208,7 @@ class SyncTextTaskRunner(
                             systemPrompt = systemPrompt,
                             userPrompt = userPrompt,
                             reasoningLevel = reasoningLevel,
+                            openRouterRouting = attempt.openRouterRouting(),
                             userAgent = attempt.translationUserAgent,
                         ),
                     onAttempt = { networkAttempt ->
@@ -1802,6 +1804,13 @@ private fun TranslationBatchEntity.usage() =
 
 private fun SourcePreparationEntity.usage() =
     UsageRecord(inputTokens, outputTokens, totalTokens, costUsd)
+
+private fun GenerationAttemptEntity.openRouterRouting() =
+    OpenRouterRoutingPolicy(
+        mode = translationOpenRouterRoutingMode.enumValueOr(OpenRouterRoutingMode.Auto),
+        providerTag = translationOpenRouterProvider,
+        allowFallbacks = translationOpenRouterAllowFallbacks,
+    )
 
 private fun TranslationOutputException.diagnosticIssueSummary(): String {
     val counts =

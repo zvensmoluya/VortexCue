@@ -17,6 +17,7 @@ class SyncTextConnectionTester(
         targetLanguage: String,
         reasoningLevel: TranslationReasoningLevel = TranslationReasoningLevel.Off,
         userAgent: String? = null,
+        openRouterRouting: OpenRouterRoutingPolicy = OpenRouterRoutingPolicy(),
     ) {
         val policy = policies.resolve(targetLanguage)
         val plan =
@@ -34,6 +35,7 @@ class SyncTextConnectionTester(
                         systemPrompt = systemPrompt,
                         userPrompt = userPrompt,
                         reasoningLevel = reasoningLevel,
+                        openRouterRouting = openRouterRouting,
                         userAgent = userAgent,
                     ),
             )

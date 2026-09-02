@@ -147,6 +147,26 @@ class TranslationModelCatalogTest {
     }
 
     @Test
+    fun `OpenRouter provider endpoints retain routable tags`() {
+        val providers =
+            parseOpenRouterProviders(
+                """
+                {"data":{"endpoints":[
+                  {"provider_name":"Google AI Studio","tag":"google-ai-studio/flex"},
+                  {"provider_name":"Google","tag":"google-vertex/global"},
+                  {"provider_name":"Google","tag":"google-vertex/global"}
+                ]}}
+                """.trimIndent().toByteArray(),
+            )
+
+        assertEquals(
+            listOf("Google AI Studio · flex", "Google · global"),
+            providers.map(OpenRouterProviderOption::displayName),
+        )
+        assertEquals(listOf("google-ai-studio/flex", "google-vertex/global"), providers.map(OpenRouterProviderOption::tag))
+    }
+
+    @Test
     fun `Google resource names are normalized only for Google protocol`() {
         val response =
             """
