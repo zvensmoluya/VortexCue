@@ -10,9 +10,12 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.geometry.Offset
 import io.github.zvensmoluya.vortexcue.core.model.DisplayProfile
 import io.github.zvensmoluya.vortexcue.ui.theme.VortexCueTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -46,13 +49,14 @@ class GlowDisplayEditorComposeTest {
 
         compose.onNodeWithText("微光显示").assertExists()
         compose.onNodeWithText("声音继续，画面退场。\n需要时，只让当前文字发光。").assertExists()
-        compose.onNodeWithText("柔和").performScrollTo().performClick()
+        compose.onNodeWithText("预设 · 平衡").performClick()
+        compose.onNodeWithText("柔和").performClick()
         compose.runOnIdle { assertEquals(DisplayProfile.Soft, latestProfile) }
 
-        compose.onNodeWithText("隐藏面板，查看纯净预览").performScrollTo().performClick()
-        compose.onNodeWithText("窗口亮度").assertDoesNotExist()
+        compose.onNodeWithText("纯净预览").performClick()
+        compose.onNodeWithText("文字明暗").assertDoesNotExist()
         compose.onNodeWithContentDescription("显示微光调整面板").performClick()
-        compose.onNodeWithText("窗口亮度").assertExists()
+        compose.onNodeWithText("文字明暗").assertExists()
     }
 
     @Test
@@ -69,9 +73,34 @@ class GlowDisplayEditorComposeTest {
             }
         }
 
-        compose.onNodeWithText("第一次微光校准").assertExists()
-        compose.onNodeWithText("完成并进入微光").performScrollTo().assertExists()
-        compose.onNodeWithContentDescription("返回播放器").assertExists()
+        compose.onNodeWithText("微光校准").assertExists()
+        compose.onNodeWithText("完成").assertExists()
+        compose.onNodeWithText("返回").assertExists()
+    }
+
+    @Test
+    fun rockerContinuesWhileHeldAndStopsAfterRelease() {
+        var latest = DisplayProfile.Balanced
+        compose.setContent {
+            var profile by remember { mutableStateOf(latest) }
+            GlowDisplayEditor(profile, false, { profile = it; latest = it }, {}, {})
+        }
+        compose.mainClock.autoAdvance = false
+        val rocker = compose.onNodeWithContentDescription("回弹调节杆，向左减少，向右增加")
+        rocker.performTouchInput {
+            down(center)
+            moveTo(Offset(width * 0.65f, center.y))
+            moveTo(Offset(width * 0.85f, center.y))
+        }
+        compose.mainClock.advanceTimeByFrame()
+        compose.waitForIdle()
+        compose.mainClock.advanceTimeBy(1200)
+        compose.runOnIdle { assertTrue(latest.glowSubtitleLevel > DisplayProfile.Balanced.glowSubtitleLevel) }
+        rocker.performTouchInput { up() }
+        compose.mainClock.advanceTimeBy(80)
+        val released = latest
+        compose.mainClock.advanceTimeBy(1200)
+        compose.runOnIdle { assertEquals(released, latest) }
     }
 
     @Test
