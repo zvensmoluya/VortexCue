@@ -1,5 +1,6 @@
 package io.github.zvensmoluya.vortexcue.synctext
 
+import io.github.zvensmoluya.vortexcue.core.model.TimedTextReadiness
 import androidx.room3.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import io.github.zvensmoluya.vortexcue.core.model.TextSelectionMode
@@ -491,11 +492,12 @@ class SyncTextRepositoryTest {
                 GenerationRequest(ContentId, GenerationInput.ExistingTrack(TrackId), GenerationOutput.SourceOnly, scheme.schemeId),
             )
         val cues = CueIdNormalizer.normalize(listOf(SubtitleCue(0L, 1_000L, "source")))
-        val partialArtifact =
-            textStorage.publishTimelineArtifact(
-                TextArtifactKind.AsrWorkUnitOutput,
-                CanonicalTextNormalizer.normalizeGenerated(cues),
-            ).also { textStorage.registerArtifact(it) }
+        // The displayed prefix differs from raw ASR work after seam merging/normalization.
+        val rawCues = listOf(SubtitleCue(0L, 500L, "raw one"), SubtitleCue(500L, 1_000L, "raw two"))
+        textStorage.publishTimelineArtifact(
+            TextArtifactKind.AsrWorkUnitOutput,
+            CanonicalTextNormalizer.normalizeGenerated(rawCues),
+        ).also { textStorage.registerArtifact(it) }
         val partial =
             repository.publishResult(
                 taskId = task.taskId,
@@ -507,11 +509,13 @@ class SyncTextRepositoryTest {
                 completeTask = false,
                 completedWindowCount = 1,
                 totalWindowCount = 2,
-                partialArtifactIds = listOf(partialArtifact.artifactId),
             )
 
         assertEquals(GenerationTaskKind.SourceGeneration, task.kind)
         assertEquals(GeneratedResultCompleteness.Partial, partial.completeness)
+        assertEquals(cues.map { it.text }, repository.loadPresentation(partial.slotId)?.sourceCues?.map { it.text })
+        // A fresh reader must reproduce the exact published prefix after process restart.
+        assertEquals(cues.map { it.text }, TimelineRevisionReader(textStorage).read(partial.sourceRevisionId).cues.map { it.text })
         assertTrue(runCatching { repository.submitTranslation(partial.resultId) }.isFailure)
 
         val final =
@@ -528,6 +532,11 @@ class SyncTextRepositoryTest {
             )
         assertEquals(GeneratedResultCompleteness.Final, final.completeness)
         assertTrue(runCatching { repository.submitTranslation(final.resultId) }.isFailure)
+        val artifactId = database.textStorageDao().revisionArtifacts(final.sourceRevisionId).single().artifactId
+        artifactStore.corrupt(artifactId)
+        assertNull(repository.loadPresentation(final.slotId))
+        assertTrue(database.contentDao().allTextTracks().filter { it.generatedSlotId == final.slotId }
+            .all { it.readiness == TimedTextReadiness.MissingArtifact.name })
     }
 
     @Test

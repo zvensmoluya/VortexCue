@@ -713,7 +713,6 @@ class SyncTextTaskRunner(
                                     coveredEndMs = prefix.last().ownedEndMs,
                                     completedWindowCount = prefix.size,
                                     totalWindowCount = roots.size,
-                                    partialArtifactIds = prefixWork.map(WindowTranscript::artifactId),
                                 )
                                 publishedRootCount = prefix.size
                             }

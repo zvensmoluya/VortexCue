@@ -34,6 +34,7 @@ import io.github.zvensmoluya.vortexcue.text.TimelineRole
 import io.github.zvensmoluya.vortexcue.text.TranslationDelta
 import io.github.zvensmoluya.vortexcue.text.TranslationDeltaEntry
 import io.github.zvensmoluya.vortexcue.text.canonicalContentHash
+import java.io.IOException
 import java.net.URI
 import java.security.MessageDigest
 import java.util.UUID
@@ -920,8 +921,16 @@ class SyncTextRepository(
     suspend fun loadPresentation(slotId: String): GeneratedTextPresentation? {
         val slot = dao.generatedSlot(slotId) ?: return null
         val entity = dao.currentGeneratedResult(slotId) ?: return null
-        val source = revisionReader.read(entity.sourceRevisionId).toSubtitleCues()
-        val target = entity.targetRevisionId?.let { revisionReader.read(it).toSubtitleCues() }
+        val (source, target) = try {
+            revisionReader.read(entity.sourceRevisionId).toSubtitleCues() to
+                entity.targetRevisionId?.let { revisionReader.read(it).toSubtitleCues() }
+        } catch (error: IOException) {
+            val message = "文字资产缺失或损坏，请重新生成同步文字"
+            database.contentDao().allTextTracks()
+                .filter { it.generatedSlotId == slotId && it.readiness != TimedTextReadiness.MissingArtifact.name }
+                .forEach { database.contentDao().markTextTrackMissingArtifact(it.trackId, message) }
+            return null
+        }
         return GeneratedTextPresentation(
             result = entity.toDomain(slot.presentationMode.enumValueOr(TextPresentationMode.TargetOnly)),
             sourceCues = source,
@@ -958,7 +967,6 @@ class SyncTextRepository(
         completedWindowCount: Int? = null,
         totalWindowCount: Int? = null,
         sourceRevisionId: String? = null,
-        partialArtifactIds: List<String> = emptyList(),
     ): GeneratedTextResult {
         val taskBeforeWrite = requireNotNull(dao.task(taskId)) { "Task no longer exists" }
         val taskSnapshot = requireNotNull(dao.taskSnapshot(taskId)) { "Task snapshot no longer exists" }
@@ -975,29 +983,18 @@ class SyncTextRepository(
                         "Source revision does not match the published cues"
                     }
                 }
-            } ?: if (completeness == GeneratedResultCompleteness.Partial) {
-                require(partialArtifactIds.isNotEmpty()) { "Partial publication requires work-unit artifacts" }
-                textStorage.createRevision(
-                    contentId = taskBeforeWrite.contentId,
-                    role = TimelineRole.Source,
-                    completeness = TimelineCompleteness.Partial,
-                    artifacts =
-                        partialArtifactIds.map { artifactId ->
-                            RevisionArtifactRole.AsrWorkUnit to
-                                requireNotNull(textStorage.artifact(artifactId)) {
-                                    "ASR work-unit artifact is unavailable"
-                                }
-                        },
-                    contentHash = canonicalContentHash(sourceTimeline),
-                    cueCount = sourceTimeline.cues.size,
-                    coveredEndMs = coveredEndMs,
-                )
-            } else {
+            } ?: run {
+                // Persist exactly the displayed prefix: seam merging and source normalization
+                // cannot be reconstructed from raw work-unit artifacts alone.
                 val artifact = textStorage.publishTimelineArtifact(TextArtifactKind.FinalTimeline, sourceTimeline)
                 textStorage.createRevision(
                     contentId = taskBeforeWrite.contentId,
                     role = TimelineRole.Source,
-                    completeness = TimelineCompleteness.Final,
+                    completeness = if (completeness == GeneratedResultCompleteness.Partial) {
+                        TimelineCompleteness.Partial
+                    } else {
+                        TimelineCompleteness.Final
+                    },
                     artifacts = listOf(RevisionArtifactRole.Timeline to artifact),
                     contentHash = canonicalContentHash(sourceTimeline),
                     cueCount = sourceTimeline.cues.size,
