@@ -122,8 +122,10 @@ class PlaybackService : MediaSessionService() {
             }
         }
 
+    @androidx.annotation.OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
+        setMediaNotificationProvider(PlaybackNotificationProvider(this))
         contentRepository = appContainer.contentRepository
         playbackRepository = appContainer.playbackStateRepository
 
