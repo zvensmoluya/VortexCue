@@ -46,6 +46,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
@@ -112,15 +113,14 @@ internal fun PlaylistOverview(
         state = listState,
         modifier = Modifier.fillMaxSize().statusBarsPadding(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         if (recentPlaylists.isNotEmpty() && !reorderMode) {
             item(key = "recent-title") {
                 Text(
                     "最近听过",
                     color = AppPrimaryText,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 4.dp),
                 )
             }
@@ -150,8 +150,7 @@ internal fun PlaylistOverview(
                 Text(
                     if (reorderMode) "调整歌单顺序" else "全部歌单",
                     color = AppPrimaryText,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f),
                 )
                 if (reorderMode) {
@@ -219,22 +218,23 @@ internal fun PlaylistOverview(
 private fun RecentPlaylistCard(playlist: PlaylistSummary, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
-            .height(124.dp)
+            .heightIn(min = 132.dp)
             .background(AppSurfaceRaised, RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(20.dp),
+            .padding(24.dp),
         verticalArrangement = Arrangement.Center,
     ) {
         Text(
             playlist.name,
             color = AppPrimaryText,
-            fontSize = 21.sp,
+            fontSize = 23.sp,
+            lineHeight = 31.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.height(8.dp))
-        Text("${playlist.itemCount} 项内容", color = AppSecondaryText, fontSize = 13.sp)
+        Text("${playlist.itemCount} 项内容", color = AppSecondaryText, style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -259,8 +259,8 @@ private fun PlaylistCard(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(name, color = AppPrimaryText, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text("$itemCount 项内容", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+            Text(name, color = AppPrimaryText, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text("$itemCount 项内容", color = AppSecondaryText, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
         }
         if (onRename != null || onReorder != null || onDelete != null) {
             Box {
@@ -496,11 +496,11 @@ private fun WorkCard(work: WorkSummary, onClick: () -> Unit, modifier: Modifier 
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(work.title, color = AppPrimaryText, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(work.title, color = AppPrimaryText, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(
                 "作品 · ${work.releaseCode} · ${work.playbackPartCount} 段 · ${formatMediaDuration(work.playbackDurationMs)}",
                 color = AppSecondaryText,
-                fontSize = 12.sp,
+                style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

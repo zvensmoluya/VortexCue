@@ -815,6 +815,7 @@ private fun NormalPlayer(
             accentColor = AppAccent,
             trackColor = AppSurfaceRaised,
             onPlayPause = onPlayPause,
+            prominent = true,
         )
 
         PlayerOptions(
@@ -830,17 +831,17 @@ private fun NormalPlayer(
         ) {
             OutlinedButton(
                 onClick = onEnterGlow,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                border = BorderStroke(1.dp, AppAccent),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                border = BorderStroke(1.dp, AppHairline),
                 colors =
                     ButtonDefaults.outlinedButtonColors(
-                        containerColor = Color.Transparent,
-                        contentColor = AppAccent,
+                        containerColor = AppSurfaceRaised,
+                        contentColor = AppPrimaryText,
                     ),
             ) {
                 Icon(Icons.Outlined.DarkMode, contentDescription = null, tint = AppAccent)
                 Spacer(Modifier.size(8.dp))
-                Text("进入微光", color = AppAccent)
+                Text("进入微光", color = AppPrimaryText)
             }
         }
     }
@@ -2333,6 +2334,7 @@ private fun PlaybackControls(
     trackColor: Color,
     onPlayPause: () -> Unit,
     onInteraction: () -> Unit = {},
+    prominent: Boolean = false,
 ) {
     val sliderColors =
         SliderDefaults.colors(
@@ -2367,8 +2369,8 @@ private fun PlaybackControls(
         colors = sliderColors,
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(formatTime(displayedPositionMs), color = secondaryColor, fontSize = 11.sp)
-        Text(formatTime(playback.durationMs), color = secondaryColor, fontSize = 11.sp)
+        Text(formatTime(displayedPositionMs), color = secondaryColor, fontSize = if (prominent) 13.sp else 11.sp)
+        Text(formatTime(playback.durationMs), color = secondaryColor, fontSize = if (prominent) 13.sp else 11.sp)
     }
 
     Row(
@@ -2402,7 +2404,7 @@ private fun PlaybackControls(
                 onInteraction()
                 onPlayPause()
             },
-            modifier = Modifier.size(56.dp),
+            modifier = if (prominent) Modifier.size(64.dp).background(AppSurfaceRaised, RoundedCornerShape(32.dp)) else Modifier.size(56.dp),
         ) {
             Icon(
                 when {

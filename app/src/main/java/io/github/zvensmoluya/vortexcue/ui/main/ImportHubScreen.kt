@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.AudioFile
@@ -373,10 +375,31 @@ private fun ImportSourceOverview(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            item(key = "file") {
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                        .background(AppSurfaceRaised, RoundedCornerShape(8.dp))
+                        .clickable(onClick = onPickMedia)
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Outlined.AudioFile, contentDescription = null, tint = AppBoneLogo)
+                        Spacer(Modifier.width(12.dp))
+                        Text("打开一个文件", color = AppPrimaryText, style = MaterialTheme.typography.titleMedium)
+                    }
+                    Text("选择音频或视频，开始播放", color = AppSecondaryText, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            singleFileImportError?.let { message ->
+                item(key = "single-file-error") {
+                    Text(message, color = AppError, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
             if (!coordinator.hasFullStorageAccess) {
                 item(key = "permission") {
                     Column(
-                        modifier = Modifier.fillMaxWidth().background(AppSurfaceRaised).padding(18.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         Text("开启完整本机扫描", color = AppPrimaryText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
@@ -384,7 +407,7 @@ private fun ImportSourceOverview(
                             "一次开启后自动查找共享存储中的音频和同目录字幕，只读访问，不移动、修改或删除原文件。",
                             color = AppSecondaryText,
                         )
-                        Button(onClick = onRequestLibraryAccess, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                        OutlinedButton(onClick = onRequestLibraryAccess, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                             Text("前往系统设置")
                         }
                     }
@@ -474,18 +497,6 @@ private fun ImportSourceOverview(
 
             item(key = "other-title") {
                 Text("其他方式", color = AppSecondaryText, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
-            }
-            singleFileImportError?.let { message ->
-                item(key = "single-file-error") {
-                    Text(message, color = AppError, fontSize = 12.sp)
-                }
-            }
-            item(key = "file") {
-                ImportActionRow(
-                    label = "选择音频或视频文件",
-                    icon = Icons.Outlined.AudioFile,
-                    onClick = onPickMedia,
-                )
             }
             item(key = "folder") {
                 ImportActionRow(
