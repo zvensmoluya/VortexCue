@@ -6,6 +6,8 @@
 
 有字幕就直接读；没有字幕，也可以用自己配置的服务生成同步文字或翻译。荧荧可以从本地视频播放声音，目前不显示视频画面。
 
+[下载 Android 预览 APK](https://github.com/zvensmoluya/VortexCue/releases/download/v0.0.1-preview/VortexCue-0.0.1-debug-4b763d2.apk) · [发布说明](https://github.com/zvensmoluya/VortexCue/releases/tag/v0.0.1-preview)
+
 <p>
   <img src="docs/screenshots/player.png" width="240" alt="普通播放：字幕、播放控制和进入微光按钮">
   <img src="docs/screenshots/glow.png" width="240" alt="微光模式：纯黑画面上只显示当前字幕">
@@ -21,7 +23,7 @@
 
 ## 获取与构建
 
-当前是 **开发预览**，暂无公开安装包。支持 Android 8.0（API 26）及以上；从源码构建需要 JDK 17 和 Android SDK 37。
+当前是 **开发预览**，提供调试签名 APK 供体验。支持 Android 8.0（API 26）及以上。若要从源码构建，需要 JDK 17 和 Android SDK 37。
 
 ```powershell
 .\gradlew.bat assembleDebug
